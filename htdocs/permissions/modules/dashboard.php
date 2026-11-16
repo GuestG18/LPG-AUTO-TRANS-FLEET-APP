@@ -22,4 +22,9 @@ return [
         'view'           => ['label' => 'Vizualizare'],
         'view_financial' => ['label' => 'Cost total operațional (salarii, costuri, cheltuieli, documente, dotări)', 'group' => 'financiar', 'default_admin' => true, 'sensitive' => true],
     ],
+    // Fiecare card își verifică în plus drepturile modulului-sursă (DashboardWidgetRegistry::canAccess).
+    'endpoints'   => [
+        'widget'      => 'view',
+        'save_layout' => 'view',
+    ],
 ];

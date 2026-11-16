@@ -7,6 +7,7 @@ require_once __DIR__ . '/SasFleetClient.php';
 require_once __DIR__ . '/SasCanKmService.php';
 require_once __DIR__ . '/TrailerSasKmService.php';
 require_once __DIR__ . '/ComponentSasKmService.php';
+require_once __DIR__ . '/CatalogIconResolver.php';
 
 /**
  * Revizii V2 — spatiul de lucru unic: planuri X / Y (secventa calculata din km), scadente pe operatiuni,
@@ -386,6 +387,8 @@ final class ReviziiV2Service
                         'cantitate' => $pick('cantitate'),
                         'um' => $planRule['um'] ?? null,
                         'produs_id' => $planRule['produs_id'] ?? null,
+                        // piesa din Stoc Piese: exceptia vehiculului are prioritate fata de plan (model)
+                        'piesa_id' => $pick('piesa_id'),
                         'cost_estimat' => $planRule['cost_estimat'] ?? null,
                         'exceptie_vehicul' => $vehicleRule !== null,
                     ],
@@ -424,8 +427,10 @@ final class ReviziiV2Service
             $costByVehicle[$vid]['total'] = ($costByVehicle[$vid]['total'] ?? 0) + (float) $exec['cost'];
             $costByVehicle[$vid]['operatii'] = ($costByVehicle[$vid]['operatii'] ?? 0) + (float) $exec['cost'];
         }
+        $necesar = $this->necesarSummary();
         foreach ($rows as &$row) {
             $row['cost_luna'] = $costByVehicle[$row['id']] ?? null;
+            $row['necesar'] = $necesar[$row['id']] ?? null;
         }
         unset($row);
 
@@ -442,7 +447,89 @@ final class ReviziiV2Service
                 'categories' => ReviziiV2Model::CATEGORIES,
             ],
             'plans_count' => count(array_filter($data['plans'], static fn (array $p): bool => (int) $p['activ'] === 1)),
+            'op_icons' => $this->operationIcons(),
+            'piese' => $this->linkedParts($rows),
         ];
+    }
+
+    /** Piesa aleasa trebuie sa existe in Stoc Piese (nearhivata). */
+    private function stockPartId(mixed $value, string $label): ?int
+    {
+        $id = self::posInt($value);
+        if ($id === null) {
+            return null;
+        }
+        $stmt = $this->db->prepare('SELECT COUNT(*) FROM mentenanta_piese WHERE id = :id AND arhivat_la IS NULL');
+        $stmt->execute([':id' => $id]);
+        if ((int) $stmt->fetchColumn() === 0) {
+            throw new InvalidArgumentException($label . ': piesa aleasă nu mai există în Stoc Piese.');
+        }
+
+        return $id;
+    }
+
+    /** @return array<int, array<string, mixed>> piesele active din Stoc Piese (selector in configurare) */
+    public function stockParts(): array
+    {
+        if (!$this->tableExists('mentenanta_piese')) {
+            return [];
+        }
+
+        return array_map(static fn (array $r): array => [
+            'id' => (int) $r['id'], 'cod' => (string) $r['cod_piesa'], 'denumire' => (string) $r['denumire'], 'categorie' => (string) $r['categorie'],
+            'producator' => $r['producator'], 'cod_oem' => $r['cod_oem'], 'um' => (string) $r['unitate_masura'],
+            'stoc' => (float) $r['stoc_curent'], 'pret' => (float) $r['pret_achizitie'] > 0 ? (float) $r['pret_achizitie'] : null,
+        ], $this->db->query(
+            "SELECT id, cod_piesa, denumire, categorie, producator, cod_oem, unitate_masura, stoc_curent, pret_achizitie
+             FROM mentenanta_piese WHERE arhivat_la IS NULL AND status_piesa = 'activa' ORDER BY categorie, denumire"
+        )->fetchAll(PDO::FETCH_ASSOC) ?: []);
+    }
+
+    /** @param array<int, array<string, mixed>> $rows @return array<int, array<string, mixed>> doar piesele legate de operatiunile afisate */
+    private function linkedParts(array $rows): array
+    {
+        $ids = [];
+        foreach ($rows as $row) {
+            foreach ($row['ops'] ?? [] as $op) {
+                if (!empty($op['piesa_id'])) {
+                    $ids[(int) $op['piesa_id']] = true;
+                }
+            }
+        }
+        if ($ids === [] || !$this->tableExists('mentenanta_piese')) {
+            return [];
+        }
+        $result = [];
+        $stmt = $this->db->query('SELECT id, cod_piesa, denumire, cod_oem, unitate_masura, stoc_curent FROM mentenanta_piese WHERE id IN (' . implode(',', array_keys($ids)) . ')');
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $result[(int) $r['id']] = ['cod' => $r['cod_piesa'], 'denumire' => $r['denumire'], 'cod_oem' => $r['cod_oem'], 'um' => $r['unitate_masura'], 'stoc' => (float) $r['stoc_curent']];
+        }
+
+        return $result;
+    }
+
+    /**
+     * Iconita fiecarei operatiuni, din Catalog componente (componenta legata → categoria ei →
+     * subcategorie → ramura → implicit). Se recalculeaza la fiecare incarcare: o iconita schimbata
+     * in catalog apare imediat aici.
+     *
+     * @return array<int, array{icon: string, level: string, category_id: ?int, category: ?string, path: ?string}>
+     */
+    public function operationIcons(): array
+    {
+        $resolver = new CatalogIconResolver($this->db);
+        $result = [];
+        foreach ($this->load()['operations'] as $id => $operation) {
+            $key = $operation['component_key'] !== null && $operation['component_key'] !== '' ? (string) $operation['component_key'] : null;
+            $cat = isset($operation['catalog_categorie_id']) && $operation['catalog_categorie_id'] !== null ? (int) $operation['catalog_categorie_id'] : null;
+            $r = $resolver->resolve($key, $cat);
+            $result[(int) $id] = [
+                'icon' => $r['icon'], 'level' => $r['level'], 'category_id' => $r['category_id'], 'category' => $r['category'],
+                'path' => implode(' › ', array_values(array_unique(array_filter([$r['primary'], $r['subcategory'], $r['category']])))) ?: null,
+            ];
+        }
+
+        return $result;
     }
 
     /** @return array<string, mixed> */
@@ -519,7 +606,14 @@ final class ReviziiV2Service
             'km' => $km,
             'km_zi' => $data['daily_km'][$vehicleId] ?? null,
             'ore' => $hoursTotals,
-            'plan' => $plan !== null ? ['id' => (int) $plan['id'], 'nume' => (string) $plan['nume'], 'match' => $plan['_match']] : null,
+            'plan' => $plan !== null ? [
+                'id' => (int) $plan['id'], 'nume' => (string) $plan['nume'], 'match' => $plan['_match'],
+                'interval_km' => $plan['interval_km'] !== null ? (int) $plan['interval_km'] : null,
+                'interval_ore' => $plan['interval_ore'] !== null ? (int) $plan['interval_ore'] : null,
+                'interval_luni' => $plan['interval_luni'] !== null ? (int) $plan['interval_luni'] : null,
+                'y_prag_km' => $plan['y_prag_km'] !== null ? (int) $plan['y_prag_km'] : null,
+                'y_interval_km' => $plan['y_interval_km'] !== null ? (int) $plan['y_interval_km'] : null,
+            ] : null,
             'workflow' => $open !== null ? [
                 'id' => (int) $open['id'], 'status' => (string) $open['status'], 'tip' => (string) $open['tip'],
                 'data_programata' => $open['data_programata'], 'label' => ReviziiV2Model::WORK_STATUSES[$open['status']] ?? $open['status'],
@@ -971,6 +1065,8 @@ final class ReviziiV2Service
             'op' => (string) $operation['operatie'],
             'tip' => (string) $operation['tip_operatie'],
             'cat' => (string) $operation['categorie'],
+            'ckey' => $operation['component_key'] !== null && $operation['component_key'] !== '' ? (string) $operation['component_key'] : null,
+            'ccat' => isset($operation['catalog_categorie_id']) && $operation['catalog_categorie_id'] !== null ? (int) $operation['catalog_categorie_id'] : null,
             'sect' => (string) $operation['sectiune'],
             'sistem' => $operation['sistem_fluid'],
             'factori' => (string) ($operation['factori_uzura'] ?? ''),
@@ -990,6 +1086,7 @@ final class ReviziiV2Service
             'cantitate' => $rule['cantitate'] !== null ? (float) $rule['cantitate'] : null,
             'um' => $rule['um'],
             'produs_id' => $rule['produs_id'] !== null ? (int) $rule['produs_id'] : null,
+            'piesa_id' => ($rule['piesa_id'] ?? null) !== null ? (int) $rule['piesa_id'] : null,
             'exceptie' => !empty($rule['exceptie_vehicul']),
             'notes' => array_values(array_unique(array_filter($eval['notes'] ?? []))),
         ];
@@ -1088,6 +1185,82 @@ final class ReviziiV2Service
     }
 
     /** @return array<int, array<string, mixed>> sistemele de fluide ale vehiculului (Consumabile) */
+    /** @return array<int, array<string, mixed>> sistemele de fluide ale vehiculului (pentru necesarul de piese) */
+    public function vehicleFluidSystems(int $vehicleId): array
+    {
+        return $this->fluidSystems($vehicleId);
+    }
+
+    /** @return array<string, mixed> randul operatiunii din catalogul Revizii */
+    public function operationRow(int $operationId): ?array
+    {
+        return $this->load()['operations'][$operationId] ?? null;
+    }
+
+    /** @return array<int, array<string, mixed>> rezumatul cererilor de necesar deschise, pe vehicul */
+    private function necesarSummary(): array
+    {
+        try {
+            return (new ReviziiV2NecesarService($this->db, $this))->summaryByVehicle();
+        } catch (Throwable) {
+            return [];
+        }
+    }
+
+    /**
+     * Acelasi plan pe mai multe vehicule (sablonul de mentenanta reutilizat). Referintele, istoricul
+     * si exceptiile fiecarui vehicul raman neschimbate; se verifica tipul de vehicul al planului.
+     *
+     * @param array<int, mixed> $vehicleIds
+     * @return array{aplicate: int, respinse: array<int, string>}
+     */
+    public function assignPlanBulk(array $vehicleIds, ?int $planId, ?int $userId): array
+    {
+        $data = $this->load();
+        if ($planId !== null && !isset($data['plans'][$planId])) {
+            throw new InvalidArgumentException('Planul ales nu există.');
+        }
+        $plan = $planId !== null ? $data['plans'][$planId] : null;
+        $ids = array_values(array_unique(array_filter(array_map('intval', $vehicleIds), static fn (int $id): bool => $id > 0)));
+        if ($ids === []) {
+            throw new InvalidArgumentException('Alege cel puțin un vehicul.');
+        }
+        $rejected = [];
+        $apply = [];
+        foreach ($ids as $vehicleId) {
+            $vehicle = $data['vehicles'][$vehicleId] ?? null;
+            if ($vehicle === null) {
+                $rejected[] = '#' . $vehicleId . ': inexistent sau inactiv';
+                continue;
+            }
+            if ($plan !== null && !empty($plan['tip_vehicul']) && (string) $plan['tip_vehicul'] !== (string) $vehicle['familie'] && (string) $plan['tip_vehicul'] !== (string) $vehicle['tip_vehicul']) {
+                $rejected[] = $vehicle['nr_inmatriculare'] . ': planul e pentru alt tip de vehicul';
+                continue;
+            }
+            $apply[] = $vehicleId;
+        }
+        $this->transaction(function () use ($apply, $planId, $data, $userId): void {
+            foreach ($apply as $vehicleId) {
+                $before = $data['assignments'][$vehicleId] ?? [];
+                $this->model->saveAssignment($vehicleId, [
+                    'plan_id' => $planId,
+                    'x_de_la_ultima_y' => (int) ($before['x_de_la_ultima_y'] ?? 0),
+                    'y_efectuate' => (int) ($before['y_efectuate'] ?? 0),
+                    'referinta_data' => $before['referinta_data'] ?? null,
+                    'referinta_km' => $before['referinta_km'] ?? null,
+                    'referinta_ore' => $before['referinta_ore'] ?? null,
+                    'ultima_y_data' => $before['ultima_y_data'] ?? null,
+                    'ultima_y_km' => $before['ultima_y_km'] ?? null,
+                    'origine_grila_km' => $before['origine_grila_km'] ?? null,
+                    'observatii' => 'Plan aplicat în masă',
+                ], $userId);
+            }
+        });
+        $this->reset();
+
+        return ['aplicate' => count($apply), 'respinse' => $rejected];
+    }
+
     private function fluidSystems(int $vehicleId): array
     {
         if (!$this->tableExists('vehicule_sisteme_fluide')) {
@@ -1171,6 +1344,9 @@ final class ReviziiV2Service
                 'cantitate_estimata' => $op['cantitate'],
                 'um' => $op['um'] ?? ($op['sistem'] !== null ? 'L' : null),
                 'produs_id' => $op['produs_id'],
+                'piesa_id' => $op['piesa_id'] ?? null,
+                // fara fluid, cantitatea regulii e cantitatea piesei (ex. 2 filtre); altfel o bucata
+                'piesa_cantitate' => !empty($op['piesa_id']) ? ($op['sistem'] === null && $op['cantitate'] !== null ? (float) $op['cantitate'] : 1.0) : null,
                 'urgenta' => $op['status'],
                 'interval' => $op['interval'],
                 'regula' => ['mode' => $op['mode'], 'criteria' => array_map(static fn (array $c): array => ['tip' => $c['tip'], 'interval' => $c['interval']], $op['criteria']), 'interval' => $op['interval']],
@@ -1210,7 +1386,29 @@ final class ReviziiV2Service
             $open = $openRow !== null ? $this->model->workOrder((int) $openRow['id']) : null;
         }
         $form = $open !== null ? $this->decorateOrder($open) : $this->draftWorkOrder($vehicleId);
+        if ($open !== null && in_array((string) $open['status'], ReviziiV2Model::OPEN_STATUSES, true)) {
+            $current = [];
+            foreach ($this->vehicleSummary($this->load()['vehicles'][$vehicleId] ?? [])['ops'] ?? [] as $op) {
+                $current[(int) $op['id']] = $op;
+            }
+            foreach ($form['items'] as &$line) {
+                $op = $current[(int) $line['operatie_id']] ?? null;
+                if (empty($line['piesa_id']) && $line['executie_id'] === null && $op !== null && !empty($op['piesa_id'])) {
+                    $line['piesa_id'] = (int) $op['piesa_id'];
+                    $line['piesa_cantitate'] = $op['sistem'] === null && $op['cantitate'] !== null ? (float) $op['cantitate'] : 1.0;
+                }
+            }
+            unset($line);
+        }
         $form['stoc'] = $this->stockOptions($vehicleId);
+        $partIds = array_values(array_unique(array_filter(array_map(static fn (array $i): int => (int) ($i['piesa_id'] ?? 0), $form['items']))));
+        $form['piese'] = [];
+        if ($partIds !== []) {
+            foreach ($this->db->query('SELECT id, cod_piesa, denumire, cod_oem, unitate_masura, mod_utilizare, stoc_curent, pret_achizitie FROM mentenanta_piese WHERE id IN (' . implode(',', $partIds) . ')')->fetchAll(PDO::FETCH_ASSOC) as $p) {
+                $form['piese'][(int) $p['id']] = ['cod' => $p['cod_piesa'], 'denumire' => $p['denumire'], 'cod_oem' => $p['cod_oem'], 'um' => $p['unitate_masura'],
+                    'mod' => $p['mod_utilizare'], 'stoc' => (float) $p['stoc_curent'], 'pret' => (float) $p['pret_achizitie'] > 0 ? (float) $p['pret_achizitie'] : null];
+            }
+        }
         $form['vehicle'] = $this->vehicleSummary($this->load()['vehicles'][$vehicleId] ?? throw new InvalidArgumentException('Vehicul inexistent.'));
 
         return $form;
@@ -1284,14 +1482,15 @@ final class ReviziiV2Service
             $orderId = (int) $this->db->lastInsertId();
             $itemInsert = $this->db->prepare(
                 'INSERT INTO revizii_v2_lucrari_operatii (lucrare_id, operatie_id, sectiune, componenta, operatie, tip_operatie, categorie, regula_snapshot, status, motiv,
-                    cantitate_estimata, um, produs_id, ordine)
-                 VALUES (:l, :o, :s, :c, :op, :t, :cat, :r, :st, :m, :q, :um, :p, :ord)'
+                    cantitate_estimata, um, produs_id, piesa_id, piesa_cantitate, ordine)
+                 VALUES (:l, :o, :s, :c, :op, :t, :cat, :r, :st, :m, :q, :um, :p, :pi, :pq, :ord)'
             );
             foreach ($draft['items'] as $i => $item) {
                 $itemInsert->execute([
                     ':l' => $orderId, ':o' => $item['operatie_id'], ':s' => $item['sectiune'], ':c' => $item['componenta'], ':op' => $item['operatie'],
                     ':t' => $item['tip_operatie'], ':cat' => $item['categorie'], ':r' => json_encode($item['regula'] + ['sistem' => $item['sistem']], JSON_UNESCAPED_UNICODE),
-                    ':st' => $item['status'], ':m' => $item['motiv'], ':q' => $item['cantitate_estimata'], ':um' => $item['um'], ':p' => $item['produs_id'], ':ord' => ($i + 1) * 10,
+                    ':st' => $item['status'], ':m' => $item['motiv'], ':q' => $item['cantitate_estimata'], ':um' => $item['um'], ':p' => $item['produs_id'],
+                    ':pi' => $item['piesa_id'] ?? null, ':pq' => $item['piesa_cantitate'] ?? null, ':ord' => ($i + 1) * 10,
                 ]);
             }
             $this->updateOrderFields($orderId, $input, $status);
@@ -1338,7 +1537,8 @@ final class ReviziiV2Service
     /** @param array<int|string, mixed> $items */
     private function saveItems(int $orderId, array $items, bool $strict): void
     {
-        $set = 'SET status = :s, motiv = :m, cantitate_reala = :q, um = COALESCE(:um, um), produs_id = :p, recipient_id = :r, cost_material = :c, observatii = :o';
+        $set = 'SET status = :s, motiv = :m, cantitate_reala = :q, um = COALESCE(:um, um), produs_id = :p, recipient_id = :r, cost_material = :c, observatii = :o,
+            piesa_sursa = :ps, piesa_cantitate = COALESCE(:pq, piesa_cantitate), piesa_id = COALESCE(piesa_id, :pi)';
         $byId = $this->db->prepare('UPDATE revizii_v2_lucrari_operatii ' . $set . ' WHERE id = :id AND lucrare_id = :l AND executie_id IS NULL');
         // Lucrare noua: liniile nu au inca id in formular; se identifica prin operatiune.
         $byOperation = $this->db->prepare('UPDATE revizii_v2_lucrari_operatii ' . $set . ' WHERE operatie_id = :id AND lucrare_id = :l AND executie_id IS NULL');
@@ -1360,6 +1560,9 @@ final class ReviziiV2Service
                 ':s' => $status, ':m' => self::text($item['motiv'] ?? null, 255), ':q' => self::decimal($item['cantitate_reala'] ?? null),
                 ':um' => self::text($item['um'] ?? null, 10), ':p' => self::posInt($item['produs_id'] ?? null), ':r' => self::posInt($item['recipient_id'] ?? null),
                 ':c' => self::decimal($item['cost_material'] ?? null), ':o' => self::text($item['observatii'] ?? null, 500), ':id' => $key, ':l' => $orderId,
+                ':ps' => in_array($item['piesa_sursa'] ?? '', ['stoc', 'direct', 'nu'], true) ? $item['piesa_sursa'] : null,
+                ':pq' => self::decimal($item['piesa_cantitate'] ?? null),
+                ':pi' => $this->stockPartId($item['piesa_id'] ?? null, 'Piesă'),
             ]);
         }
     }
@@ -1422,6 +1625,37 @@ final class ReviziiV2Service
             if ($noReason !== []) {
                 $errors[] = sprintf('Motivul este obligatoriu la „Nu se aplică / Amânat / Blocat”: %s.', $list($noReason));
             }
+            // Piesele din Stoc Piese: blocate pentru actualizare, verificate inainte de orice scriere.
+            $parts = [];
+            $needed = [];
+            foreach ($order['items'] as $item) {
+                $source = (string) ($item['piesa_sursa'] ?? '');
+                if ($item['status'] !== 'completed' || $item['executie_id'] !== null || empty($item['piesa_id']) || $item['piesa_utilizare_id'] !== null || !in_array($source, ['stoc', 'direct'], true)) {
+                    continue;
+                }
+                $partId = (int) $item['piesa_id'];
+                if (!isset($parts[$partId])) {
+                    $lock = $this->db->prepare('SELECT * FROM mentenanta_piese WHERE id = :id AND arhivat_la IS NULL FOR UPDATE');
+                    $lock->execute([':id' => $partId]);
+                    $parts[$partId] = $lock->fetch(PDO::FETCH_ASSOC) ?: null;
+                }
+                $quantity = $item['piesa_cantitate'] !== null ? (float) $item['piesa_cantitate'] : 1.0;
+                if ($parts[$partId] === null) {
+                    $errors[] = '„' . $item['operatie'] . '”: piesa legată nu mai există în Stoc Piese.';
+                } elseif ($quantity <= 0) {
+                    $errors[] = '„' . $item['operatie'] . '”: cantitatea piesei trebuie să fie pozitivă.';
+                } elseif ($source === 'stoc') {
+                    $needed[$partId] = ($needed[$partId] ?? 0) + $quantity;
+                }
+            }
+            foreach ($needed as $partId => $quantity) {
+                $part = $parts[$partId];
+                if ($part !== null && (float) $part['stoc_curent'] + 0.0001 < $quantity) {
+                    $errors[] = sprintf('Stoc insuficient pentru %s · %s: necesar %s, în stoc %s %s (alege „achiziție directă” sau completează stocul).',
+                        $part['cod_piesa'], $part['denumire'], rtrim(rtrim(number_format($quantity, 2, ',', '.'), '0'), ','),
+                        rtrim(rtrim(number_format((float) $part['stoc_curent'], 2, ',', '.'), '0'), ','), $part['unitate_masura']);
+                }
+            }
             if ($errors !== []) {
                 throw new InvalidArgumentException(implode(' ', array_unique($errors)));
             }
@@ -1458,6 +1692,34 @@ final class ReviziiV2Service
                     $movementId = (int) ($result['movement']['id'] ?? 0) ?: null;
                     if ($cost === null && isset($result['movement']['valoare']) && $result['movement']['valoare'] !== null) {
                         $cost = (float) $result['movement']['valoare'];
+                    }
+                }
+                // Piesa: scadere din Stoc Piese + rand in istoricul utilizarilor (o singura data pe linie).
+                $userCost = $item['cost_material'] !== null;
+                $partSource = (string) ($item['piesa_sursa'] ?? '');
+                if (!empty($item['piesa_id']) && $item['piesa_utilizare_id'] === null && in_array($partSource, ['stoc', 'direct'], true)) {
+                    $part = $parts[(int) $item['piesa_id']];
+                    $quantity = $item['piesa_cantitate'] !== null ? (float) $item['piesa_cantitate'] : 1.0;
+                    $fromStock = $partSource === 'stoc' && (string) $part['mod_utilizare'] === 'stoc';
+                    if ($fromStock) {
+                        $this->db->prepare('UPDATE mentenanta_piese SET stoc_curent = stoc_curent - :q, updated_at = :u WHERE id = :id')
+                            ->execute([':q' => $quantity, ':u' => date('Y-m-d H:i:s'), ':id' => (int) $part['id']]);
+                    }
+                    $unit = max(0.0, (float) $part['pret_achizitie']);
+                    $this->db->prepare(
+                        'INSERT INTO mentenanta_piese_utilizari (part_id, vehicle_id, cantitate, cost_unitar, data_montare, km_montare, montata_de, observatii, direct_mount, created_by, created_at)
+                         VALUES (:p, :v, :q, :c, :d, :km, :t, :o, :dm, :u, :at)'
+                    )->execute([
+                        ':p' => (int) $part['id'], ':v' => (int) $order['vehicle_id'], ':q' => $quantity, ':c' => $fromStock ? $unit : 0,
+                        ':d' => substr($at, 0, 10), ':km' => $order['km_executie'] !== null ? (int) round((float) $order['km_executie']) : null,
+                        ':t' => $order['tehnician'], ':o' => mb_substr('Revizia ' . ReviziiV2Engine::revisionLabel((string) $order['tip'], (int) $order['nr_x']) . ' #' . $orderId . ': ' . $item['operatie'], 0, 1000),
+                        ':dm' => $fromStock ? 0 : 1, ':u' => $userId, ':at' => date('Y-m-d H:i:s'),
+                    ]);
+                    $usageId = (int) $this->db->lastInsertId();
+                    $this->db->prepare('UPDATE revizii_v2_lucrari_operatii SET piesa_utilizare_id = :u WHERE id = :id')->execute([':u' => $usageId, ':id' => (int) $item['id']]);
+                    // Costul piesei din stoc intra in materiale doar daca operatorul nu a completat costul manual.
+                    if (!$userCost && $fromStock && $unit > 0) {
+                        $cost = round(($cost ?? 0.0) + $unit * $quantity, 2);
                     }
                 }
                 $executionId = $this->model->insertExecution([
@@ -1869,6 +2131,9 @@ final class ReviziiV2Service
             'tipuri' => ReviziiV2Model::OPERATION_TYPES,
             'categorii' => ReviziiV2Model::CATEGORIES,
             'familii' => ReviziiV2Model::VEHICLE_TYPES,
+            'catalog' => (new CatalogIconResolver($this->db))->pickerTree(),
+            'piese' => $this->stockParts(),
+            'op_icons' => $this->operationIcons(),
         ];
     }
 
@@ -1887,12 +2152,24 @@ final class ReviziiV2Service
             throw new InvalidArgumentException('Alege cel puțin un tip de vehicul pe care se aplică operațiunea.');
         }
         $category = isset(ReviziiV2Model::CATEGORIES[$input['categorie'] ?? '']) ? (string) $input['categorie'] : 'altele';
+        // Legatura cu Catalog componente: componenta (cheie cat-nr) si/sau categoria ei (grupul).
+        $componentKey = self::text($input['component_key'] ?? null, 10);
+        $catalogCategory = self::posInt($input['catalog_categorie_id'] ?? null);
+        if ($componentKey !== null) {
+            $catalogComponents = (new AutoComponentCatalogService($this->db))->components(true);
+            if (!isset($catalogComponents[$componentKey])) {
+                throw new InvalidArgumentException('Componenta aleasă nu există în Catalog componente.');
+            }
+            $catalogCategory = (int) $catalogComponents[$componentKey]['category_id'];
+        } elseif ($catalogCategory !== null && !isset(AutoComponentCatalogService::taxonomy($this->db)['categories'][$catalogCategory])) {
+            throw new InvalidArgumentException('Categoria aleasă nu există în Catalog componente.');
+        }
         $data = [
             'componenta' => $component, 'tip_operatie' => $type, 'operatie' => $operation, 'categorie' => $category,
             'sistem_fluid' => in_array($input['sistem_fluid'] ?? '', ['motor', 'transmisie', 'diferential', 'servodirectie', 'hidraulic_pompa', 'racire', 'frana'], true) ? $input['sistem_fluid'] : null,
             'aplicabil' => implode(',', $applies), 'factori_uzura' => self::text($input['factori_uzura'] ?? null, 500),
             'criterii_candidate' => self::text($input['criterii_candidate'] ?? null, 120), 'valori_candidate' => self::text($input['valori_candidate'] ?? null, 255),
-            'component_key' => self::text($input['component_key'] ?? null, 10), 'lubrifiant' => self::text($input['lubrifiant'] ?? null, 120),
+            'component_key' => $componentKey, 'catalog_categorie_id' => $catalogCategory, 'lubrifiant' => self::text($input['lubrifiant'] ?? null, 120),
             'puncte_gresare' => self::posInt($input['puncte_gresare'] ?? null), 'descriere' => self::text($input['descriere'] ?? null, 2000),
             'de_verificat' => !empty($input['de_verificat']) ? 1 : 0, 'activ' => !isset($input['activ']) || !empty($input['activ']) ? 1 : 0,
             'ordine' => (int) ($input['ordine'] ?? 500),
@@ -1979,6 +2256,7 @@ final class ReviziiV2Service
                 'cantitate' => self::decimal($rule['cantitate'] ?? null),
                 'um' => self::text($rule['um'] ?? null, 10),
                 'produs_id' => self::posInt($rule['produs_id'] ?? null),
+                'piesa_id' => $this->stockPartId($rule['piesa_id'] ?? null, $label),
                 'cost_estimat' => self::decimal($rule['cost_estimat'] ?? null),
             ];
         }
@@ -2038,8 +2316,9 @@ final class ReviziiV2Service
                     $ore = self::boundedInt($rule['interval_ore'] ?? null, 1, 100000, 'Interval ore');
                     $luni = self::boundedInt($rule['interval_luni'] ?? null, 1, 240, 'Interval luni');
                     $q = self::decimal($rule['cantitate'] ?? null);
-                    $rules[$operationId] = $activ === null && $km === null && $ore === null && $luni === null && $q === null ? null
-                        : ['activ' => $activ, 'interval_km' => $km, 'interval_ore' => $ore, 'interval_luni' => $luni, 'cantitate' => $q, 'motiv' => self::text($rule['motiv'] ?? null, 255)];
+                    $part = $this->stockPartId($rule['piesa_id'] ?? null, 'Excepție');
+                    $rules[$operationId] = $activ === null && $km === null && $ore === null && $luni === null && $q === null && $part === null ? null
+                        : ['activ' => $activ, 'interval_km' => $km, 'interval_ore' => $ore, 'interval_luni' => $luni, 'cantitate' => $q, 'piesa_id' => $part, 'motiv' => self::text($rule['motiv'] ?? null, 255)];
                 }
                 $this->model->saveVehicleRules($vehicleId, $rules, $userId);
             }

@@ -19,6 +19,7 @@ $pageJson = json_encode([
         'base' => build_query_url(['page' => 'revizii']),
         'notificari' => build_query_url(['page' => 'notificari']),
         'consumabile' => build_query_url(['page' => 'mentenanta', 'action' => 'stock', 'tab' => 'consumabile']),
+        'stoc_piese' => build_query_url(['page' => 'mentenanta', 'action' => 'stock']),
         'legacy' => [
             'prezentare' => build_query_url(['page' => 'revizii', 'tip' => 'prezentare']),
             'schimb_ulei' => build_query_url(['page' => 'revizii', 'tip' => 'schimb_ulei']),
@@ -302,6 +303,20 @@ $pageJson = json_encode([
         <button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="Închide"></button>
     </div>
     <div class="offcanvas-body" id="rv2CompBody"></div>
+</div>
+
+<!-- Necesar piese & consumabile (cerere de pregatire / aprovizionare legata de lucrare) -->
+<div class="modal fade rv2-modal" id="rv2NecModal" tabindex="-1" aria-hidden="true" aria-labelledby="rv2NecTitle">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="rv2NecTitle">Necesar piese &amp; consumabile</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Închide"></button>
+            </div>
+            <div class="modal-body" id="rv2NecBody"></div>
+            <div class="modal-footer" id="rv2NecFoot"></div>
+        </div>
+    </div>
 </div>
 
 <div class="rv2-toast" id="rv2Toast" aria-live="polite"></div>

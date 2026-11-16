@@ -95,9 +95,30 @@ class CentralizatorFacturareService
     {
     }
 
-    public function getReport(array $input): array
+    /**
+     * Doar cardurile KPI (Tablou de bord): același calcul ca getReport (luna curentă + luna
+     * anterioară pentru comparații), fără tabele, lookup-uri și evoluția tarifelor.
+     *
+     * @return array{filters: array, kpis: array}
+     */
+    public function getKpiReport(array $input): array
     {
         $filters = $this->normalizeFilters($input);
+        [$core, $previousCore] = $this->buildCoreWithPrevious($filters);
+
+        return [
+            'filters' => $filters,
+            'kpis' => $this->buildKpis($filters, $core, $previousCore),
+            'trip_count' => $core['trip_count'],
+            'total_value' => $core['total_value'],
+            // Opțiunile filtrelor din card: aceleași liste ca formularul paginii.
+            'lookups' => $this->buildLookups($filters),
+        ];
+    }
+
+    /** Calculul lunii alese + cel al lunii anterioare (doar pentru comparații). */
+    private function buildCoreWithPrevious(array $filters): array
+    {
         $core = $this->buildCore($filters);
 
         $previousFilters = $filters;
@@ -110,6 +131,14 @@ class CentralizatorFacturareService
         $previousFilters['date_next'] = $bounds['next'];
         /* Luna anterioara serveste doar comparatiilor: fara reconstituirea calculului. */
         $previousCore = $this->buildCore($previousFilters, false);
+
+        return [$core, $previousCore];
+    }
+
+    public function getReport(array $input): array
+    {
+        $filters = $this->normalizeFilters($input);
+        [$core, $previousCore] = $this->buildCoreWithPrevious($filters);
 
         $kpis = $this->buildKpis($filters, $core, $previousCore);
 

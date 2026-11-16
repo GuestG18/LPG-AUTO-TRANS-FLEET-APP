@@ -273,6 +273,8 @@
                     throw new Error('fallback');
                 }
                 setLoading(false);
+                // Cardurile încărcate separat (dashboard-grid.js) se reîmprospătează și ele.
+                document.dispatchEvent(new CustomEvent('dashboard:refreshed'));
             })
             .catch(function (error) {
                 if (error && error.name === 'AbortError') {

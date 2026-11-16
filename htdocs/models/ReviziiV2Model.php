@@ -139,6 +139,7 @@ final class ReviziiV2Model
                 criterii_candidate VARCHAR(120) NULL,
                 valori_candidate VARCHAR(255) NULL,
                 component_key VARCHAR(10) NULL,
+                catalog_categorie_id SMALLINT UNSIGNED NULL,
                 lubrifiant VARCHAR(120) NULL,
                 puncte_gresare SMALLINT UNSIGNED NULL,
                 descriere TEXT NULL,
@@ -212,6 +213,7 @@ final class ReviziiV2Model
                 cantitate DECIMAL(10,3) NULL,
                 um VARCHAR(10) NULL,
                 produs_id INT UNSIGNED NULL,
+                piesa_id INT UNSIGNED NULL,
                 cost_estimat DECIMAL(12,2) NULL,
                 PRIMARY KEY (plan_id, operatie_id),
                 CONSTRAINT fk_rv2_pr_plan FOREIGN KEY (plan_id) REFERENCES revizii_v2_planuri (id) ON DELETE CASCADE,
@@ -241,6 +243,7 @@ final class ReviziiV2Model
                 interval_ore INT UNSIGNED NULL,
                 interval_luni SMALLINT UNSIGNED NULL,
                 cantitate DECIMAL(10,3) NULL,
+                piesa_id INT UNSIGNED NULL,
                 motiv VARCHAR(255) NULL,
                 PRIMARY KEY (vehicle_id, operatie_id),
                 CONSTRAINT fk_rv2_vr_operatie FOREIGN KEY (operatie_id) REFERENCES revizii_v2_operatii (id)
@@ -301,6 +304,10 @@ final class ReviziiV2Model
                 cost_material DECIMAL(12,2) NULL,
                 observatii VARCHAR(500) NULL,
                 executie_id INT UNSIGNED NULL,
+                piesa_id INT UNSIGNED NULL,
+                piesa_cantitate DECIMAL(12,3) NULL,
+                piesa_sursa VARCHAR(10) NULL,
+                piesa_utilizare_id BIGINT UNSIGNED NULL,
                 ordine SMALLINT UNSIGNED NOT NULL DEFAULT 0,
                 UNIQUE KEY uq_rv2_lo (lucrare_id, operatie_id),
                 CONSTRAINT fk_rv2_lo_lucrare FOREIGN KEY (lucrare_id) REFERENCES revizii_v2_lucrari (id) ON DELETE CASCADE
@@ -354,6 +361,50 @@ final class ReviziiV2Model
                 updated_by INT UNSIGNED NULL,
                 updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
             ) $engine",
+            // Necesar piese & consumabile: cererea de pregatire / aprovizionare a unei revizii (legata de lucrare).
+            "CREATE TABLE IF NOT EXISTS revizii_v2_necesar (
+                id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                vehicle_id INT UNSIGNED NOT NULL,
+                lucrare_id INT UNSIGNED NULL,
+                plan_id INT UNSIGNED NULL,
+                tip CHAR(1) NOT NULL DEFAULT 'X',
+                eticheta VARCHAR(10) NULL,
+                km_tinta DECIMAL(12,1) NULL,
+                status VARCHAR(20) NOT NULL DEFAULT 'deschis',
+                responsabil VARCHAR(120) NULL,
+                data_necesara DATE NULL,
+                observatii VARCHAR(1000) NULL,
+                cost_estimat DECIMAL(12,2) NULL,
+                created_by INT UNSIGNED NULL,
+                updated_by INT UNSIGNED NULL,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                KEY idx_rv2_nec_vehicle (vehicle_id, status),
+                KEY idx_rv2_nec_lucrare (lucrare_id)
+            ) $engine",
+            "CREATE TABLE IF NOT EXISTS revizii_v2_necesar_linii (
+                id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                necesar_id INT UNSIGNED NOT NULL,
+                operatie_id INT UNSIGNED NULL,
+                sectiune CHAR(1) NOT NULL DEFAULT 'X',
+                componenta VARCHAR(120) NOT NULL,
+                operatie VARCHAR(190) NOT NULL,
+                component_key VARCHAR(10) NULL,
+                produs_id INT UNSIGNED NULL,
+                piesa_id INT UNSIGNED NULL,
+                referinta VARCHAR(190) NULL,
+                cantitate DECIMAL(12,3) NULL,
+                um VARCHAR(10) NULL,
+                disponibil DECIMAL(12,3) NULL,
+                lipsa DECIMAL(12,3) NULL,
+                pret_unitar DECIMAL(12,2) NULL,
+                status VARCHAR(20) NOT NULL DEFAULT 'de_verificat',
+                observatii VARCHAR(500) NULL,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                KEY idx_rv2_necl_necesar (necesar_id),
+                KEY idx_rv2_necl_produs (produs_id),
+                KEY idx_rv2_necl_piesa (piesa_id)
+            ) $engine",
         ];
         // DDL doar cand lipsesc tabele (CREATE TABLE face COMMIT implicit — niciodata intr-o tranzactie).
         $existing = (int) $this->db->query(
@@ -367,8 +418,67 @@ final class ReviziiV2Model
                 $this->db->exec($sql);
             }
         }
+        $this->ensureCatalogLink();
         self::$schemaReady = true;
         $this->seed();
+    }
+
+    /**
+     * Legatura operatiune → Catalog componente (categoria = grupul de componente). Pe instalarile
+     * existente coloana se adauga o singura data si se completeaza din categoria Revizii
+     * (fluide → „Uleiuri și lubrifianți”, filtre → „Filtre și consumabile”, gresare → „Vaseline și unsori”),
+     * doar daca acele categorii exista. Legatura ramane editabila din Catalog operațiuni.
+     */
+    private function ensureCatalogLink(): void
+    {
+        // Piesa din Stoc Piese pe regula planului (per model), ca exceptie pe vehicul si pe linia lucrarii
+        // (piesa folosita, cantitatea, sursa stoc / achizitie directa si utilizarea scrisa in Stoc Piese).
+        $columns = [
+            ['revizii_v2_plan_reguli', 'piesa_id', 'INT UNSIGNED NULL AFTER produs_id'],
+            ['revizii_v2_vehicul_reguli', 'piesa_id', 'INT UNSIGNED NULL AFTER cantitate'],
+            ['revizii_v2_lucrari_operatii', 'piesa_id', 'INT UNSIGNED NULL AFTER executie_id'],
+            ['revizii_v2_lucrari_operatii', 'piesa_cantitate', 'DECIMAL(12,3) NULL AFTER piesa_id'],
+            ['revizii_v2_lucrari_operatii', 'piesa_sursa', 'VARCHAR(10) NULL AFTER piesa_cantitate'],
+            ['revizii_v2_lucrari_operatii', 'piesa_utilizare_id', 'BIGINT UNSIGNED NULL AFTER piesa_sursa'],
+        ];
+        $existing = [];
+        foreach ($this->db->query("SELECT CONCAT(TABLE_NAME, '.', COLUMN_NAME) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME LIKE 'revizii\\_v2\\_%' AND COLUMN_NAME LIKE 'piesa\\_%'")->fetchAll(PDO::FETCH_COLUMN) as $name) {
+            $existing[(string) $name] = true;
+        }
+        foreach ($columns as [$table, $column, $definition]) {
+            if (isset($existing[$table . '.' . $column])) {
+                continue;
+            }
+            if ($this->db->inTransaction()) {
+                throw new RuntimeException('Schema Revizii V2 (piese) lipsește; nu poate fi creată în interiorul unei tranzacții.');
+            }
+            $this->db->exec('ALTER TABLE ' . $table . ' ADD COLUMN ' . $column . ' ' . $definition);
+        }
+        $has = (int) $this->db->query(
+            "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'revizii_v2_operatii' AND COLUMN_NAME = 'catalog_categorie_id'"
+        )->fetchColumn();
+        if ($has > 0) {
+            return;
+        }
+        if ($this->db->inTransaction()) {
+            throw new RuntimeException('Schema Revizii V2 (legătura cu catalogul) lipsește; nu poate fi creată în interiorul unei tranzacții.');
+        }
+        $this->db->exec('ALTER TABLE revizii_v2_operatii ADD COLUMN catalog_categorie_id SMALLINT UNSIGNED NULL AFTER component_key');
+        try {
+            $existing = array_map('intval', $this->db->query('SELECT id FROM mentenanta_auto_categorii WHERE activ = 1')->fetchAll(PDO::FETCH_COLUMN) ?: []);
+        } catch (Throwable) {
+            $existing = [];
+        }
+        $map = [
+            18 => "categorie = 'fluide' OR sistem_fluid IS NOT NULL",
+            21 => "categorie = 'filtre' OR (categorie = 'transmisie' AND sistem_fluid IS NULL)",
+            20 => "categorie = 'gresare'",
+        ];
+        foreach ($map as $categoryId => $where) {
+            if (in_array($categoryId, $existing, true)) {
+                $this->db->exec('UPDATE revizii_v2_operatii SET catalog_categorie_id = ' . $categoryId . ' WHERE catalog_categorie_id IS NULL AND component_key IS NULL AND (' . $where . ')');
+            }
+        }
     }
 
     /** Catalogul si sabloanele implicite — o singura data (tabela goala). Fara planuri, fara intervale. */
@@ -517,10 +627,10 @@ final class ReviziiV2Model
         $before = $this->vehicleRules()[$vehicleId] ?? [];
         $delete = $this->db->prepare('DELETE FROM revizii_v2_vehicul_reguli WHERE vehicle_id = :v AND operatie_id = :o');
         $upsert = $this->db->prepare(
-            'INSERT INTO revizii_v2_vehicul_reguli (vehicle_id, operatie_id, activ, interval_km, interval_ore, interval_luni, cantitate, motiv)
-             VALUES (:v, :o, :a, :km, :ore, :luni, :q, :m)
+            'INSERT INTO revizii_v2_vehicul_reguli (vehicle_id, operatie_id, activ, interval_km, interval_ore, interval_luni, cantitate, piesa_id, motiv)
+             VALUES (:v, :o, :a, :km, :ore, :luni, :q, :piesa, :m)
              ON DUPLICATE KEY UPDATE activ = VALUES(activ), interval_km = VALUES(interval_km), interval_ore = VALUES(interval_ore),
-                interval_luni = VALUES(interval_luni), cantitate = VALUES(cantitate), motiv = VALUES(motiv)'
+                interval_luni = VALUES(interval_luni), cantitate = VALUES(cantitate), piesa_id = VALUES(piesa_id), motiv = VALUES(motiv)'
         );
         foreach ($rules as $operationId => $rule) {
             if ($rule === null) {
@@ -529,7 +639,7 @@ final class ReviziiV2Model
             }
             $upsert->execute([
                 ':v' => $vehicleId, ':o' => $operationId, ':a' => $rule['activ'], ':km' => $rule['interval_km'], ':ore' => $rule['interval_ore'],
-                ':luni' => $rule['interval_luni'], ':q' => $rule['cantitate'], ':m' => $rule['motiv'],
+                ':luni' => $rule['interval_luni'], ':q' => $rule['cantitate'], ':piesa' => $rule['piesa_id'] ?? null, ':m' => $rule['motiv'],
             ]);
         }
         $this->audit($vehicleId, 'exceptii_vehicul', 'Excepții operațiuni pe vehicul', $before, $rules, $userId);
@@ -554,7 +664,7 @@ final class ReviziiV2Model
     public function saveOperation(array $data, ?int $id, ?int $userId): int
     {
         $fields = ['componenta', 'tip_operatie', 'operatie', 'categorie', 'sistem_fluid', 'aplicabil', 'factori_uzura', 'criterii_candidate',
-            'valori_candidate', 'component_key', 'lubrifiant', 'puncte_gresare', 'descriere', 'de_verificat', 'activ', 'ordine'];
+            'valori_candidate', 'component_key', 'catalog_categorie_id', 'lubrifiant', 'puncte_gresare', 'descriere', 'de_verificat', 'activ', 'ordine'];
         $params = [];
         foreach ($fields as $field) {
             $params[':' . $field] = $data[$field] ?? null;
@@ -674,14 +784,14 @@ final class ReviziiV2Model
         }
         $this->db->prepare('DELETE FROM revizii_v2_plan_reguli WHERE plan_id = :p')->execute([':p' => $id]);
         $insert = $this->db->prepare(
-            'INSERT INTO revizii_v2_plan_reguli (plan_id, operatie_id, activ, interval_km, interval_ore, interval_luni, logica, coef_ralanti_km, cantitate, um, produs_id, cost_estimat)
-             VALUES (:p, :o, :a, :km, :ore, :luni, :log, :coef, :q, :um, :prod, :cost)'
+            'INSERT INTO revizii_v2_plan_reguli (plan_id, operatie_id, activ, interval_km, interval_ore, interval_luni, logica, coef_ralanti_km, cantitate, um, produs_id, piesa_id, cost_estimat)
+             VALUES (:p, :o, :a, :km, :ore, :luni, :log, :coef, :q, :um, :prod, :piesa, :cost)'
         );
         foreach ($rules as $operationId => $rule) {
             $insert->execute([
                 ':p' => $id, ':o' => $operationId, ':a' => (int) $rule['activ'], ':km' => $rule['interval_km'], ':ore' => $rule['interval_ore'],
                 ':luni' => $rule['interval_luni'], ':log' => $rule['logica'], ':coef' => $rule['coef_ralanti_km'], ':q' => $rule['cantitate'],
-                ':um' => $rule['um'], ':prod' => $rule['produs_id'], ':cost' => $rule['cost_estimat'],
+                ':um' => $rule['um'], ':prod' => $rule['produs_id'], ':piesa' => $rule['piesa_id'] ?? null, ':cost' => $rule['cost_estimat'],
             ]);
         }
         $this->audit($id, 'plan', 'Plan de mentenanță: ' . $data['nume'], $before, $data + ['reguli' => $rules], $userId);

@@ -34,6 +34,8 @@ $driverTerminationModals = [];
 $usesVehicleCompactRows = $isVehicleList && in_array($routePage, ['vehicule_usoare', 'vehicule_grele'], true);
 $usesDocumentCompactRows = $isDocumentList && $routePage === 'documente';
 $usesCompactStatusRows = $isDriverList || $usesVehicleCompactRows || $usesDocumentCompactRows;
+// Cautare live (fara Enter / „Aplică filtre”): Vehicule usoare / grele, Soferi, Documente vehicule / soferi.
+$usesLiveSearch = $usesVehicleCompactRows || $isDriverList || $usesDocumentCompactRows || $isDriverDocumentList;
 $visibleListColumns = $module['list_columns'] ?? [];
 if ($usesCompactStatusRows) {
     unset($visibleListColumns['status']);
@@ -137,7 +139,7 @@ $buildPaginationWindow = static function (int $currentPage, int $totalPages): ar
             <a class="btn btn-outline-primary" href="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'axis_config'])) ?>">Configura&#539;ie Axe</a>
             <a class="btn btn-outline-secondary" href="<?= e(build_query_url(['page' => 'mentenanta'])) ?>">Inapoi la Mentenanta</a>
         <?php else: ?>
-            <a class="btn btn-outline-secondary<?= $isDocumentCostOverrideList ? ' document-cost-export-btn' : '' ?>" href="<?= e(build_query_url(array_merge($baseQuery, ['action' => 'export']))) ?>">Export CSV</a>
+            <a class="btn btn-outline-secondary<?= $isDocumentCostOverrideList ? ' document-cost-export-btn' : '' ?>" href="<?= e(build_query_url(array_merge($baseQuery, ['action' => 'export']))) ?>"<?= $usesLiveSearch ? ' data-live-search-sync-href="export"' : '' ?>>Export CSV</a>
         <?php endif; ?>
         <?php if ($isDocumentCostOverrideList): ?>
             </div>
@@ -693,72 +695,10 @@ $buildPaginationWindow = static function (int $currentPage, int $totalPages): ar
         'data_end' => $filters['data_end'] ?? '',
     ];
     ?>
-    <div class="row g-3 mb-3">
-        <div class="col-12 col-md-6 col-xl-3">
-            <div class="card border-0 shadow-sm document-alert-card alert-expired h-100">
-                <div class="card-body">
-                    <div class="small text-uppercase fw-semibold mb-2">Expirate</div>
-                    <div class="display-6 fw-bold mb-2"><?= e((string) ($documentSummary['expirate'] ?? 0)) ?></div>
-                    <a class="btn btn-sm btn-outline-danger" href="<?= e(build_query_url(array_merge($documentQuickBase, ['stare_expirare' => 'expirate']))) ?>">Vezi documentele</a>
-                </div>
-            </div>
-        </div>
-        <div class="col-12 col-md-6 col-xl-3">
-            <div class="card border-0 shadow-sm document-alert-card alert-7days h-100">
-                <div class="card-body">
-                    <div class="small text-uppercase fw-semibold mb-2">Expiră în 7 zile</div>
-                    <div class="display-6 fw-bold mb-2"><?= e((string) ($documentSummary['expira_7_zile'] ?? 0)) ?></div>
-                    <a class="btn btn-sm btn-outline-warning" href="<?= e(build_query_url(array_merge($documentQuickBase, ['stare_expirare' => 'expira_7_zile']))) ?>">Filtru rapid</a>
-                </div>
-            </div>
-        </div>
-        <div class="col-12 col-md-6 col-xl-3">
-            <div class="card border-0 shadow-sm document-alert-card alert-30days h-100">
-                <div class="card-body">
-                    <div class="small text-uppercase fw-semibold mb-2">Expiră în 30 zile</div>
-                    <div class="display-6 fw-bold mb-2"><?= e((string) ($documentSummary['expira_30_zile'] ?? 0)) ?></div>
-                    <a class="btn btn-sm btn-outline-primary" href="<?= e(build_query_url(array_merge($documentQuickBase, ['stare_expirare' => 'expira_30_zile']))) ?>">Filtru rapid</a>
-                </div>
-            </div>
-        </div>
-        <div class="col-12 col-md-6 col-xl-3">
-            <div class="card border-0 shadow-sm document-alert-card alert-missing-file h-100">
-                <div class="card-body">
-                    <div class="small text-uppercase fw-semibold mb-2">Fără fișier</div>
-                    <div class="display-6 fw-bold mb-2"><?= e((string) ($documentSummary['fara_fisier'] ?? 0)) ?></div>
-                    <a class="btn btn-sm btn-outline-secondary" href="<?= e(build_query_url(array_merge($documentQuickBase, ['are_fisier' => 'nu']))) ?>">Vezi lipsurile</a>
-                </div>
-            </div>
-        </div>
+    <?php // Sumarul depinde de vehicul / cautare: cautarea live il inlocuieste odata cu tabelul. ?>
+    <div id="documentSummaryRegion"<?= $usesLiveSearch ? ' data-live-search-region' : '' ?>>
+        <?php require __DIR__ . '/_document_summary.php'; ?>
     </div>
-
-    <?php if ($urgentDocuments !== []): ?>
-        <div class="card border-0 shadow-sm mb-3">
-            <div class="card-header bg-white">
-                <h3 class="h6 mb-0">Notificări documente</h3>
-            </div>
-            <div class="card-body">
-                <div class="list-group list-group-flush">
-                    <?php foreach ($urgentDocuments as $document): ?>
-                        <div class="list-group-item px-0">
-                            <div class="d-flex justify-content-between align-items-start gap-3">
-                                <div>
-                                    <div class="fw-semibold"><?= e($document['vehicul_label']) ?> - <?= e($document['tip_document']) ?></div>
-                                    <div class="small text-muted">
-                                        <?php if (!empty($document['numar_document'])): ?>
-                                            <?= e($document['numar_document']) ?> |
-                                        <?php endif; ?>
-                                        <?= expiry_badge_html($document['data_expirare']) ?>
-                                    </div>
-                                </div>
-                                <a class="btn btn-sm btn-outline-secondary" href="<?= e(build_query_url(['page' => 'documente', 'action' => 'show', 'id' => (int) $document['id']])) ?>">Detalii</a>
-                            </div>
-                        </div>
-                    <?php endforeach; ?>
-                </div>
-            </div>
-        </div>
-    <?php endif; ?>
 <?php endif; ?>
 
 <?php if ($isMaintenanceList && $isMaintenanceTireStockPage && is_array($maintenanceTireStockContext)): ?>
@@ -2224,14 +2164,22 @@ $buildPaginationWindow = static function (int $currentPage, int $totalPages): ar
 
 <div class="card border-0 shadow-sm mb-3">
     <div class="card-body">
-        <form method="get" class="row g-3 align-items-end">
+        <form method="get" class="row g-3 align-items-end"<?= $usesLiveSearch ? ' role="search" data-live-search data-live-search-target="#moduleListResults"' : '' ?>>
             <input type="hidden" name="page" value="<?= e($routePage) ?>">
             <input type="hidden" name="action" value="index">
 
             <div class="col-12 col-md-4">
                 <label for="q" class="form-label">Cautare</label>
                 <?php $searchPlaceholder = $moduleKey === 'vehicule' ? 'Nr. inmatriculare (ex: B 677 NET, B 218 NET)' : 'Cauta in tabel...'; ?>
-                <input type="text" name="q" id="q" class="form-control" value="<?= e($search) ?>" placeholder="<?= e($searchPlaceholder) ?>">
+                <?php if ($usesLiveSearch): ?>
+                    <div class="module-live-search-field">
+                        <input type="text" name="q" id="q" class="form-control" value="<?= e($search) ?>" placeholder="<?= e($searchPlaceholder) ?>" autocomplete="off" spellcheck="false" aria-controls="moduleListResults" data-live-search-input>
+                        <span class="module-live-search-spinner spinner-border spinner-border-sm" aria-hidden="true" data-live-search-spinner hidden></span>
+                    </div>
+                    <span class="visually-hidden" aria-live="polite" data-live-search-status></span>
+                <?php else: ?>
+                    <input type="text" name="q" id="q" class="form-control" value="<?= e($search) ?>" placeholder="<?= e($searchPlaceholder) ?>">
+                <?php endif; ?>
             </div>
 
             <?php foreach ($module['filters'] ?? [] as $filterKey => $filterMeta): ?>
@@ -2299,11 +2247,13 @@ $buildPaginationWindow = static function (int $currentPage, int $totalPages): ar
                     <?php endif; ?>
                 </div>
             <?php endforeach; ?>
+            <?php if (!$usesLiveSearch): ?>
+                <div class="col-12 col-md-auto">
+                    <button type="submit" class="btn btn-primary">Aplică filtre</button>
+                </div>
+            <?php endif; ?>
             <div class="col-12 col-md-auto">
-                <button type="submit" class="btn btn-primary">Aplică filtre</button>
-            </div>
-            <div class="col-12 col-md-auto">
-                <a class="btn btn-outline-secondary" href="<?= e(build_query_url(['page' => $routePage])) ?>">Resetează</a>
+                <a class="btn btn-outline-secondary" href="<?= e(build_query_url(['page' => $routePage])) ?>"<?= $usesLiveSearch ? ' data-live-search-reset' : '' ?>>Resetează</a>
             </div>
         </form>
     </div>
@@ -2313,7 +2263,31 @@ $buildPaginationWindow = static function (int $currentPage, int $totalPages): ar
     <h3 class="h5 mt-4 mb-2">Documente mașini</h3>
 <?php endif; ?>
 
-<div class="card border-0 shadow-sm">
+<div class="card border-0 shadow-sm<?= $usesLiveSearch ? ' module-live-results' : '' ?>"<?= $usesLiveSearch ? ' id="moduleListResults" data-live-search-results aria-busy="false"' : '' ?>>
+    <?php $otherVehicleList = is_array($otherVehicleList ?? null) ? $otherVehicleList : null; ?>
+    <?php if ($usesVehicleCompactRows && $otherVehicleList !== null): ?>
+        <div class="alert alert-info d-flex flex-wrap align-items-center gap-2 mb-0 rounded-0 rounded-top border-0 border-bottom py-2" role="status">
+            <i class="bi bi-info-circle" aria-hidden="true"></i>
+            <span>
+                Încă <strong><?= e((string) $otherVehicleList['count']) ?></strong>
+                <?= (int) $otherVehicleList['count'] === 1 ? 'vehicul corespunde' : 'vehicule corespund' ?>
+                <?= $search !== '' ? 'căutării' : 'filtrelor' ?> în <?= e($otherVehicleList['label']) ?>.
+            </span>
+            <?php
+            $otherVehicleListSelectionLabel = !empty($filters['ids']) && is_string($_GET['selectie'] ?? null)
+                ? mb_substr(trim($_GET['selectie']), 0, 120, 'UTF-8')
+                : '';
+            $otherVehicleListUrl = build_query_url(array_merge($baseQuery, [
+                'page' => $otherVehicleList['page'],
+                'tip_vehicul' => null,
+                'selectie' => $otherVehicleListSelectionLabel !== '' ? $otherVehicleListSelectionLabel : null,
+            ]));
+            ?>
+            <a class="ms-auto fw-semibold text-decoration-none" href="<?= e($otherVehicleListUrl) ?>">
+                Vezi în <?= e($otherVehicleList['label']) ?> <i class="bi bi-arrow-right" aria-hidden="true"></i>
+            </a>
+        </div>
+    <?php endif; ?>
     <div class="card-body p-0">
         <div class="table-responsive module-list-table-wrap<?= $isVehicleList ? ' module-list-table-wrap-vehicule' : '' ?><?= $isDriverList ? ' module-list-table-wrap-soferi' : '' ?><?= $isAnyDocumentList ? ' module-list-table-wrap-documente' : '' ?>">
             <table class="table table-hover align-middle mb-0 module-list-table<?= $isVehicleList ? ' module-list-table-vehicule' : '' ?><?= $isDriverList ? ' module-list-table-soferi' : '' ?><?= $isAnyDocumentList ? ' module-list-table-documente' : '' ?>">
@@ -2328,7 +2302,26 @@ $buildPaginationWindow = static function (int $currentPage, int $totalPages): ar
                 <tbody>
                 <?php if ($rows === []): ?>
                     <tr>
-                        <td colspan="<?= e((string) (count($visibleListColumns) + 1)) ?>" class="text-center text-muted py-4">Nu există înregistrări.</td>
+                        <td colspan="<?= e((string) (count($visibleListColumns) + 1)) ?>" class="text-center text-muted py-4">
+                            <?php $hasActiveListFilters = array_filter($filters, static fn($value): bool => $value !== '' && $value !== []) !== []; ?>
+                            <?php if ($isDriverList || $usesDocumentCompactRows || $isDriverDocumentList): ?>
+                                <i class="bi <?= $isDriverList ? 'bi-person-x' : 'bi-file-earmark-x' ?> d-block fs-4 mb-2" aria-hidden="true"></i>
+                                <?= $isDriverList ? 'Nu au fost găsiți șoferi.' : 'Nu au fost găsite documente.' ?>
+                                <?php if ($search !== '' || $hasActiveListFilters): ?>
+                                    <span class="d-block small mt-1">
+                                        <?= $search !== '' ? 'Pentru căutarea „' . e($search) . '”' . ($hasActiveListFilters ? ' cu filtrele selectate' : '') : 'Pentru filtrele selectate' ?>.
+                                    </span>
+                                <?php endif; ?>
+                            <?php elseif ($usesLiveSearch && $search !== ''): ?>
+                                <i class="bi bi-search d-block fs-4 mb-2" aria-hidden="true"></i>
+                                Niciun vehicul nu corespunde căutării „<?= e($search) ?>”<?= $hasActiveListFilters ? ' cu filtrele selectate' : '' ?>.
+                            <?php elseif ($usesLiveSearch && $hasActiveListFilters): ?>
+                                <i class="bi bi-funnel d-block fs-4 mb-2" aria-hidden="true"></i>
+                                Niciun vehicul nu corespunde filtrelor selectate.
+                            <?php else: ?>
+                                Nu există înregistrări.
+                            <?php endif; ?>
+                        </td>
                     </tr>
                 <?php else: ?>
                     <?php foreach ($rows as $row): ?>
@@ -2643,7 +2636,7 @@ $buildPaginationWindow = static function (int $currentPage, int $totalPages): ar
 
     <div class="card-footer bg-white">
         <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
-            <small class="text-muted">Total rezultate: <?= e((string) $pagination['total_rows']) ?></small>
+            <small class="text-muted"<?= $usesLiveSearch ? ' data-live-search-total="' . e((string) $pagination['total_rows']) . '"' : '' ?>>Total rezultate: <?= e((string) $pagination['total_rows']) ?></small>
 
             <?php if ($isDocumentCostOverrideList || (int) $pagination['total_pages'] > 1): ?>
                 <div class="d-flex flex-wrap align-items-center gap-2">
@@ -2681,9 +2674,16 @@ $buildPaginationWindow = static function (int $currentPage, int $totalPages): ar
     </div>
 </div>
 
+<?php if ($usesLiveSearch): ?>
+<?php // Ferestrele randurilor („Incheie colaborarea”) se inlocuiesc odata cu randurile la cautarea live. ?>
+<div id="moduleListModals" data-live-search-region>
+<?php endif; ?>
 <?php foreach ($driverTerminationModals as $driverTerminationModalHtml): ?>
     <?= $driverTerminationModalHtml ?>
 <?php endforeach; ?>
+<?php if ($usesLiveSearch): ?>
+</div>
+<?php endif; ?>
 
 <?php if ($isDocumentList && $driverDocumentModule !== null && $driverDocumentPagination !== null): ?>
     <?php
@@ -2802,7 +2802,7 @@ $buildPaginationWindow = static function (int $currentPage, int $totalPages): ar
                     <tbody>
                     <?php if ($driverDocumentCostRows === []): ?>
                         <tr>
-                            <td colspan="<?= e((string) (count($driverDocumentCostModule['list_columns']) + 1)) ?>" class="text-center text-muted py-4">Nu existÄƒ Ã®nregistrÄƒri.</td>
+                            <td colspan="<?= e((string) (count($driverDocumentCostModule['list_columns']) + 1)) ?>" class="text-center text-muted py-4">Nu există înregistrări.</td>
                         </tr>
                     <?php else: ?>
                         <?php foreach ($driverDocumentCostRows as $row): ?>
@@ -2961,7 +2961,14 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     };
 
-    document.querySelectorAll('[data-driver-actions]').forEach(function (actionsEl) {
+    // Delegat pe document: randurile inlocuite de cautarea live (module-live-search.js) raman functionale.
+    document.addEventListener('click', function (event) {
+        var targetEl = event.target;
+        if (!(targetEl instanceof Element)) {
+            return;
+        }
+
+        var actionsEl = targetEl.closest('[data-driver-actions]');
         if (!(actionsEl instanceof HTMLElement)) {
             return;
         }
@@ -2973,7 +2980,7 @@ document.addEventListener('DOMContentLoaded', function () {
             return;
         }
 
-        triggerEl.addEventListener('click', function (event) {
+        if (triggerEl.contains(targetEl)) {
             event.preventDefault();
             event.stopPropagation();
 
@@ -2988,18 +2995,18 @@ document.addEventListener('DOMContentLoaded', function () {
             activeDriverActionsTrigger = triggerEl;
             triggerEl.setAttribute('aria-expanded', 'true');
             positionDriverActionsMenu();
-        });
+            return;
+        }
 
-        menuEl.addEventListener('click', function (event) {
-            var targetEl = event.target;
-            if (!(targetEl instanceof Element) || targetEl.closest('.driver-actions-item') === null) {
-                return;
-            }
-
+        if (menuEl.contains(targetEl) && targetEl.closest('.driver-actions-item') !== null) {
             window.setTimeout(function () {
                 closeDriverActionsMenu(false);
             }, 0);
-        });
+        }
+    });
+
+    document.addEventListener('module-live-search:updated', function () {
+        closeDriverActionsMenu(false);
     });
 
     document.addEventListener('click', function (event) {
@@ -3544,6 +3551,10 @@ document.addEventListener('DOMContentLoaded', function () {
     });
 });
 </script>
+<?php endif; ?>
+
+<?php if ($usesLiveSearch): ?>
+<script src="<?= e(url('assets/js/module-live-search.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/module-live-search.js'))) ?>"></script>
 <?php endif; ?>
 
 <?php if ($isDocumentCostOverrideList): ?></div><?php endif; ?>

@@ -12,7 +12,6 @@
     var CAN = D.can || {};
     var L = W.labels || {};
     var SEV = { neconfigurat: 0, in_termen: 1, fara_date: 2, se_apropie: 3, scadent: 4, depasit: 5 };
-    var CAT_ICON = { fluide: 'bi-droplet-half', filtre: 'bi-funnel', gresare: 'bi-moisture', transmisie: 'bi-gear-wide-connected', franare: 'bi-disc', altele: 'bi-tools' };
     var FLUID_TYPES = { motor: ['ulei_motor'], transmisie: ['ulei_transmisie'], diferential: ['ulei_diferential'], servodirectie: ['ulei_servodirectie'], hidraulic_pompa: ['ulei_hidraulic'], racire: ['antigel'], frana: ['lichid_frana'] };
     var reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -20,6 +19,7 @@
         kpi: {},            // ok / soon / due / cost (filtre din carduri)
         cyclePos: '',       // X1..Xn / Y (din expandarea „Secvență X / Y”)
         kpiOpen: '',        // cardul expandat
+        due: { sev: '', type: '', comp: '', allComps: false }, // filtrele panoului „Revizii scadente — Detalii”
         fleet: '', type: '', status: '', comp: '', q: '', from: '', to: '', win: '',
         adv: { make: [], veh: [], cat: [], optype: [], crit: [], src: '', hours: '', conf: '', sched: '' },
         sort: { key: 'due', dir: 1 },
@@ -56,6 +56,19 @@
     function localInput(d) {
         var x = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
         return x.toISOString().slice(0, 16);
+    }
+    // Iconita operatiunii = iconita din Catalog componente (rezolvata pe server dupa ierarhie).
+    function opIconOf(id) { var m = (W.op_icons || {})[id]; return m && m.icon ? m.icon : 'bi-tools'; }
+    function opIcon(id, cls) {
+        var m = (W.op_icons || {})[id] || {};
+        return '<i class="bi ' + esc(m.icon || 'bi-tools') + ' rv2-cicon' + (cls ? ' ' + cls : '') + '" title="' + esc(m.path ? 'Catalog componente: ' + m.path : 'Operațiune nelegată de Catalog componente') + '" aria-hidden="true"></i>';
+    }
+    // Piesa din Stoc Piese legata de operatiune (plan / exceptie vehicul).
+    function partLine(id) {
+        var p = id ? (W.piese || {})[id] : null;
+        if (!p) { return ''; }
+        return '<div class="rv2-part" title="Piesă din Stoc Piese' + (p.cod_oem ? ' · OEM ' + esc(p.cod_oem) : '') + '"><i class="bi bi-box-seam"></i>' + esc(p.cod + ' · ' + p.denumire)
+            + ' <span class="' + (p.stoc > 0 ? 'text-success' : 'text-danger') + '">stoc ' + num(p.stoc, p.stoc % 1 ? 1 : 0) + ' ' + esc(p.um || '') + '</span></div>';
     }
     function statusLabel(s) { return (L.status || {})[s] || s; }
     function badge(s, soft) { return '<span class="rv2-status rv2-status-' + esc(s) + (soft ? ' is-soft' : '') + '">' + esc(statusLabel(s)) + '</span>'; }
@@ -122,9 +135,10 @@
     }
 
     // ------------------------------------------------------------------ filtre
-    function opFilterActive() { return !!(state.comp || state.adv.cat.length || state.adv.optype.length || state.adv.crit.length); }
+    function opFilterActive() { return !!(state.comp || (state.kpi.due && state.due.comp) || state.adv.cat.length || state.adv.optype.length || state.adv.crit.length); }
     function opMatch(op) {
         if (state.comp && op.comp !== state.comp) { return false; }
+        if (state.kpi.due && state.due.comp && op.comp !== state.due.comp) { return false; }
         if (state.adv.cat.length && state.adv.cat.indexOf(op.cat) < 0) { return false; }
         if (state.adv.optype.length && state.adv.optype.indexOf(op.tip) < 0) { return false; }
         if (state.adv.crit.length && !state.adv.crit.some(function (c) { return (op.crit || []).indexOf(c) >= 0; })) { return false; }
@@ -168,12 +182,33 @@
         }
         return true;
     }
+    // Panoul „Revizii scadente”: depășite / scadente (termen atins) / se apropie cu scadența în 7 zile.
+    function within7(v) {
+        var d = dueDate(v);
+        return !!d && d <= new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
+    }
+    function dueSev(v) {
+        if (v.status === 'depasit') { return 'depasit'; }
+        if (v.status === 'scadent') { return 'scadent'; }
+        if (v.status === 'se_apropie' && within7(v)) { return 'soon7'; }
+        return '';
+    }
+    function dueOps(v) {
+        var sts = dueSev(v) === 'soon7' ? ['se_apropie', 'scadent', 'depasit'] : ['scadent', 'depasit'];
+        return (v.ops || []).filter(function (o) { return sts.indexOf(o.status) >= 0; });
+    }
+    function dueInScope(v, skip) {
+        var sev = dueSev(v);
+        if (!sev) { return false; }
+        skip = skip || {};
+        if (!skip.sev && state.due.sev && sev !== state.due.sev) { return false; }
+        if (!skip.type && state.due.type && (!v.next || v.next.type !== state.due.type)) { return false; }
+        if (!skip.comp && state.due.comp && !dueOps(v).some(function (o) { return o.comp === state.due.comp; })) { return false; }
+        return true;
+    }
     function kpiMatch(v) {
-        var sts = [];
-        if (state.kpi.ok) { sts.push('in_termen'); }
-        if (state.kpi.soon) { sts.push('se_apropie'); }
-        if (state.kpi.due) { sts.push('scadent', 'depasit'); }
-        if (sts.length && sts.indexOf(v.status) < 0) { return false; }
+        var any = state.kpi.ok || state.kpi.soon || state.kpi.due;
+        if (any && !((state.kpi.ok && v.status === 'in_termen') || (state.kpi.soon && v.status === 'se_apropie') || (state.kpi.due && dueInScope(v)))) { return false; }
         if (state.kpi.cost && !(v.cost_luna && v.cost_luna.total > 0)) { return false; }
         if (state.cyclePos && (!v.next || v.next.label !== state.cyclePos)) { return false; }
         return true;
@@ -239,7 +274,7 @@
             all: { v: num(base.length), d: (filtered ? 'din ' + num(total) + ' în flotă · ' : '') + fam.cap_tractor + ' cap tractor · ' + fam.camion + ' camion · ' + fam.semiremorca + ' semi', p: 100 },
             ok: { v: num(ok), d: configured.length ? num(pctOf(ok, configured.length), 1) + '% din cele configurate (' + configured.length + ')' : 'Niciun vehicul configurat', p: pctOf(ok, configured.length) },
             soon: { v: num(soon), d: soonDays ? '≤ ' + soonDays + ' zile sau prag km / ore' : 'În pragul de avertizare', p: pctOf(soon, configured.length) },
-            due: { v: num(due), d: overdue ? overdue + ' depășite · ' + (due - overdue) + ' scadente' : 'Depășite / urgente', p: pctOf(due, configured.length) },
+            due: { v: num(due), d: due ? overdue + ' depășite · ' + (due - overdue) + ' scadent' + (due - overdue === 1 ? 'ă' : 'e') + ' azi' : 'Nicio revizie depășită', p: pctOf(due, configured.length), x: due ? due + (due === 1 ? ' vehicul necesită' : ' vehicule necesită') + ' intervenție' : '' },
             cycle: { v: num(approachingY + nextY), d: 'Următoarea Y: ' + nextY + ' vehicule', p: pctOf(nextY, configured.length) },
             cost: { v: lei(cost), d: 'Consumabile + manoperă (revizii finalizate)', p: 0 }
         };
@@ -250,6 +285,7 @@
                 + '<div class="rv2-kpi-top"><span class="rv2-kpi-icon"><i class="bi ' + k.icon + '"></i></span><div class="min-w-0" style="min-width:0">'
                 + '<div class="rv2-kpi-label">' + esc(k.label) + '</div><div class="rv2-kpi-value">' + vals[k.key].v + '</div></div></div>'
                 + '<div class="rv2-kpi-desc" title="' + esc(vals[k.key].d) + '">' + esc(vals[k.key].d) + '</div>'
+                + (vals[k.key].x ? '<div class="rv2-kpi-alert">' + esc(vals[k.key].x) + '</div>' : '')
                 + '<div class="rv2-kpi-bar"><span style="width:' + Math.max(0, Math.min(100, vals[k.key].p)) + '%"></span></div>'
                 + '<i class="bi ' + k.icon + ' rv2-kpi-deco" aria-hidden="true"></i></button>';
         }).join('');
@@ -258,13 +294,16 @@
     function onKpi(key) {
         if (key === 'all') {
             state.kpi = {}; state.status = ''; state.cyclePos = ''; state.kpiOpen = '';
+            state.due = { sev: '', type: '', comp: '', allComps: false };
             $('rv2FStatus').value = '';
         } else if (key === 'cycle') {
             if (state.kpiOpen === 'cycle') { state.kpiOpen = ''; state.cyclePos = ''; } else { state.kpiOpen = 'cycle'; }
         } else if (key === 'cost') {
             if (state.kpiOpen === 'cost' || state.kpi.cost) { state.kpiOpen = ''; delete state.kpi.cost; } else { state.kpiOpen = 'cost'; state.kpi.cost = true; }
+        } else if (key === 'due' && state.kpi.due && state.kpiOpen !== 'due') {
+            state.kpiOpen = 'due'; // filtrul ramane, panoul se redeschide
         } else {
-            if (state.kpi[key]) { delete state.kpi[key]; if (state.kpiOpen === key) { state.kpiOpen = ''; } }
+            if (state.kpi[key]) { delete state.kpi[key]; if (state.kpiOpen === key) { state.kpiOpen = ''; } if (key === 'due') { state.due = { sev: '', type: '', comp: '', allComps: false }; } }
             else { state.kpi[key] = true; state.kpiOpen = (key === 'soon' || key === 'due') ? key : state.kpiOpen; }
         }
         state.page = 1;
@@ -316,8 +355,10 @@
                         return '<tr class="is-click" data-select="' + v.id + '"><td><b>' + esc(v.nr) + '</b></td><td>' + lei(c.rev_X || 0) + '</td><td>' + lei(c.rev_Y || 0) + '</td><td>' + lei(c.operatii || 0) + '</td><td>' + lei(c.materiale || 0) + '</td><td>' + lei(c.manopera || 0) + '</td><td class="text-end fw-bold">' + lei(c.total) + '</td></tr>';
                     }).join('') + '</tbody></table>'
                     : '<div class="text-muted small">Nicio cheltuială de mentenanță înregistrată luna aceasta pentru vehiculele filtrate.</div>');
-        } else if (state.kpiOpen === 'soon' || state.kpiOpen === 'due') {
-            var want = state.kpiOpen === 'soon' ? ['se_apropie'] : ['scadent', 'depasit'];
+        } else if (state.kpiOpen === 'due') {
+            html = duePanelHtml(base);
+        } else if (state.kpiOpen === 'soon') {
+            var want = ['se_apropie'];
             var byComp = {};
             base.forEach(function (v) {
                 (v.ops || []).forEach(function (op) { if (want.indexOf(op.status) >= 0) { (byComp[op.comp] = byComp[op.comp] || []).push(v.nr); } });
@@ -330,6 +371,7 @@
         }
         var open = html !== '';
         if (open) { inner.innerHTML = html; }
+        inner.classList.toggle('is-due', state.kpiOpen === 'due');
         if (open !== (wrap.dataset.open === '1')) {
             wrap.dataset.open = open ? '1' : '0';
             animateHeight(wrap, open);
@@ -343,7 +385,10 @@
         var list = [];
         var add = function (label, clear) { list.push({ label: label, clear: clear }); };
         var kpiNames = { ok: 'În termen', soon: 'Se apropie de termen', due: 'Scadente / depășite', cost: 'Cu costuri luna aceasta' };
-        Object.keys(state.kpi).forEach(function (k) { add('Card: ' + kpiNames[k], function () { delete state.kpi[k]; if (state.kpiOpen === k) { state.kpiOpen = ''; } }); });
+        Object.keys(state.kpi).forEach(function (k) { add('Card: ' + kpiNames[k], function () { delete state.kpi[k]; if (state.kpiOpen === k) { state.kpiOpen = ''; } if (k === 'due') { state.due = { sev: '', type: '', comp: '', allComps: false }; } }); });
+        if (state.kpi.due && state.due.sev) { add('Scadente: ' + DUE_SEV[state.due.sev], function () { state.due.sev = ''; }); }
+        if (state.kpi.due && state.due.type) { add('Scadente: Revizia ' + state.due.type, function () { state.due.type = ''; }); }
+        if (state.kpi.due && state.due.comp) { add('Componentă depășită: ' + state.due.comp, function () { state.due.comp = ''; }); }
         if (state.cyclePos) { add('Următoarea revizie: ' + state.cyclePos, function () { state.cyclePos = ''; }); }
         var fleetNames = { cap_tractor: 'Capete tractor', camion: 'Camioane', semiremorca: 'Semiremorci' };
         if (state.fleet) { add('Flotă: ' + fleetNames[state.fleet], function () { state.fleet = ''; $('rv2FFleet').value = ''; }); }
@@ -384,9 +429,15 @@
         var title = s.x_done + ' revizii X de la ultima Y' + (s.x_before_y !== null ? '; Y vine după a ' + s.x_before_y + '-a X (calculat din km)' : '; Y neprogramată');
         return '<span title="' + esc(title) + '">' + s.x_done + ' / ' + (s.x_before_y !== null ? s.x_before_y : '—') + '</span>';
     }
+    function typeCell(v) {
+        if (!v.next) { return '<span class="text-muted">—</span>'; }
+        var s = v.secventa;
+        var title = 'Următoarea: Revizia ' + v.next.label + (s ? ' · ' + s.x_done + ' X de la ultima Y' + (s.x_before_y !== null ? '; Y după a ' + s.x_before_y + '-a X (calculat din km)' : '; Y neprogramată') : '');
+        return '<span class="rv2-tbadge' + (v.next.type === 'Y' ? ' is-y' : '') + '" title="' + esc(title) + '">' + esc(v.next.type) + '</span>';
+    }
     function lastCell(v) {
         if (!v.last) { return '<span class="text-muted">—</span>'; }
-        return esc(v.last.label) + ' · ' + date(v.last.data);
+        return '<b class="fw-semibold">' + esc(v.last.label) + '</b> · ' + date(v.last.data);
     }
     function nextCell(v) {
         if (!v.next) { return '<span class="text-muted">Fără plan</span>'; }
@@ -397,7 +448,7 @@
         if (!v.next) { return '<span class="text-muted">—</span>'; }
         var n = v.next;
         if (n.km_ramasi !== null && n.km_ramasi !== undefined) {
-            return n.km_ramasi < 0 ? '<span class="text-danger fw-semibold">−' + num(-n.km_ramasi) + ' km</span>' : num(n.km_ramasi) + ' km';
+            return n.km_ramasi < 0 ? '<span class="rv2-neg">-' + num(-n.km_ramasi) + ' km</span>' : num(n.km_ramasi) + ' km';
         }
         if (n.zile_ramase !== null && n.zile_ramase !== undefined) { return n.zile_ramase < 0 ? '<span class="text-danger fw-semibold">' + num(n.zile_ramase) + ' zile</span>' : num(n.zile_ramase) + ' zile'; }
         if (n.ore_ramase !== null && n.ore_ramase !== undefined) { return num(n.ore_ramase) + ' h'; }
@@ -442,7 +493,7 @@
                     + '<div class="d-flex justify-content-between small mt-1"><span>' + remCell(v) + '</span><span>' + lei(v.cost_estimat) + '</span></div></div>';
             }).join('') + '</div>';
         } else {
-            var head = [['', ''], ['nr', 'Nr. auto'], ['model', 'Model'], ['ciclu', 'X / Y'], ['', 'Ultima revizie'], ['', 'Următoarea revizie'], ['km', 'Km rămași'], ['pct', 'Progres'], ['due', 'Status'], ['cost', 'Cost estimat'], ['', '']];
+            var head = [['', ''], ['nr', 'Nr. auto'], ['model', 'Model'], ['ciclu', 'Tip revizie'], ['', 'Ultima revizie'], ['', 'Următoarea revizie'], ['km', 'Km rămași'], ['pct', 'Progres'], ['due', 'Status'], ['cost', 'Cost estimat'], ['', '']];
             var allChecked = slice.length > 0 && slice.every(function (v) { return state.checked[v.id]; });
             var html = '<div class="rv2-table-wrap"><table class="rv2-table"><thead><tr>' + head.map(function (h, i) {
                 if (i === 0) { return '<th style="width:40px"><input type="checkbox" class="rv2-check" data-check-all ' + (allChecked ? 'checked' : '') + ' aria-label="Selectează pagina"></th>'; }
@@ -454,7 +505,7 @@
                     + '<td><input type="checkbox" class="rv2-check" data-check="' + v.id + '" ' + (state.checked[v.id] ? 'checked' : '') + ' aria-label="Selectează ' + esc(v.nr) + '"></td>'
                     + '<td><span class="rv2-plate"><i class="bi bi-truck"></i>' + esc(v.nr) + '</span></td>'
                     + '<td>' + esc(v.marca + ' ' + v.model) + '</td>'
-                    + '<td>' + cycleCell(v) + '</td>'
+                    + '<td class="text-center">' + typeCell(v) + '</td>'
                     + '<td>' + lastCell(v) + '</td>'
                     + '<td>' + nextCell(v) + '</td>'
                     + '<td>' + remCell(v) + '</td>'
@@ -496,8 +547,8 @@
         var mini = op.pct === null || op.pct === undefined ? '<span class="text-muted small">—</span>'
             : '<span class="rv2-mini rv2-tone-' + esc(op.status) + '">' + bar(op.pct, op.status) + '<small>' + num(op.pct, 0) + '%</small></span>';
         return '<tr class="is-op' + (y ? ' is-y' : '') + '" data-op="' + v.id + ':' + op.id + '">'
-            + '<td><span class="rv2-comp"><i class="bi ' + (CAT_ICON[op.cat] || 'bi-tools') + '"></i>' + esc(op.comp) + (op.de_verificat ? ' <i class="bi bi-exclamation-circle text-warning" title="Denumire de verificat (posibil duplicat în catalog)"></i>' : '') + (op.exceptie ? ' <span class="rv2-pill is-warn" title="Excepție pe vehicul">excepție</span>' : '') + '</span></td>'
-            + '<td>' + esc(op.op) + '</td>'
+            + '<td><span class="rv2-comp">' + opIcon(op.id) + esc(op.comp) + (op.de_verificat ? ' <i class="bi bi-exclamation-circle text-warning" title="Denumire de verificat (posibil duplicat în catalog)"></i>' : '') + (op.exceptie ? ' <span class="rv2-pill is-warn" title="Excepție pe vehicul">excepție</span>' : '') + '</span></td>'
+            + '<td>' + esc(op.op) + partLine(op.piesa_id) + '</td>'
             + '<td>' + esc((L.op_types || {})[op.tip] || op.tip) + '</td>'
             + '<td class="text-truncate" style="max-width:180px" title="' + esc(op.factori) + '">' + esc(op.factori || '—') + '</td>'
             + '<td>' + crit + '</td>'
@@ -609,7 +660,15 @@
             + '</ul></div></div></div>';
 
         var km = v.km || {};
-        html += '<div class="rv2-psec"><div class="rv2-psec-title">Date curente</div><div class="rv2-stats" style="margin-top:0">'
+        if (v.plan) {
+            var pl = v.plan;
+            var xTxt = pl.interval_km ? 'la fiecare ' + num(pl.interval_km) + ' km' : (pl.interval_luni ? 'la ' + pl.interval_luni + ' luni' : (pl.interval_ore ? 'la ' + num(pl.interval_ore) + ' h' : 'interval neconfigurat'));
+            var yTxt = pl.y_interval_km ? 'la fiecare ' + num(pl.y_interval_km) + ' km' : (pl.y_prag_km ? 'prima la ' + num(pl.y_prag_km) + ' km' : 'neconfigurată');
+            html += '<div class="rv2-planbox"><div class="rv2-planbox-title">Plan de mentenanță <span>(' + esc(pl.nume) + ')</span></div><div class="rv2-planbox-grid">'
+                + '<div class="rv2-plan-card"><span class="ic"><i class="bi bi-stack"></i></span><div><b>Revizia X</b><small>' + esc(xTxt) + '</small></div></div>'
+                + '<div class="rv2-plan-card is-y"><span class="ic"><i class="bi bi-stack"></i></span><div><b>Revizia Y</b><small>' + esc(yTxt) + '</small></div></div></div></div>';
+        }
+        var datesHtml = '<div class="rv2-psec"><div class="rv2-psec-title">Date curente</div><div class="rv2-stats" style="margin-top:0">'
             + '<div>Odometru<b>' + (km.value !== null && km.value !== undefined ? num(km.value) + ' km' : '—') + '</b></div>'
             + '<div>Sursă<b>' + (km.source ? esc(String(km.source).toUpperCase()) : '—') + (km.stale && km.source ? ' <i class="bi bi-exclamation-triangle text-warning" title="Date învechite"></i>' : '') + '</b></div>'
             + '<div>Citire<b>' + (km.at ? date(km.at, true) : (km.source === 'contor' ? 'contor' : '—')) + '</b></div>'
@@ -622,12 +681,12 @@
             var seq = c.sequence || [];
             var doneCount = seq.filter(function (s) { return s.state === 'done'; }).length;
             var doneW = seq.length > 1 ? Math.min(100, (doneCount / (seq.length - 1)) * 86) : 0;
-            html += '<div class="rv2-psec"><div class="rv2-psec-title">Secvență revizii X / Y <span class="rv2-pill is-gray">' + c.y_done + ' Y efectuate</span></div>'
+            html += '<div class="rv2-psec rv2-psec-seq"><div class="rv2-psec-title">Secvență revizii <span class="fw-normal text-muted">(calculată pe km)</span> <span class="rv2-pill is-gray">' + c.y_done + ' Y efectuate</span></div>'
                 + (seq.length ? '<div class="rv2-cycle"><div class="rv2-cycle-fill" style="width:' + doneW + '%"></div>' + seq.map(function (s) {
                     var cls = 'rv2-step' + (s.state === 'done' ? ' is-done' : '') + (s.state === 'next' ? ' is-next' : '') + (s.type === 'Y' ? ' is-y' : '');
                     var tip = (s.state === 'done' ? 'Efectuată' : (s.state === 'next' ? 'Următoarea' : 'Planificată')) + (s.km ? ' · ' + num(s.km) + ' km' : '') + (s.date ? ' · ' + date(s.date) : '') + (s.merged ? ' · X + Y într-o singură revizie' : '');
                     return '<div class="' + cls + '" title="' + esc(tip) + '"><span class="rv2-step-dot">' + (s.state === 'done' ? '<i class="bi bi-check-lg"></i>' : (s.type === 'Y' ? 'Y' : '')) + '</span>' + esc(s.label)
-                        + '<small class="text-muted fw-normal" style="font-size:.66rem">' + (s.km ? num(Math.round(s.km / 1000)) + 'k' : '—') + '</small></div>';
+                        + '<small class="rv2-step-km">' + (s.km ? num(s.km) : '—') + '</small></div>';
                 }).join('') + '</div>' : '<div class="small text-muted">Secvența nu se poate calcula: lipsesc intervalele km sau referințele.</div>')
                 + '<div class="rv2-cycle-cap">Următoarea: Revizia ' + esc(v.next.label) + (v.next.type === 'Y' ? ' (X + Y)' : '') + (v.next.km_target !== null ? ' la ' + num(v.next.km_target) + ' km' : '')
                 + (c.y_target !== null && v.next.type !== 'Y' ? ' · Y la ' + num(c.y_target) + ' km' + (c.x_before_y !== null ? ' (după încă ' + Math.max(0, c.x_before_y - c.x_done) + ' X)' : '') : '') + '</div>'
@@ -635,6 +694,10 @@
                 + (c.notes || []).map(function (t) { return '<div class="rv2-note mt-2"><i class="bi bi-exclamation-circle"></i><span>' + esc(t) + '</span></div>'; }).join('') + '</div>';
 
             var n = v.next;
+            html += '<div class="rv2-kmrow"><div><span>Km curenți</span><b>' + (km.value !== null && km.value !== undefined ? num(km.value) + ' km' : '—') + '</b></div>'
+                + '<div><span>Km rămași</span><b class="' + (n.km_ramasi !== null && n.km_ramasi < 0 ? 'rv2-neg' : '') + '">' + (n.km_ramasi !== null && n.km_ramasi !== undefined ? num(n.km_ramasi) + ' km' : '—') + '</b></div>'
+                + '<div class="rv2-tone-' + esc(n.status) + '"><span>Progres</span><b style="color:var(--c)">' + (n.pct !== null && n.pct !== undefined ? num(n.pct, 1) + '%' : '—') + '</b>' + bar(n.pct, n.status) + '</div></div>'
+                + necesarBox(v);
             var main = n.km_target !== null && n.km_target !== undefined ? num(n.km_target) + ' km' : (n.scadenta_data ? date(n.scadenta_data) : '—');
             var left = n.km_ramasi !== null && n.km_ramasi !== undefined ? num(n.km_ramasi) + ' km' : (n.zile_ramase !== null && n.zile_ramase !== undefined ? num(n.zile_ramase) + ' zile' : (n.ore_ramase !== null && n.ore_ramase !== undefined ? num(n.ore_ramase) + ' h' : '—'));
             html += '<div class="rv2-psec"><div class="rv2-next-box"><div><div class="lbl">Următoarea revizie <span class="rv2-pill' + (n.type === 'Y' ? ' is-y' : '') + '">' + esc(n.label) + '</span></div>'
@@ -649,8 +712,9 @@
                     return '<div class="rv2-tone-' + esc(cr.status) + '" title="Interval ' + num(cr.interval) + ' ' + esc(cr.unit) + (cr.pct !== null ? ' · ' + num(cr.pct, 1) + '%' : '') + '">' + name + '<b style="color:var(--c)">' + val + '</b></div>';
                 }).join('') + '</div><div class="small text-muted mt-1">Procentul = consumat din intervalul criteriului ' + ({ km: 'km', ore: 'ore motor', calendar: 'calendar' }[n.dominant] || '') + ' de la ultima revizie; starea = prima limită atinsă.</div>';
             }
-            html += '</div>';
+            html += '</div>' + datesHtml;
         } else {
+            html += datesHtml;
             html += '<div class="rv2-psec"><div class="rv2-note is-info"><i class="bi bi-info-circle"></i><span>Vehiculul nu are plan de mentenanță aplicabil. ' + (CAN.configure ? '<a href="#" data-act="cfg-vehicle" data-v="' + v.id + '">Configurează</a>' : '') + '</span></div></div>';
         }
 
@@ -678,7 +742,7 @@
             }
             html += '<div class="rv2-psec"><div class="rv2-psec-title">' + title + ' <span class="rv2-pill' + cls + '">' + list.length + ' operațiuni</span></div>'
                 + (list.length ? '<ul class="rv2-oplist">' + list.map(function (o) {
-                    return '<li data-act="comp" data-v="' + v.id + '" data-o="' + o.id + '"><i class="bi ' + (CAT_ICON[o.cat] || 'bi-tools') + '"></i>' + esc(o.comp) + badge(o.status, true) + '</li>';
+                    return '<li data-act="comp" data-v="' + v.id + '" data-o="' + o.id + '">' + opIcon(o.id) + esc(o.comp) + badge(o.status, true) + '</li>';
                 }).join('') + '</ul>' : '<div class="small text-muted">Nicio operațiune scadentă independent de revizie.</div>') + '</div>';
         }
         html += '<div class="rv2-psec"><div class="rv2-psec-title">Uzură monitorizată pe km SAS <span class="small text-muted fw-normal">ecrane existente</span></div>';
@@ -715,6 +779,280 @@
             var p = $('rv2Panel');
             if (p.getBoundingClientRect().top > window.innerHeight) { /* panoul e sub tabel pe ecrane mici; utilizatorul derulează */ }
         }
+    }
+
+
+    // ------------------------------------------------------------------ panoul „Revizii scadente — Detalii”
+    var DUE_SEV = { depasit: 'Depășite', scadent: 'Scadente azi', soon7: 'În următoarele 7 zile' };
+    var DUE_COLOR = { depasit: '#e5383b', scadent: '#f59f0b', soon7: '#c7cdd8' };
+    function dueText(v) {
+        var sev = dueSev(v);
+        var n = v.next || {};
+        if (sev === 'depasit') {
+            if (n.km_ramasi !== null && n.km_ramasi !== undefined && n.km_ramasi < 0) { return 'Depășit cu ' + num(-n.km_ramasi) + ' km'; }
+            if (n.zile_ramase !== null && n.zile_ramase !== undefined && n.zile_ramase < 0) { return 'Depășit cu ' + num(-n.zile_ramase) + ' zile'; }
+            if (n.ore_ramase !== null && n.ore_ramase !== undefined && n.ore_ramase < 0) { return 'Depășit cu ' + num(-n.ore_ramase) + ' h'; }
+            var over = dueOps(v).filter(function (o) { return o.status === 'depasit'; });
+            var pick = function (f) { return over.filter(function (o) { return o[f] !== null && o[f] !== undefined && o[f] < 0; }).sort(function (a, b) { return a[f] - b[f]; })[0]; };
+            var wk = pick('km_ramasi'), wd = pick('zile_ramase'), wh = pick('ore_ramase');
+            if (wk) { return 'Depășit cu ' + num(-wk.km_ramasi) + ' km'; }
+            if (wd) { return 'Depășit cu ' + num(-wd.zile_ramase) + ' zile'; }
+            if (wh) { return 'Depășit cu ' + num(-wh.ore_ramase) + ' h'; }
+            return over.length ? 'Depășit · ' + over.length + (over.length === 1 ? ' operațiune' : ' operațiuni') : 'Depășit';
+        }
+        if (sev === 'scadent') { return 'Scadent azi' + (n.km_ramasi !== null && n.km_ramasi !== undefined && n.km_ramasi < 0 ? ' (' + num(n.km_ramasi) + ' km)' : ''); }
+        var d = dueDate(v);
+        var days = d ? Math.max(0, Math.round((new Date(d) - new Date(new Date().toISOString().slice(0, 10))) / 86400000)) : null;
+        return days !== null ? 'Scadent în ' + days + (days === 1 ? ' zi' : ' zile') : 'Se apropie';
+    }
+    function dueRank(v) {
+        var r = { depasit: 0, scadent: 1, soon7: 2 }[dueSev(v)];
+        var km = v.next && v.next.km_ramasi !== null && v.next.km_ramasi !== undefined ? v.next.km_ramasi : 0;
+        return r * 1e9 + km;
+    }
+    function donut(counts, total) {
+        var r = 46, c = 2 * Math.PI * r, off = 0;
+        var segs = ['depasit', 'scadent', 'soon7'].map(function (k) {
+            var n = counts[k] || 0;
+            if (!n || !total) { return ''; }
+            var len = c * n / total;
+            var dim = state.due.sev && state.due.sev !== k ? ' is-dim' : '';
+            var html = '<circle class="rv2-donut-seg' + dim + '" data-due-sev="' + k + '" cx="60" cy="60" r="' + r + '" stroke="' + DUE_COLOR[k] + '" stroke-dasharray="' + len.toFixed(2) + ' ' + (c - len).toFixed(2) + '" stroke-dashoffset="' + (-off).toFixed(2) + '"><title>' + DUE_SEV[k] + ': ' + n + '</title></circle>';
+            off += len;
+            return html;
+        }).join('');
+        var center = state.due.sev ? (counts[state.due.sev] || 0) : total;
+        return '<button type="button" class="rv2-donut" data-due-sev="" title="Toate vehiculele afectate"><svg viewBox="0 0 120 120" aria-hidden="true"><circle class="rv2-donut-bg" cx="60" cy="60" r="' + r + '"/>' + segs + '</svg>'
+            + '<span class="rv2-donut-c"><b>' + center + '</b><small>' + (center === 1 ? 'vehicul' : 'vehicule') + '</small></span></button>';
+    }
+    function duePanelHtml(base) {
+        var all = base.filter(function (v) { return dueSev(v); });
+        var counts = { depasit: 0, scadent: 0, soon7: 0 };
+        all.forEach(function (v) { counts[dueSev(v)]++; });
+        var total = all.length;
+        var typeScope = base.filter(function (v) { return dueInScope(v, { type: true }); });
+        var compScope = base.filter(function (v) { return dueInScope(v, { comp: true }); });
+        var final = base.filter(function (v) { return dueInScope(v); });
+        var opsCount = 0;
+        final.forEach(function (v) { opsCount += dueOps(v).filter(function (o) { return !state.due.comp || o.comp === state.due.comp; }).length; });
+        var pct = function (n, d) { return d ? Math.round(n / d * 100) : 0; };
+        var tab = function (sev, label, n) {
+            return '<button type="button" class="rv2-due-tab' + (state.due.sev === sev ? ' is-on' : '') + '" data-due-sev="' + sev + '">' + label + ' (' + n + ')</button>';
+        };
+        var html = '<div class="rv2-due-head"><div class="rv2-due-title"><i class="bi bi-exclamation-triangle"></i><h3>Revizii scadente — Detalii</h3>'
+            + '<span class="rv2-due-sum">' + final.length + (final.length === 1 ? ' revizie' : ' revizii') + ' <span>·</span> ' + opsCount + (opsCount === 1 ? ' operațiune' : ' operațiuni') + ' <span>·</span> ' + final.length + (final.length === 1 ? ' vehicul afectat' : ' vehicule afectate') + '</span></div>'
+            + '<div class="rv2-due-tabs">' + tab('', 'Toate', total) + tab('depasit', 'Doar depășite', counts.depasit) + tab('scadent', 'Doar scadente azi', counts.scadent) + tab('soon7', 'În următoarele 7 zile', counts.soon7)
+            + '<button type="button" class="rv2-due-collapse" data-due-collapse title="Restrânge detaliile (filtrul rămâne activ)" aria-label="Restrânge"><i class="bi bi-chevron-up"></i></button></div></div>';
+
+        // 1. distributie pe severitate
+        html += '<div class="rv2-due-grid"><div class="rv2-due-col rv2-due-sev">' + donut(counts, total) + '<div class="rv2-due-legend">'
+            + ['depasit', 'scadent', 'soon7'].map(function (k) {
+                return '<button type="button" class="rv2-due-leg' + (state.due.sev === k ? ' is-on' : '') + (state.due.sev && state.due.sev !== k ? ' is-dim' : '') + '" data-due-sev="' + (state.due.sev === k ? '' : k) + '" title="' + (k === 'scadent' ? 'Termen atins, încă în toleranța planului' : (k === 'soon7' ? 'Se apropie, cu scadența estimată în 7 zile' : 'Peste termen și peste toleranță')) + ' · ' + pct(counts[k], total) + '%">'
+                    + '<span class="dot" style="background:' + DUE_COLOR[k] + '"></span><span class="lbl">' + DUE_SEV[k] + '</span><b>' + counts[k] + '</b></button>';
+            }).join('') + '</div></div>';
+
+        // 2. dupa tipul reviziei
+        var tX = typeScope.filter(function (v) { return v.next && v.next.type === 'X'; }).length;
+        var tY = typeScope.filter(function (v) { return v.next && v.next.type === 'Y'; }).length;
+        var tMax = Math.max(1, tX + tY);
+        html += '<div class="rv2-due-col"><div class="rv2-due-h">După tip revizie</div>' + [['X', tX], ['Y', tY]].map(function (t) {
+            return '<button type="button" class="rv2-due-type' + (state.due.type === t[0] ? ' is-on' : '') + (state.due.type && state.due.type !== t[0] ? ' is-dim' : '') + '" data-due-type="' + (state.due.type === t[0] ? '' : t[0]) + '">'
+                + '<span class="rv2-due-tic"><i class="bi bi-stack"></i></span><span class="rv2-due-tbody"><span class="rv2-due-trow"><span>Revizia ' + t[0] + '</span><b>' + t[1] + '</b></span>'
+                + '<span class="rv2-due-tbar"><span style="width:' + Math.round(t[1] / tMax * 100) + '%"></span></span></span></button>';
+        }).join('') + '</div>';
+
+        // 3. top componente (operatiuni reale depasite / scadente)
+        var comps = {};
+        compScope.forEach(function (v) {
+            dueOps(v).forEach(function (o) {
+                var c = comps[o.comp] || (comps[o.comp] = { name: o.comp, id: o.id, ops: 0, veh: {} });
+                c.ops++;
+                c.veh[v.id] = true;
+            });
+        });
+        var list = Object.keys(comps).map(function (k) { return comps[k]; }).sort(function (a, b) { return b.ops - a.ops || a.name.localeCompare(b.name, 'ro'); });
+        var shown = state.due.allComps ? list : list.slice(0, 4);
+        html += '<div class="rv2-due-col"><div class="rv2-due-h">Top componente cu depășiri <i class="bi bi-info-circle" title="Numărul = operațiuni depășite / scadente (o operațiune pe vehicul). Dacă diferă, în dreapta apare și numărul de vehicule."></i></div>'
+            + (shown.length ? '<div class="rv2-due-comps">' + shown.map(function (c) {
+                var nv = Object.keys(c.veh).length;
+                return '<button type="button" class="rv2-due-comp' + (state.due.comp === c.name ? ' is-on' : '') + '" data-due-comp="' + esc(state.due.comp === c.name ? '' : c.name) + '" title="' + c.ops + ' operațiuni pe ' + nv + ' vehicule">'
+                    + '<span class="rv2-due-cic">' + opIcon(c.id) + '</span><span class="rv2-due-cname">' + esc(c.name) + '</span>'
+                    + (nv !== c.ops ? '<small>' + nv + ' veh.</small>' : '') + '<b>' + c.ops + '</b></button>';
+            }).join('') + '</div>' + (list.length > 4 ? '<button type="button" class="rv2-due-more" data-due-all>' + (state.due.allComps ? 'Doar top 4' : 'Toate componentele (' + list.length + ')') + '</button>' : '')
+                : '<div class="small text-muted">Nicio operațiune individuală depășită: starea vine din intervalul reviziei.</div>') + '</div>';
+
+        // 4. vehicule afectate
+        var sorted = final.slice().sort(function (a, b) { return dueRank(a) - dueRank(b); });
+        html += '<div class="rv2-due-col rv2-due-vehs"><div class="rv2-due-h">Vehicule afectate' + (sorted.length > 3 ? ' (primele 3)' : '') + '</div>'
+            + (sorted.length ? sorted.slice(0, 3).map(function (v) {
+                var sev = dueSev(v);
+                return '<button type="button" class="rv2-due-veh' + (state.selected === v.id ? ' is-on' : '') + '" data-due-veh="' + v.id + '"><i class="bi bi-truck"></i><b>' + esc(v.nr) + '</b><span class="mdl">' + esc((v.marca + ' ' + v.model).trim()) + '</span>'
+                    + '<span class="rv2-due-pill is-' + sev + '">' + esc(dueText(v)) + '</span></button>';
+            }).join('') : '<div class="small text-muted">Niciun vehicul pentru filtrele alese.</div>')
+            + '<button type="button" class="rv2-due-all" data-due-list>Vezi toate vehiculele (' + sorted.length + ') <i class="bi bi-arrow-right"></i></button></div></div>';
+
+        // bara de actiuni
+        var ids = sorted.map(function (v) { return v.id; }).join(',');
+        html += '<div class="rv2-due-actions">'
+            + (CAN.edit ? '<button type="button" class="rv2-btn-primary" data-due-act="schedule" data-ids="' + ids + '"' + (sorted.length ? '' : ' disabled') + '><i class="bi bi-calendar-plus"></i> Programează reviziile</button>' : '')
+            + '<button type="button" class="rv2-due-btn" data-due-act="export"><i class="bi bi-download"></i> Exportă lista</button>'
+            + '<button type="button" class="rv2-due-btn" data-due-act="necesar" data-ids="' + ids + '"' + (sorted.length ? '' : ' disabled') + '><i class="bi bi-box-seam"></i> Necesar piese</button>'
+            + '<button type="button" class="rv2-due-btn" data-due-act="clear"' + (state.due.sev || state.due.type || state.due.comp ? '' : ' disabled') + '><i class="bi bi-x-lg"></i> Șterge filtrul</button></div>';
+        return html;
+    }
+    function exportVisible() {
+        var list = visibleList();
+        var rows = [['Nr. auto', 'Model', 'Tip revizie', 'Ultima revizie', 'Data ultimei revizii', 'Următoarea revizie', 'Km țintă', 'Km rămași', 'Progres %', 'Status', 'Situație', 'Operațiuni depășite / scadente', 'Cost estimat (lei)', 'Sursa costului']];
+        list.forEach(function (v) {
+            var n = v.next || {};
+            rows.push([v.nr, (v.marca + ' ' + v.model).trim(), n.type || '', v.last ? v.last.label : '', v.last ? date(v.last.data) : '', n.label || '', n.km_target !== null && n.km_target !== undefined ? Math.round(n.km_target) : '',
+                n.km_ramasi !== null && n.km_ramasi !== undefined ? Math.round(n.km_ramasi) : '', n.pct !== null && n.pct !== undefined ? String(n.pct).replace('.', ',') : '', statusLabel(v.status), dueSev(v) ? dueText(v) : '',
+                dueOps(v).map(function (o) { return o.comp + ' — ' + o.op; }).join('; '), v.cost_estimat !== null && v.cost_estimat !== undefined ? String(v.cost_estimat).replace('.', ',') : '', { plan: 'plan', operatii: 'reguli operațiuni', istoric: 'medie istoric' }[v.cost_sursa] || '']);
+        });
+        var csv = '\ufeff' + rows.map(function (r) { return r.map(function (c) { c = String(c === null || c === undefined ? '' : c); return /[";\n]/.test(c) ? '"' + c.replace(/"/g, '""') + '"' : c; }).join(';'); }).join('\r\n');
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+        a.download = 'revizii-' + new Date().toISOString().slice(0, 10) + '.csv';
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+        toast(list.length + ' vehicule exportate (filtrele active).', 'ok');
+    }
+    function focusVehicle(id) {
+        id = Number(id);
+        var idx = visibleList().map(function (v) { return v.id; }).indexOf(id);
+        if (idx >= 0) {
+            var pageNo = Math.floor(idx / state.per) + 1;
+            if (pageNo !== state.page) { state.page = pageNo; renderTable(); }
+        }
+        select(id);
+        if (!state.expanded[id]) { toggleExpand(id, true); }
+        var row = root.querySelector('tr.rv2-row[data-select="' + id + '"]');
+        if (row) { row.scrollIntoView({ behavior: reduced ? 'auto' : 'smooth', block: 'center' }); }
+    }
+    function scheduleIds(ids) {
+        state.checked = {};
+        ids.forEach(function (id) { state.checked[id] = true; });
+        onBulk('schedule');
+    }
+
+    // ------------------------------------------------------------------ necesar piese & consumabile
+    var nec = { ids: [], data: null, detail: null };
+    var NEC_LINE_TONE = { de_verificat: 'gray', disponibil: 'green', lipsa: 'red', comandat: 'amber', pregatit: 'blue', anulat: 'gray' };
+    function qty(v, um) { return v === null || v === undefined ? '—' : num(v, Number(v) % 1 ? 1 : 0) + (um ? ' ' + esc(um) : ''); }
+    function necBadge(st, labels) { return '<span class="rv2-nbadge is-' + (NEC_LINE_TONE[st] || 'gray') + '">' + esc((labels || {})[st] || st) + '</span>'; }
+    function openNecesar(ids) {
+        ids = (ids || []).map(Number).filter(Boolean);
+        if (!ids.length) { toast('Niciun vehicul ales pentru necesar.', 'err'); return; }
+        nec.ids = ids;
+        nec.detail = null;
+        $('rv2NecTitle').innerHTML = '<i class="bi bi-box-seam me-2"></i>Necesar piese &amp; consumabile' + (ids.length > 1 ? ' <span class="small text-muted fw-normal">· ' + ids.length + ' vehicule</span>' : '');
+        $('rv2NecBody').innerHTML = '<div class="rv2-skel"></div><div class="rv2-skel"></div><div class="rv2-skel"></div>';
+        $('rv2NecFoot').innerHTML = '';
+        modal('rv2NecModal').show();
+        loadNecesar();
+    }
+    function loadNecesar() {
+        return get('v2_necesar_preview', { ids: nec.ids.join(',') }).then(function (j) { nec.data = j; renderNecesar(); })
+            .catch(function (e) { $('rv2NecBody').innerHTML = '<div class="alert alert-warning">' + esc(e.message) + '</div>'; });
+    }
+    function productInfo(p) {
+        if (!p) { return ''; }
+        return '<div class="small text-muted">' + esc([p.producator, p.cod_produs, p.vascozitate, p.specificatie].filter(Boolean).join(' · ')) + (p.aprobari ? '<br>Aprobări: ' + esc(p.aprobari) : '') + '</div>';
+    }
+    function renderNecesar() {
+        var j = nec.data;
+        var html = '<div class="rv2-note is-info"><i class="bi bi-info-circle"></i><span>Liniile vin din operațiunile reviziei (planul și șabloanele vehiculului). <b>Disponibil</b> = stoc minus cantitățile rezervate în alte cereri deschise. Cererea <b>nu scade stocul</b>: scăderea se face doar la finalizarea lucrării, prin mișcări de stoc confirmate.</span></div>';
+        var creatable = [];
+        j.vehicule.forEach(function (r) {
+            var v = vehicleById(r.vehicle_id) || {};
+            html += '<section class="rv2-nec-veh"><div class="rv2-nec-head"><div><i class="bi bi-truck me-1"></i><b>' + esc(r.nr || v.nr || ('#' + r.vehicle_id)) + '</b> <span class="text-muted">' + esc(r.model || ((v.marca || '') + ' ' + (v.model || ''))) + '</span>'
+                + (r.eticheta ? ' <span class="rv2-pill' + (r.tip === 'Y' ? ' is-y' : '') + '">Revizia ' + esc(r.eticheta) + '</span>' + (r.km_tinta ? ' <span class="small text-muted">țintă ' + num(r.km_tinta) + ' km</span>' : '') : '') + '</div>'
+                + (r.cerere ? '<button type="button" class="btn btn-sm btn-outline-primary" data-nec-open="' + r.cerere.id + '"><i class="bi bi-ticket-detailed"></i> Cererea #' + r.cerere.id + ' · ' + esc(r.cerere.label) + ' · ' + r.cerere.pregatite + '/' + r.cerere.linii + ' pregătite</button>' : '') + '</div>';
+            if (r.eroare) {
+                html += '<div class="rv2-note"><i class="bi bi-exclamation-circle"></i><span>' + esc(r.eroare) + '</span></div></section>';
+                return;
+            }
+            if (!r.cerere) { creatable.push(r.vehicle_id); }
+            var lipsa = r.linii.filter(function (l) { return l.status === 'lipsa'; }).length;
+            var check = r.linii.filter(function (l) { return l.status === 'de_verificat'; }).length;
+            html += '<div class="rv2-nec-sum"><span><b>' + r.linii.length + '</b> linii</span><span class="text-success"><b>' + r.linii.filter(function (l) { return l.status === 'disponibil'; }).length + '</b> disponibile</span><span class="text-danger"><b>' + lipsa + '</b> lipsă stoc</span><span class="text-muted"><b>' + check + '</b> de verificat</span>'
+                + '<span>Cost estimat: <b>' + (r.costuri.estimat ? lei(r.costuri.estimat) : '—') + '</b>' + (r.costuri.fara_pret ? ' <small class="text-muted">(' + r.costuri.fara_pret + ' fără preț)</small>' : '') + '</span></div>'
+                + '<div class="rv2-exec-scroll"><table class="rv2-exec-table"><thead><tr><th>Componentă / operațiune</th><th>Referință / produs compatibil</th><th class="text-end">Necesar</th><th class="text-end">Stoc</th><th class="text-end">Rezervat</th><th class="text-end">Disponibil</th><th class="text-end">Lipsă</th><th>Status</th></tr></thead><tbody>'
+                + r.linii.map(function (l) {
+                    return '<tr class="' + (l.sectiune === 'Y' ? 'is-y' : (l.sectiune === 'S' ? 'is-s' : '')) + '"><td><b><i class="bi ' + esc(l.icon) + ' rv2-cicon me-1"></i>' + esc(l.componenta) + '</b><div class="small text-muted">' + esc(l.operatie) + '</div></td>'
+                        + '<td>' + (l.referinta ? esc(l.referinta) + (l.sursa_piesa ? ' <span class="rv2-pill is-gray" title="' + (l.sursa_piesa === 'plan' ? 'Piesa aleasă în plan / excepția vehiculului' : 'Piesa componentei din Catalog componente (după cod)') + '">' + (l.sursa_piesa === 'plan' ? 'din plan' : 'din catalog') + '</span>' : '') + productInfo(l.produs) : '<span class="text-muted">—</span>') + (l.compatibile && l.compatibile.length ? '<div class="small text-muted">Alternative cu stoc: ' + esc(l.compatibile.join(', ')) + '</div>' : '') + (l.nota ? '<div class="small text-warning-emphasis">' + esc(l.nota) + '</div>' : '') + '</td>'
+                        + '<td class="text-end">' + qty(l.cantitate, l.um) + '</td><td class="text-end">' + qty(l.stoc, l.um) + '</td><td class="text-end">' + (l.rezervat ? qty(l.rezervat, l.um) : '—') + '</td><td class="text-end">' + qty(l.disponibil, l.um) + '</td>'
+                        + '<td class="text-end' + (l.lipsa ? ' text-danger fw-semibold' : '') + '">' + (l.lipsa === null || l.lipsa === undefined ? '—' : qty(l.lipsa, l.um)) + '</td><td>' + necBadge(l.status, j.statusuri_linii) + '</td></tr>';
+                }).join('') + '</tbody></table></div></section>';
+        });
+        $('rv2NecBody').innerHTML = html;
+        nec.creatable = creatable;
+        var d7 = new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10);
+        $('rv2NecFoot').innerHTML = CAN.edit && creatable.length
+            ? '<div class="rv2-nec-form"><div><label class="form-label" for="rv2NecResp">Responsabil</label><input class="form-control form-control-sm" id="rv2NecResp" maxlength="120" placeholder="ex. magazioner / șef atelier"></div>'
+                + '<div><label class="form-label" for="rv2NecDate">Necesar până la</label><input type="date" class="form-control form-control-sm" id="rv2NecDate" value="' + d7 + '"></div>'
+                + '<div class="flex-grow-1"><label class="form-label" for="rv2NecObs">Observații</label><input class="form-control form-control-sm" id="rv2NecObs" maxlength="1000"></div>'
+                + '<button type="button" class="btn btn-primary btn-sm" id="rv2NecCreate"><i class="bi bi-send"></i> Creează ' + (creatable.length === 1 ? 'cererea' : creatable.length + ' cereri') + '</button></div>'
+            : '<div class="small text-muted">' + (creatable.length ? 'Crearea cererii cere dreptul „Revizii → editare”.' : 'Toate vehiculele afișate au deja o cerere deschisă sau nu au plan.') + '</div>';
+    }
+    function openNecesarDetail(id) {
+        $('rv2NecBody').innerHTML = '<div class="rv2-skel"></div><div class="rv2-skel"></div>';
+        get('v2_necesar', { id: id }).then(function (j) { nec.detail = j; renderNecesarDetail(); }).catch(function (e) { toast(e.message, 'err'); });
+    }
+    function renderNecesarDetail() {
+        var r = nec.detail;
+        var labels = (nec.data || {}).statusuri || {};
+        var lineLabels = (nec.data || {}).statusuri_linii || {};
+        var closed = r.status === 'inchis' || r.status === 'anulat';
+        var dis = !CAN.edit || closed ? ' disabled' : '';
+        var cr = r.consum_real;
+        var html = '<button type="button" class="btn btn-sm btn-link px-0" data-nec-back><i class="bi bi-arrow-left"></i> Necesar calculat</button>'
+            + '<div class="d-flex flex-wrap align-items-center gap-2 mb-2"><h6 class="fw-bold m-0">Cererea #' + r.id + ' · ' + esc(r.nr) + ' · Revizia ' + esc(r.eticheta || r.tip) + '</h6>'
+            + (r.lucrare_id ? '<button type="button" class="btn btn-sm btn-outline-secondary" data-act="execute" data-v="' + r.vehicle_id + '"><i class="bi bi-clipboard-check"></i> Lucrarea #' + r.lucrare_id + '</button>' : '<span class="small text-muted">nelegată încă de o lucrare (se leagă la programare)</span>') + '</div>'
+            + '<div class="rv2-nec-form mb-3"><div><label class="form-label">Status cerere</label><select class="form-select form-select-sm" id="rv2NdStatus"' + (CAN.edit ? '' : ' disabled') + '>' + Object.keys(labels).map(function (k) { return opt(k, labels[k], r.status); }).join('') + '</select></div>'
+            + '<div><label class="form-label">Responsabil</label><input class="form-control form-control-sm" id="rv2NdResp" maxlength="120" value="' + esc(r.responsabil || '') + '"' + dis + '></div>'
+            + '<div><label class="form-label">Necesar până la</label><input type="date" class="form-control form-control-sm" id="rv2NdDate" value="' + esc(r.data_necesara || '') + '"' + dis + '></div>'
+            + '<div class="flex-grow-1"><label class="form-label">Observații</label><input class="form-control form-control-sm" id="rv2NdObs" maxlength="1000" value="' + esc(r.observatii || '') + '"' + dis + '></div></div>'
+            + '<div class="rv2-nec-sum"><span>Pregătite: <b>' + r.pregatite + '/' + r.active + '</b></span><span>Cost estimat: <b>' + (r.costuri.estimat ? lei(r.costuri.estimat) : '—') + '</b></span><span>Cost angajat (comandat / pregătit): <b>' + lei(r.costuri.angajat) + '</b></span>'
+            + '<span>Cost real: <b>' + (cr && (cr.status === 'finalizata' || cr.status === 'partiala') && cr.cost_total !== null ? lei(cr.cost_total) + ' <small class="text-muted">(materiale ' + lei(cr.cost_materiale || 0) + ', manoperă ' + lei(cr.cost_manopera || 0) + ')</small>' : '— (după finalizarea lucrării)') + '</b></span></div>'
+            + '<div class="rv2-exec-scroll"><table class="rv2-exec-table"><thead><tr><th>Componentă / operațiune</th><th>Referință</th><th class="text-end">Necesar</th><th class="text-end">Disponibil acum</th><th class="text-end">Real (lucrare)</th><th style="width:150px">Status linie</th><th>Observații</th></tr></thead><tbody>'
+            + r.linii.map(function (l) {
+                var real = cr ? (cr.cantitati || []).filter(function (c) { return Number(c.operatie_id) === Number(l.operatie_id); })[0] : null;
+                return '<tr data-nl="' + l.id + '"><td><b><i class="bi ' + esc(l.icon) + ' rv2-cicon me-1"></i>' + esc(l.componenta) + '</b><div class="small text-muted">' + esc(l.operatie) + '</div></td><td>' + (l.referinta ? esc(l.referinta) + productInfo(l.produs) : '<span class="text-muted">—</span>') + '</td>'
+                    + '<td class="text-end">' + qty(l.cantitate, l.um) + '</td><td class="text-end' + (l.cantitate !== null && l.disponibil_acum !== null && l.disponibil_acum < l.cantitate ? ' text-danger fw-semibold' : '') + '">' + qty(l.disponibil_acum, l.um) + '</td>'
+                    + '<td class="text-end">' + (real ? qty(real.cantitate_reala, real.um || l.um) : '—') + '</td>'
+                    + '<td><select class="form-select" data-nl-f="status"' + dis + '>' + Object.keys(lineLabels).map(function (k) { return opt(k, lineLabels[k], l.status); }).join('') + '</select></td>'
+                    + '<td><input class="form-control" data-nl-f="observatii" maxlength="500" value="' + esc(l.observatii || '') + '"' + dis + '></td></tr>';
+            }).join('') + '</tbody></table></div>';
+        $('rv2NecBody').innerHTML = html;
+        $('rv2NecFoot').innerHTML = CAN.edit ? '<div class="d-flex justify-content-end w-100"><button type="button" class="btn btn-primary btn-sm" id="rv2NecSave"><i class="bi bi-check2"></i> Salvează cererea</button></div>' : '';
+    }
+    function saveNecesarDetail() {
+        var body = { id: nec.detail.id, status: $('rv2NdStatus').value, responsabil: $('rv2NdResp').value, data_necesara: $('rv2NdDate').value, observatii: $('rv2NdObs').value, linii: [] };
+        $('rv2NecBody').querySelectorAll('tr[data-nl]').forEach(function (tr) {
+            var l = { id: tr.getAttribute('data-nl') };
+            tr.querySelectorAll('[data-nl-f]').forEach(function (el) { l[el.getAttribute('data-nl-f')] = el.value; });
+            body.linii.push(l);
+        });
+        post('v2_necesar_update', body).then(function (j) { nec.detail = j.necesar; renderNecesarDetail(); toast('Cererea a fost salvată.', 'ok'); reload(true); }).catch(function (e) { toast(e.message, 'err'); });
+    }
+    function createNecesar() {
+        var btn = $('rv2NecCreate');
+        btn.disabled = true;
+        post('v2_necesar_create', { vehicle_ids: nec.creatable, responsabil: $('rv2NecResp').value, data_necesara: $('rv2NecDate').value, observatii: $('rv2NecObs').value }).then(function (j) {
+            toast(j.create.length + (j.create.length === 1 ? ' cerere creată' : ' cereri create') + (j.erori.length ? '; ' + j.erori.map(function (e) { return (vehicleById(e.vehicle_id) || {}).nr + ': ' + e.mesaj; }).join(' ') : '.'), j.erori.length ? 'err' : 'ok');
+            reload(true);
+            return loadNecesar();
+        }).catch(function (e) { toast(e.message, 'err'); btn.disabled = false; });
+    }
+    function necesarBox(v) {
+        var n = v.necesar;
+        var done = n ? n.pregatite : 0, tot = n ? n.linii : 0;
+        return '<div class="rv2-nec-box"><span class="rv2-nec-ic"><i class="bi bi-box-seam"></i></span><div class="rv2-nec-txt"><b>Necesar piese &amp; consumabile</b>'
+            + '<small>' + (n ? done + '/' + tot + ' pregătite · ' + esc(n.label) + (n.lipsa ? ' · <span class="text-danger">' + n.lipsa + ' lipsă</span>' : '') : 'Nicio cerere deschisă pentru revizia următoare') + '</small>'
+            + '<div class="rv2-nec-bar"><span style="width:' + (tot ? Math.round(done / tot * 100) : 0) + '%"></span></div></div>'
+            + '<button type="button" class="rv2-nec-btn" data-necesar="' + v.id + '"' + (v.plan ? '' : ' disabled title="Vehiculul nu are plan"') + '>Vezi / Solicită</button></div>';
     }
 
     // ------------------------------------------------------------------ clopotel
@@ -770,6 +1108,7 @@
     }
     function resetFilters() {
         state.kpi = {}; state.cyclePos = ''; state.kpiOpen = '';
+        state.due = { sev: '', type: '', comp: '', allComps: false };
         state.fleet = state.type = state.status = state.comp = state.q = state.from = state.to = state.win = '';
         state.adv = { make: [], veh: [], cat: [], optype: [], crit: [], src: '', hours: '', conf: '', sched: '' };
         ['rv2FFleet', 'rv2FType', 'rv2FStatus', 'rv2FComp', 'rv2FSearch', 'rv2FFrom', 'rv2FTo', 'rv2FWindow'].forEach(function (id) { $(id).value = ''; });
@@ -863,7 +1202,7 @@
             + '</div><div class="small text-muted mt-2">Toate patru se salvează. Scadențele se calculează pe sursa bifată „calcul”, comparată cu aceeași sursă la revizia următoare (GPS cu GPS, CAN cu CAN).</div></div>';
         html += '<div class="d-flex justify-content-between align-items-center mb-2"><div class="fw-semibold">Operațiuni (' + f.items.length + ')</div><div class="d-flex gap-2">'
             + '<button type="button" class="btn btn-sm btn-outline-success" data-exec-all="completed"><i class="bi bi-check-all"></i> Marchează toate efectuate</button></div></div>';
-        html += '<div class="rv2-exec-scroll"><table class="rv2-exec-table"><thead><tr><th>Operațiune</th><th>Tip</th><th style="width:130px">Rezultat</th><th>Motiv</th><th>Cant. est.</th><th style="width:90px">Cant. reală</th><th style="width:200px">Din stoc (recipient)</th><th style="width:100px">Cost mat. (lei)</th><th>Observații</th></tr></thead><tbody>';
+        html += '<div class="rv2-exec-scroll"><table class="rv2-exec-table"><thead><tr><th>Operațiune</th><th>Tip</th><th style="width:130px">Rezultat</th><th>Motiv</th><th>Cant. est.</th><th style="width:90px">Cant. reală</th><th style="width:250px">Din stoc (recipient / piesă)</th><th style="width:100px">Cost mat. (lei)</th><th>Observații</th></tr></thead><tbody>';
         var groups = [['X', f.tip === 'Y' ? 'Revizia X — Operațiuni de bază' : 'Revizia ' + f.label + ' — Operațiuni'], ['Y', 'Revizia Y — Operațiuni suplimentare'], ['S', 'Scadente în afara reviziei (incluse în aceeași lucrare)']];
         groups.forEach(function (g) {
             var items = f.items.filter(function (it) { return it.sectiune === g[0]; });
@@ -874,15 +1213,15 @@
                 var recs = recipientsFor(it);
                 var locked = !!it.executie_id;
                 html += '<tr data-item="' + key + '" class="' + (g[0] === 'Y' ? 'is-y' : (g[0] === 'S' ? 'is-s' : '')) + (it.status === 'completed' ? ' is-done' : (['na', 'deferred', 'blocked'].indexOf(it.status) >= 0 ? ' is-skip' : '')) + '">'
-                    + '<td><b>' + esc(it.componenta) + '</b><div class="small text-muted">' + esc(it.operatie) + (it.interval && it.interval !== '—' ? ' · ' + esc(it.interval) : '') + '</div>' + (it.urgenta ? badge(it.urgenta, true) : '') + '</td>'
+                    + '<td><b>' + opIcon(it.operatie_id, 'me-1') + esc(it.componenta) + '</b><div class="small text-muted">' + esc(it.operatie) + (it.interval && it.interval !== '—' ? ' · ' + esc(it.interval) : '') + '</div>' + (it.urgenta ? badge(it.urgenta, true) : '') + '</td>'
                     + '<td>' + esc((L.op_types || {})[it.tip_operatie] || it.tip_operatie) + '</td>'
                     + '<td><select class="form-select" data-f="status"' + (locked ? ' disabled' : '') + '>' + Object.keys(L.item || {}).map(function (s) { return '<option value="' + s + '"' + (it.status === s ? ' selected' : '') + '>' + esc(L.item[s]) + '</option>'; }).join('') + '</select></td>'
                     + '<td><input type="text" class="form-control" data-f="motiv" maxlength="255" value="' + esc(it.motiv || '') + '" placeholder="obligatoriu la amânare / n.a."' + (locked ? ' disabled' : '') + '></td>'
                     + '<td class="small">' + (it.cantitate_estimata !== null && it.cantitate_estimata !== undefined ? num(it.cantitate_estimata, 1) + ' ' + esc(it.um || '') : '—') + '</td>'
                     + '<td><input type="text" inputmode="decimal" class="form-control" data-f="cantitate_reala" value="' + esc(it.cantitate_reala || '') + '"' + (locked ? ' disabled' : '') + '></td>'
-                    + '<td>' + (recs.length || it.recipient_id ? '<select class="form-select" data-f="recipient_id"' + (locked ? ' disabled' : '') + '><option value="">— fără scădere din stoc —</option>' + recs.map(function (r) {
+                    + '<td>' + execPartCtl(it, locked) + (it.piesa_id && !recs.length && !it.recipient_id && !(it.regula && it.regula.sistem) && !it.sistem ? '' : (recs.length || it.recipient_id ? '<select class="form-select" data-f="recipient_id"' + (locked ? ' disabled' : '') + '><option value="">— fără scădere din stoc —</option>' + recs.map(function (r) {
                         return '<option value="' + r.id + '" data-produs="' + r.produs_id + '"' + (Number(it.recipient_id) === Number(r.id) ? ' selected' : '') + '>' + esc(r.cod + ' · ' + r.produs + (r.vascozitate ? ' ' + r.vascozitate : '') + ' (' + num(r.cantitate_curenta, 1) + ' ' + (r.um || 'L') + ')') + '</option>';
-                    }).join('') + '</select>' : '<span class="small text-muted">' + (it.regula && it.regula.sistem || it.sistem ? 'Niciun recipient cu stoc compatibil' : '—') + '</span>') + '</td>'
+                    }).join('') + '</select>' : '<span class="small text-muted">' + (it.regula && it.regula.sistem || it.sistem ? 'Niciun recipient cu stoc compatibil' : '—') + '</span>')) + '</td>'
                     + '<td><input type="text" inputmode="decimal" class="form-control" data-f="cost_material" value="' + esc(it.cost_material || '') + '"' + (locked ? ' disabled' : '') + '></td>'
                     + '<td><input type="text" class="form-control" data-f="observatii" maxlength="500" value="' + esc(it.observatii || '') + '"' + (locked ? ' disabled' : '') + '></td></tr>';
             });
@@ -901,6 +1240,23 @@
         exec.kmMoment = f.km_can || f.km_gps ? exAt : null;
         if (!f.km_can && !f.km_gps && exDate && exTime && !closed) { lookupExecKm(); } else { autoKmSource(); }
         execSummary();
+    }
+    // Piesa din Stoc Piese pe linia lucrarii: sursa (stoc / achizitie directa / nefolosita) si cantitatea.
+    function execPartCtl(it, locked) {
+        if (!it.piesa_id) { return ''; }
+        var p = (exec.form.piese || {})[it.piesa_id] || {};
+        var qtyV = it.piesa_cantitate !== null && it.piesa_cantitate !== undefined && it.piesa_cantitate !== '' ? Number(it.piesa_cantitate) : 1;
+        var stockable = p.mod !== 'direct';
+        var src = it.piesa_sursa || (stockable && p.stoc >= qtyV ? 'stoc' : 'direct');
+        var done = !!it.piesa_utilizare_id;
+        var dis = locked || done ? ' disabled' : '';
+        return '<div class="rv2-exec-part"><div class="rv2-part"><i class="bi bi-box-seam"></i>' + esc((p.cod || '#' + it.piesa_id) + ' · ' + (p.denumire || '')) + '</div>'
+            + '<input type="hidden" data-f="piesa_id" value="' + esc(it.piesa_id) + '">'
+            + '<div class="d-flex gap-1 mt-1"><select class="form-select" data-f="piesa_sursa"' + dis + ' title="Se scade din Stoc Piese doar la finalizare, o singură dată">'
+            + opt('stoc', 'Din stoc' + (stockable ? ' (' + num(p.stoc, p.stoc % 1 ? 1 : 0) + ' ' + (p.um || 'buc') + ')' : ' — piesă fără stoc'), src)
+            + opt('direct', 'Achiziție directă', src) + opt('nu', 'Nu s-a folosit', src) + '</select>'
+            + '<input type="text" inputmode="decimal" class="form-control" style="width:58px" data-f="piesa_cantitate" value="' + esc(qtyV) + '" title="Cantitate piesă"' + dis + '></div>'
+            + (done ? '<div class="small text-success mt-1"><i class="bi bi-check2"></i> înregistrată în Stoc Piese</div>' : (src === 'stoc' && stockable && p.stoc < qtyV ? '<div class="small text-danger mt-1">Stoc insuficient — finalizarea va fi refuzată</div>' : '')) + '</div>';
     }
     // Sursa folosita in calcul, cand operatorul nu a ales-o: CAN, altfel GPS, altfel butucul, altfel CardOil.
     function autoKmSource() {
@@ -1098,7 +1454,7 @@
         var v = vehicleById(vehicleId);
         var op = (v.ops || []).filter(function (o) { return o.id === Number(operationId); })[0];
         if (!op) { return; }
-        $('rv2CompTitle').innerHTML = '<i class="bi ' + (CAT_ICON[op.cat] || 'bi-tools') + ' me-2"></i>' + esc(op.comp) + ' · ' + esc(v.nr);
+        $('rv2CompTitle').innerHTML = opIcon(op.id, 'me-2') + esc(op.comp) + ' · ' + esc(v.nr);
         var body = $('rv2CompBody');
         var draw = function (det) {
             var execs = det ? (det.executii || []).filter(function (e) { return Number(e.operatie_id) === op.id; }) : null;
@@ -1114,8 +1470,9 @@
                 + '<button type="button" class="btn btn-sm btn-outline-secondary" data-act="history-op" data-v="' + v.id + '" data-o="' + op.id + '"><i class="bi bi-clock-history"></i> Istoric</button>'
                 + (CAN.configure ? '<button type="button" class="btn btn-sm btn-outline-secondary" data-act="edit-rule" data-v="' + v.id + '" data-o="' + op.id + '"><i class="bi bi-sliders"></i> Editează regula</button>' : '') + '</div>';
             html += '<dl class="rv2-kv mb-3">'
-                + '<dt>Componentă</dt><dd>' + esc(op.comp) + (op.de_verificat ? ' <span class="rv2-pill is-warn">denumire de verificat</span>' : '') + '</dd>'
+                + '<dt>Componentă</dt><dd>' + opIcon(op.id, 'me-1') + esc(op.comp) + ' <span class="small text-muted">' + esc(((W.op_icons || {})[op.id] || {}).path || 'nelegată de Catalog componente') + '</span>' + (op.de_verificat ? ' <span class="rv2-pill is-warn">denumire de verificat</span>' : '') + '</dd>'
                 + '<dt>Operațiune</dt><dd>' + esc(op.op) + ' · ' + esc((L.op_types || {})[op.tip] || op.tip) + '</dd>'
+                + '<dt>Piesă (Stoc Piese)</dt><dd>' + (op.piesa_id && (W.piese || {})[op.piesa_id] ? partLine(op.piesa_id) : '<span class="text-muted">nelegată' + (CAN.configure ? ' — <a href="#" data-act="edit-rule" data-v="' + v.id + '" data-o="' + op.id + '">alege piesa</a>' : '') + '</span>') + '</dd>'
                 + '<dt>Vehicul</dt><dd>' + esc(v.nr + ' · ' + v.marca + ' ' + v.model) + '</dd>'
                 + '<dt>Plan</dt><dd>' + esc(v.plan ? v.plan.nume : '—') + ' · secțiunea ' + (op.sect === 'Y' ? 'Revizia Y (suplimentar)' : 'Revizia X') + (op.exceptie ? ' · <span class="rv2-pill is-warn">excepție pe vehicul</span>' : '') + '</dd>'
                 + '<dt>Interval</dt><dd>' + esc(op.interval) + (op.mode === 'revizie' ? ' <span class="small text-muted">(intervalul reviziei, de la ultima execuție a operațiunii)</span>' : '') + '</dd>'
@@ -1234,7 +1591,29 @@
     }
 
     // ------------------------------------------------------------------ configurare
-    var cfg = { data: null, sec: 'planuri', edit: null };
+    var cfg = { data: null, sec: 'planuri', edit: null, vehSel: {} };
+    function bulkCount() { var el = $('rv2BulkCount'); if (el) { el.textContent = Object.keys(cfg.vehSel).length; } }
+    // Catalog componente in configurare: grupurile (categoriile) active si componentele lor.
+    function catPath(c) {
+        var parts = String(c.path || '').split(' › ').concat([c.name]);
+        return parts.filter(function (x, i) { return x && parts.indexOf(x) === i; }).join(' › ');
+    }
+    function catById(id) { return (cfg.data.catalog || []).filter(function (c) { return Number(c.id) === Number(id); })[0] || null; }
+    function catOfKey(key) { return (cfg.data.catalog || []).filter(function (c) { return c.components.some(function (k) { return k.key === key; }); })[0] || null; }
+    function compOptions(catId, sel) {
+        var c = catById(catId);
+        return opt('', c ? '— doar grupul (fără componentă anume) —' : '— alege întâi grupul —', sel || '') + (c ? c.components.map(function (k) { return opt(k.key, k.name + ' · ' + k.code, sel); }).join('') : '');
+    }
+    function partSelect(attr, sel, emptyLabel) {
+        var groups = {};
+        (cfg.data.piese || []).forEach(function (p) { var g = p.categorie || 'Altele'; (groups[g] = groups[g] || []).push(p); });
+        return '<select class="form-select rv2-part-sel" ' + attr + ro() + ' title="Piesa din Stoc Piese folosită la această operațiune">' + opt('', emptyLabel, sel || '')
+            + Object.keys(groups).map(function (g) {
+                return '<optgroup label="' + esc(g) + '">' + groups[g].map(function (p) { return opt(p.id, p.cod + ' · ' + p.denumire + (p.cod_oem ? ' (OEM ' + p.cod_oem + ')' : '') + ' — stoc ' + num(p.stoc, p.stoc % 1 ? 1 : 0) + ' ' + p.um, sel); }).join('') + '</optgroup>';
+            }).join('') + '</select>';
+    }
+    function partName(id) { var p = (cfg.data.piese || []).filter(function (x) { return Number(x.id) === Number(id); })[0]; return p ? p.cod + ' · ' + p.denumire : ''; }
+    function cfgOpIcon(id) { var m = (cfg.data.op_icons || {})[id] || {}; return '<i class="bi ' + esc(m.icon || 'bi-tools') + ' rv2-cicon" title="' + esc(m.path || 'nelegată') + '"></i>'; }
     function openConfig(sec, opts) {
         cfg.sec = sec || 'planuri';
         cfg.focus = opts || null;
@@ -1323,10 +1702,12 @@
                 + '<td><input class="form-control" data-r="cantitate" value="' + esc(r.cantitate || '') + '"' + ro() + '></td>'
                 + '<td><input class="form-control" data-r="um" value="' + esc(r.um || (o.sistem_fluid ? 'L' : '')) + '" style="width:54px"' + ro() + '></td>'
                 + '<td><select class="form-select" data-r="produs_id"' + ro() + '>' + opt('', '—', r.produs_id || '') + (d.produse || []).map(function (pr) { return opt(pr.id, pr.denumire + (pr.vascozitate ? ' ' + pr.vascozitate : ''), r.produs_id); }).join('') + '</select></td>'
+                + '<td>' + partSelect('data-r="piesa_id"', r.piesa_id, '—') + '</td>'
                 + '<td><input class="form-control" data-r="cost_estimat" value="' + esc(r.cost_estimat || '') + '"' + ro() + '></td></tr>';
         };
-        html += '<div class="fw-semibold small mb-1">Reguli pe operațiuni <span class="text-muted fw-normal">— fără interval propriu, operațiunile X urmează intervalul reviziei (măsurat de la propria execuție), iar cele Y se fac la Revizia Y / ținta km Y.</span></div>'
-            + '<div class="rv2-cfg-scroll"><table class="rv2-cfg-table"><thead><tr><th>Aplic.</th><th>Operațiune</th><th>Secț.</th><th>Km</th><th>Ore</th><th>Luni</th><th>Logică</th><th title="km per oră de ralanti">Coef. ralanti</th><th>Cantitate</th><th>UM</th><th>Produs</th><th>Cost est.</th></tr></thead><tbody>'
+        html += '<div class="rv2-note is-info"><i class="bi bi-box-seam"></i><span>Leagă fiecare operațiune de piesa din <b>Stoc Piese</b> potrivită modelului acestui plan (ex. filtrul de ulei al motorului). Piesa intră în necesarul de piese și în lucrare; pe un vehicul anume se poate schimba din Vehicule → excepții. Piesele lipsă se adaugă în <a href="' + esc(D.urls.stoc_piese) + '" target="_blank" rel="noopener">Stoc Piese</a>.</span></div>'
+            + '<div class="fw-semibold small mb-1">Reguli pe operațiuni <span class="text-muted fw-normal">— fără interval propriu, operațiunile X urmează intervalul reviziei (măsurat de la propria execuție), iar cele Y se fac la Revizia Y / ținta km Y.</span></div>'
+            + '<div class="rv2-cfg-scroll"><table class="rv2-cfg-table"><thead><tr><th>Aplic.</th><th>Operațiune</th><th>Secț.</th><th>Km</th><th>Ore</th><th>Luni</th><th>Logică</th><th title="km per oră de ralanti">Coef. ralanti</th><th>Cantitate</th><th>UM</th><th title="Fluid din Consumabile">Produs</th><th title="Piesa din Stoc Piese (filtru, garnitură etc.) — specifică modelului planului">Piesă (Stoc Piese)</th><th>Cost est.</th></tr></thead><tbody>'
             + xOps.map(function (o) { return ruleRow(o, 'X'); }).join('') + yOps.map(function (o) { return ruleRow(o, 'Y'); }).join('') + '</tbody></table></div>'
             + (CAN.configure ? '<div class="d-flex justify-content-end gap-2 mt-3"><button type="button" class="btn btn-sm btn-outline-secondary" data-cfg-back>Renunță</button><button type="button" class="btn btn-sm btn-primary" data-cfg-save-plan="' + (id || '') + '">Salvează planul</button></div>' : '');
         return html;
@@ -1335,10 +1716,12 @@
         var d = cfg.data;
         if (cfg.edit && cfg.edit.type === 'op') { return cfgOperationForm(cfg.edit.id); }
         return '<div class="d-flex justify-content-between align-items-center mb-2"><h6 class="fw-bold m-0">Catalog operațiuni (' + d.operatii.length + ')</h6>' + (CAN.configure ? '<button type="button" class="btn btn-sm btn-primary" data-cfg-new="op"><i class="bi bi-plus-lg"></i> Operațiune nouă</button>' : '') + '</div>'
+            + '<p class="rv2-cfg-help">Iconițele vin din <b>Catalog componente</b> (componenta legată → grupul ei → subcategorie → ramură); o componentă nouă din catalog se poate alege aici imediat, fără programare automată (intră în calcul doar după ce o pui într-un șablon / plan).</p>'
             + '<p class="rv2-cfg-help">Intrările marcate <i class="bi bi-exclamation-circle text-warning"></i> pot dubla alte denumiri (ex. „Filtru cabină” / „Filtru habitaclu/polen”, „Filtru centrifugal” / „(hârtie)”): verifică-le cu atelierul și dezactivează duplicatele. Prezența în catalog nu înseamnă că piesa există pe fiecare vehicul.</p>'
-            + '<div class="rv2-cfg-scroll"><table class="rv2-cfg-table"><thead><tr><th>Componentă</th><th>Operațiune</th><th>Tip</th><th>Categorie</th><th>Sistem fluid</th><th>Se aplică</th><th>Criterii candidate</th><th>Activ</th><th></th></tr></thead><tbody>'
+            + '<div class="rv2-cfg-scroll"><table class="rv2-cfg-table"><thead><tr><th>Componentă</th><th>Catalog componente</th><th>Operațiune</th><th>Tip</th><th>Categorie</th><th>Sistem fluid</th><th>Se aplică</th><th>Criterii candidate</th><th>Activ</th><th></th></tr></thead><tbody>'
             + d.operatii.map(function (o) {
-                return '<tr' + (Number(o.activ) ? '' : ' class="text-muted"') + '><td>' + esc(o.componenta) + (Number(o.de_verificat) ? ' <i class="bi bi-exclamation-circle text-warning" title="De verificat"></i>' : '') + '</td><td>' + esc(o.operatie) + '</td><td>' + esc(d.tipuri[o.tip_operatie] || o.tip_operatie) + '</td><td>' + esc(d.categorii[o.categorie] || o.categorie) + '</td><td>' + esc(o.sistem_fluid || '—') + '</td><td class="small">' + esc(o.aplicabil) + '</td><td class="small">' + esc([o.criterii_candidate, o.valori_candidate].filter(Boolean).join(' · ') || '—') + '</td><td>' + (Number(o.activ) ? 'da' : 'nu') + '</td><td><button type="button" class="btn btn-sm btn-outline-primary" data-cfg-edit="op" data-id="' + o.id + '">' + (CAN.configure ? 'Editează' : 'Vezi') + '</button></td></tr>';
+                var ic = (d.op_icons || {})[o.id] || {};
+                return '<tr' + (Number(o.activ) ? '' : ' class="text-muted"') + '><td>' + cfgOpIcon(o.id) + ' ' + esc(o.componenta) + (Number(o.de_verificat) ? ' <i class="bi bi-exclamation-circle text-warning" title="De verificat"></i>' : '') + '</td><td class="small">' + (ic.path ? esc(ic.path) + (o.component_key ? ' <span class="rv2-pill is-gray">' + esc(o.component_key) + '</span>' : '') : '<span class="text-warning">nelegată</span>') + '</td><td>' + esc(o.operatie) + '</td><td>' + esc(d.tipuri[o.tip_operatie] || o.tip_operatie) + '</td><td>' + esc(d.categorii[o.categorie] || o.categorie) + '</td><td>' + esc(o.sistem_fluid || '—') + '</td><td class="small">' + esc(o.aplicabil) + '</td><td class="small">' + esc([o.criterii_candidate, o.valori_candidate].filter(Boolean).join(' · ') || '—') + '</td><td>' + (Number(o.activ) ? 'da' : 'nu') + '</td><td><button type="button" class="btn btn-sm btn-outline-primary" data-cfg-edit="op" data-id="' + o.id + '">' + (CAN.configure ? 'Editează' : 'Vezi') + '</button></td></tr>';
             }).join('') + '</tbody></table></div>';
     }
     function cfgOperationForm(id) {
@@ -1357,7 +1740,13 @@
             + '<div class="col-md-3"><label class="form-label">Puncte de gresare</label><input class="form-control form-control-sm" data-o="puncte_gresare" value="' + esc(o.puncte_gresare || '') + '"' + ro() + '></div>'
             + '<div class="col-md-4"><label class="form-label">Criterii candidate (import)</label><input class="form-control form-control-sm" data-o="criterii_candidate" value="' + esc(o.criterii_candidate || '') + '"' + ro() + '></div>'
             + '<div class="col-md-4"><label class="form-label">Valori candidate (import, inactive)</label><input class="form-control form-control-sm" data-o="valori_candidate" value="' + esc(o.valori_candidate || '') + '"' + ro() + '></div>'
-            + '<div class="col-md-2"><label class="form-label">Cheie Reparații Auto</label><input class="form-control form-control-sm" data-o="component_key" value="' + esc(o.component_key || '') + '" placeholder="ex. 2-5"' + ro() + '></div>'
+            + (function () {
+                var catSel = o.catalog_categorie_id || (o.component_key && catOfKey(o.component_key) ? catOfKey(o.component_key).id : '');
+                var cur = catById(catSel);
+                return '<div class="col-md-5"><label class="form-label" for="rv2OCat">Grup componente (Catalog componente)</label><div class="input-group input-group-sm"><span class="input-group-text" id="rv2OIcon"><i class="bi ' + esc(cur ? cur.icon : 'bi-tools') + '"></i></span><select class="form-select form-select-sm" data-o="catalog_categorie_id" id="rv2OCat"' + ro() + '>'
+                    + opt('', '— nelegată (iconiță implicită) —', catSel) + (cfg.data.catalog || []).map(function (c) { return opt(c.id, catPath(c), catSel); }).join('') + '</select></div></div>'
+                    + '<div class="col-md-5"><label class="form-label" for="rv2OKey">Componentă din catalog</label><select class="form-select form-select-sm" data-o="component_key" id="rv2OKey"' + ro() + '>' + compOptions(catSel, o.component_key || '') + '</select></div>';
+            })()
             + '<div class="col-md-2"><label class="form-label">Ordine</label><input class="form-control form-control-sm" data-o="ordine" value="' + esc(o.ordine || 500) + '"' + ro() + '></div>'
             + '<div class="col-md-12"><label class="form-label">Descriere</label><textarea class="form-control form-control-sm" rows="2" data-o="descriere"' + ro() + '>' + esc(o.descriere || '') + '</textarea></div>'
             + '<div class="col-md-12"><label class="form-check form-check-inline small"><input type="checkbox" class="form-check-input" data-o="de_verificat"' + (Number(o.de_verificat) ? ' checked' : '') + ro() + '> De verificat (posibil duplicat)</label><label class="form-check form-check-inline small"><input type="checkbox" class="form-check-input" data-o="activ"' + (Number(o.activ) ? ' checked' : '') + ro() + '> Activă</label></div>'
@@ -1386,7 +1775,7 @@
             + '<div class="rv2-cfg-scroll"><table class="rv2-cfg-table"><thead><tr><th></th><th>Componentă</th><th>Operațiune</th><th>Tip</th><th>Se aplică</th></tr></thead><tbody>'
             + d.operatii.filter(function (o) { return Number(o.activ); }).map(function (o) {
                 var inh = t.tip === 'Y' && inherited.indexOf(Number(o.id)) >= 0;
-                return '<tr' + (inh ? ' class="text-muted"' : '') + '><td><input type="checkbox" class="form-check-input" data-tpl-op="' + o.id + '"' + (inh || t.operatii.indexOf(Number(o.id)) >= 0 ? ' checked' : '') + (inh ? ' disabled title="Moștenită din X"' : ro()) + '></td><td>' + esc(o.componenta) + '</td><td>' + esc(o.operatie) + (inh ? ' <span class="rv2-pill is-gray">din X</span>' : '') + '</td><td>' + esc(d.tipuri[o.tip_operatie] || '') + '</td><td class="small">' + esc(o.aplicabil) + '</td></tr>';
+                return '<tr' + (inh ? ' class="text-muted"' : '') + '><td><input type="checkbox" class="form-check-input" data-tpl-op="' + o.id + '"' + (inh || t.operatii.indexOf(Number(o.id)) >= 0 ? ' checked' : '') + (inh ? ' disabled title="Moștenită din X"' : ro()) + '></td><td>' + cfgOpIcon(o.id) + ' ' + esc(o.componenta) + '</td><td>' + esc(o.operatie) + (inh ? ' <span class="rv2-pill is-gray">din X</span>' : '') + '</td><td>' + esc(d.tipuri[o.tip_operatie] || '') + '</td><td class="small">' + esc(o.aplicabil) + '</td></tr>';
             }).join('') + '</tbody></table></div>'
             + (CAN.configure ? '<div class="d-flex justify-content-end gap-2 mt-3"><button type="button" class="btn btn-sm btn-outline-secondary" data-cfg-back>Renunță</button><button type="button" class="btn btn-sm btn-primary" data-cfg-save-tpl="' + (id || '') + '" data-tip="' + t.tip + '">Salvează șablonul</button></div>' : '');
     }
@@ -1394,12 +1783,18 @@
         var d = cfg.data;
         if (cfg.edit && cfg.edit.type === 'veh') { return cfgVehicleForm(cfg.edit.id); }
         return '<h6 class="fw-bold">Vehicule: plan, referințe, excepții</h6><p class="rv2-cfg-help">La preluare declari ultima revizie (data / km), ultima Revizie Y (km) și câte X s-au făcut de la ea (doar pentru etichete). Țintele următoare se calculează din km. După prima revizie finalizată în aplicație, referințele vin din istoric; corecțiile cer motiv și se auditează.</p>'
-            + '<div class="mb-2"><input type="search" class="form-control form-control-sm" id="rv2CfgVehQ" placeholder="Caută nr. auto…" value="' + esc(cfg.vehQ || '') + '"></div>'
-            + '<div class="rv2-cfg-scroll"><table class="rv2-cfg-table"><thead><tr><th>Nr. auto</th><th>Model</th><th>Plan</th><th>X de la ultima Y</th><th>Ultima revizie</th><th>Ultima Y</th><th>Excepții</th><th></th></tr></thead><tbody>'
+            + '<div class="d-flex flex-wrap gap-2 align-items-end mb-2"><div class="flex-grow-1"><input type="search" class="form-control form-control-sm" id="rv2CfgVehQ" placeholder="Caută nr. auto…" value="' + esc(cfg.vehQ || '') + '"></div>'
+            + (CAN.configure ? '<div class="rv2-bulkplan"><label class="form-label mb-1" for="rv2BulkPlan">Planul (șablonul de mentenanță) pentru vehiculele bifate</label><div class="d-flex gap-2"><select class="form-select form-select-sm" id="rv2BulkPlan">' + opt('', 'Automat (după tip / marcă / model)', '') + d.planuri.filter(function (p) { return Number(p.activ); }).map(function (p) { return opt(p.id, p.nume + (p.tip_vehicul ? ' · ' + (d.familii[p.tip_vehicul] || p.tip_vehicul) : ''), ''); }).join('') + '</select>'
+                + '<button type="button" class="btn btn-sm btn-primary text-nowrap" data-cfg-bulk-plan>Aplică la <span id="rv2BulkCount">' + Object.keys(cfg.vehSel).length + '</span> vehicule</button></div></div>' : '') + '</div>'
+            + '<div class="rv2-cfg-scroll"><table class="rv2-cfg-table"><thead><tr>' + (CAN.configure ? '<th style="width:32px"><input type="checkbox" class="form-check-input" data-cfg-vsel-all aria-label="Bifează toate"></th>' : '') + '<th>Nr. auto</th><th>Model</th><th>Plan</th><th>X de la ultima Y</th><th>Ultima revizie</th><th>Ultima Y</th><th>Excepții</th><th></th></tr></thead><tbody>'
             + d.vehicule.filter(function (v) { return !cfg.vehQ || v.nr.toLowerCase().replace(/\s/g, '').indexOf(cfg.vehQ.toLowerCase().replace(/\s/g, '')) >= 0; }).map(function (v) {
                 var a = v.asignare || {};
-                return '<tr><td><b>' + esc(v.nr) + '</b></td><td>' + esc(v.marca + ' ' + v.model) + '</td><td>' + (v.plan ? esc(v.plan) + ' <span class="rv2-pill is-gray">' + (v.match === 'vehicul' ? 'explicit' : 'automat') + '</span>' : '<span class="text-warning">niciun plan</span>') + '</td><td>' + (a.x_de_la_ultima_y !== undefined ? a.x_de_la_ultima_y : '—') + '</td><td class="small">' + (a.referinta_data ? date(a.referinta_data) + (a.referinta_km ? ' · ' + num(a.referinta_km) + ' km' : '') : '—') + '</td><td class="small">' + (a.ultima_y_km ? num(a.ultima_y_km) + ' km' : '—') + '</td><td>' + (v.exceptii.length || '—') + '</td><td><button type="button" class="btn btn-sm btn-outline-primary" data-cfg-edit="veh" data-id="' + v.id + '">' + (CAN.configure ? 'Editează' : 'Vezi') + '</button></td></tr>';
+                return '<tr>' + (CAN.configure ? '<td><input type="checkbox" class="form-check-input" data-cfg-vsel="' + v.id + '"' + (cfg.vehSel[v.id] ? ' checked' : '') + ' aria-label="Bifează ' + esc(v.nr) + '"></td>' : '') + '<td><b>' + esc(v.nr) + '</b></td><td>' + esc(v.marca + ' ' + v.model) + '</td><td>' + (v.plan ? esc(v.plan) + ' <span class="rv2-pill is-gray">' + (v.match === 'vehicul' ? 'explicit' : 'automat') + '</span>' : '<span class="text-warning">niciun plan</span>') + '</td><td>' + (a.x_de_la_ultima_y !== undefined ? a.x_de_la_ultima_y : '—') + '</td><td class="small">' + (a.referinta_data ? date(a.referinta_data) + (a.referinta_km ? ' · ' + num(a.referinta_km) + ' km' : '') : '—') + '</td><td class="small">' + (a.ultima_y_km ? num(a.ultima_y_km) + ' km' : '—') + '</td><td>' + (v.exceptii.length || '—') + '</td><td><button type="button" class="btn btn-sm btn-outline-primary" data-cfg-edit="veh" data-id="' + v.id + '">' + (CAN.configure ? 'Editează' : 'Vezi') + '</button></td></tr>';
             }).join('') + '</tbody></table></div>';
+    }
+    function planPart(plan, oid) {
+        var r = plan ? (plan.reguli || []).filter(function (x) { return Number(x.operatie_id) === Number(oid); })[0] : null;
+        return r && r.piesa_id ? r.piesa_id : null;
     }
     function cfgVehicleForm(id) {
         var d = cfg.data;
@@ -1426,13 +1821,14 @@
             + '<div class="col-md-3"><label class="form-label">Km la ultima Y</label><input class="form-control form-control-sm" data-va="ultima_y_km" value="' + esc(a.ultima_y_km || '') + '"' + ro() + '></div>'
             + '<div class="col-md-3"><label class="form-label" title="Doar pentru politica „grilă”; gol = km la referință">Originea grilei X (km)</label><input class="form-control form-control-sm" data-va="origine_grila_km" value="' + esc(a.origine_grila_km || '') + '"' + ro() + '></div>'
             + '<div class="col-md-3"><label class="form-label">Motiv / observații</label><input class="form-control form-control-sm" data-va="motiv" maxlength="500" value=""' + ro() + '></div></div>'
-            + (opsIds.length ? '<div class="fw-semibold small mb-1">Excepții pe operațiuni (gol = moștenește planul)</div><div class="rv2-cfg-scroll"><table class="rv2-cfg-table"><thead><tr><th>Operațiune</th><th>Aplicabilă</th><th>Km</th><th>Ore</th><th>Luni</th><th>Cantitate</th><th>Motiv</th></tr></thead><tbody>'
+            + (opsIds.length ? '<div class="fw-semibold small mb-1">Excepții pe operațiuni (gol = moștenește planul)</div><div class="rv2-cfg-scroll"><table class="rv2-cfg-table"><thead><tr><th>Operațiune</th><th>Aplicabilă</th><th>Km</th><th>Ore</th><th>Luni</th><th>Cantitate</th><th>Piesă (Stoc Piese)</th><th>Motiv</th></tr></thead><tbody>'
                 + opsIds.map(function (oid) {
                     var e = ex[oid] || {};
                     var act = e.activ === null || e.activ === undefined ? '' : String(Number(e.activ));
-                    return '<tr data-ex="' + oid + '"' + ((cfg.focusOp && Number(cfg.focusOp) === Number(oid)) ? ' style="background:#fff7e8"' : '') + '><td>' + esc(opName(oid)) + '</td><td><select class="form-select" data-e="activ"' + ro() + '>' + opt('', 'din plan', act) + opt('1', 'da', act) + opt('0', 'nu se aplică', act) + '</select></td>'
+                    return '<tr data-ex="' + oid + '"' + ((cfg.focusOp && Number(cfg.focusOp) === Number(oid)) ? ' style="background:#fff7e8"' : '') + '><td>' + cfgOpIcon(oid) + ' ' + esc(opName(oid)) + '</td><td><select class="form-select" data-e="activ"' + ro() + '>' + opt('', 'din plan', act) + opt('1', 'da', act) + opt('0', 'nu se aplică', act) + '</select></td>'
                         + '<td><input class="form-control" data-e="interval_km" value="' + esc(e.interval_km || '') + '"' + ro() + '></td><td><input class="form-control" data-e="interval_ore" value="' + esc(e.interval_ore || '') + '"' + ro() + '></td><td><input class="form-control" data-e="interval_luni" value="' + esc(e.interval_luni || '') + '"' + ro() + '></td>'
-                        + '<td><input class="form-control" data-e="cantitate" value="' + esc(e.cantitate || '') + '"' + ro() + '></td><td><input class="form-control" data-e="motiv" value="' + esc(e.motiv || '') + '"' + ro() + '></td></tr>';
+                        + '<td><input class="form-control" data-e="cantitate" value="' + esc(e.cantitate || '') + '"' + ro() + '></td>'
+                        + '<td>' + partSelect('data-e="piesa_id"', e.piesa_id, planPart(plan, oid) ? 'din plan: ' + partName(planPart(plan, oid)) : 'din plan (nelegată)') + '</td><td><input class="form-control" data-e="motiv" value="' + esc(e.motiv || '') + '"' + ro() + '></td></tr>';
                 }).join('') + '</tbody></table></div>' : '<div class="small text-muted">Alege sau creează un plan ca să poți defini excepții pe operațiuni.</div>')
             + (CAN.configure ? '<div class="d-flex justify-content-end gap-2 mt-3"><button type="button" class="btn btn-sm btn-outline-secondary" data-cfg-back>Renunță</button><button type="button" class="btn btn-sm btn-primary" data-cfg-save-veh="' + v.id + '">Salvează</button></div>' : '');
     }
@@ -1505,6 +1901,38 @@
         if (setType) { state.type = setType.getAttribute('data-set-type'); $('rv2FType').value = state.type; state.page = 1; refresh(); return; }
         var setComp = t.closest('[data-set-comp]');
         if (setComp) { state.comp = setComp.getAttribute('data-set-comp'); $('rv2FComp').value = state.comp; state.page = 1; refresh(); return; }
+        var dueSevBtn = t.closest('[data-due-sev]');
+        if (dueSevBtn && !dueSevBtn.disabled) { state.due.sev = dueSevBtn.getAttribute('data-due-sev'); state.kpi.due = true; state.page = 1; refresh(); return; }
+        var dueType = t.closest('[data-due-type]');
+        if (dueType) { state.due.type = dueType.getAttribute('data-due-type'); state.page = 1; refresh(); return; }
+        var dueComp = t.closest('[data-due-comp]');
+        if (dueComp) {
+            state.due.comp = dueComp.getAttribute('data-due-comp');
+            state.page = 1;
+            if (state.due.comp) {
+                // operatiunile componentei apar in randurile expandate ale vehiculelor afectate (prima pagina)
+                visibleList().filter(function (v) { return dueInScope(v); }).slice(0, 3).forEach(function (v) { state.expanded[v.id] = true; });
+            }
+            refresh();
+            return;
+        }
+        if (t.closest('[data-due-all]')) { state.due.allComps = !state.due.allComps; renderKpis(); return; }
+        if (t.closest('[data-due-collapse]')) { state.kpiOpen = ''; renderKpis(); return; }
+        var dueVeh = t.closest('[data-due-veh]');
+        if (dueVeh) { focusVehicle(dueVeh.getAttribute('data-due-veh')); renderKpis(); return; }
+        if (t.closest('[data-due-list]')) { var tbl = root.querySelector('.rv2-main'); if (tbl) { tbl.scrollIntoView({ behavior: reduced ? 'auto' : 'smooth', block: 'start' }); } return; }
+        var dueAct = t.closest('[data-due-act]');
+        if (dueAct) {
+            var dids = (dueAct.getAttribute('data-ids') || '').split(',').filter(Boolean);
+            var da = dueAct.getAttribute('data-due-act');
+            if (da === 'schedule') { scheduleIds(dids); }
+            else if (da === 'export') { exportVisible(); }
+            else if (da === 'necesar') { openNecesar(dids); }
+            else if (da === 'clear') { state.due = { sev: '', type: '', comp: '', allComps: false }; state.page = 1; refresh(); }
+            return;
+        }
+        var necBtn = t.closest('[data-necesar]');
+        if (necBtn) { openNecesar([necBtn.getAttribute('data-necesar')]); return; }
         var chip = t.closest('[data-chip]');
         if (chip) { var c = $('rv2Chips')._chips[Number(chip.getAttribute('data-chip'))]; if (c) { c.clear(); state.page = 1; refresh(); } return; }
         if (t.closest('[data-reset]')) { resetFilters(); return; }
@@ -1602,6 +2030,32 @@
         var cfgOpen = t.closest('[data-cfg]');
         if (cfgOpen) { cfg.edit = null; openConfig(cfgOpen.getAttribute('data-cfg')); return; }
         if (t.closest('[data-open-history]')) { openHistory({}); return; }
+        if (t.closest('#rv2NecModal')) {
+            var no = t.closest('[data-nec-open]');
+            if (no) { openNecesarDetail(no.getAttribute('data-nec-open')); return; }
+            if (t.closest('[data-nec-back]')) { nec.detail = null; loadNecesar(); return; }
+            if (t.closest('#rv2NecCreate')) { createNecesar(); return; }
+            if (t.closest('#rv2NecSave')) { saveNecesarDetail(); return; }
+            if (t.closest('[data-act="execute"]')) { modal('rv2NecModal').hide(); handleAct(t); return; }
+        }
+        var vsel = t.closest('[data-cfg-vsel]');
+        if (vsel) { var vk = vsel.getAttribute('data-cfg-vsel'); if (vsel.checked) { cfg.vehSel[vk] = true; } else { delete cfg.vehSel[vk]; } bulkCount(); return; }
+        if (t.closest('[data-cfg-vsel-all]')) {
+            var on = t.checked;
+            $('rv2CfgBody').querySelectorAll('[data-cfg-vsel]').forEach(function (c) { c.checked = on; if (on) { cfg.vehSel[c.getAttribute('data-cfg-vsel')] = true; } else { delete cfg.vehSel[c.getAttribute('data-cfg-vsel')]; } });
+            bulkCount();
+            return;
+        }
+        var bp = t.closest('[data-cfg-bulk-plan]');
+        if (bp) {
+            var bids = Object.keys(cfg.vehSel);
+            if (!bids.length) { toast('Bifează vehiculele cărora li se aplică planul.', 'err'); return; }
+            var planSel = $('rv2BulkPlan');
+            if (!window.confirm('Aplici „' + planSel.selectedOptions[0].textContent + '” la ' + bids.length + ' vehicule? Referințele, istoricul și excepțiile fiecărui vehicul rămân neschimbate.')) { return; }
+            bp.disabled = true;
+            cfgSave('plan_vehicule', { vehicle_ids: bids, plan_id: planSel.value }).then(function () { cfg.vehSel = {}; renderConfig(); }).catch(function () { get('v2_config').then(function (c) { cfg.data = c; renderConfig(); }); }).then(function () { bp.disabled = false; });
+            return;
+        }
         var execAll = t.closest('[data-exec-all]');
         if (execAll) { $('rv2ExecBody').querySelectorAll('tr[data-item] [data-f="status"]:not(:disabled)').forEach(function (s) { if (s.value === 'pending' || s.value === 'in_progress') { s.value = 'completed'; } }); execSummary(); return; }
         // configurare
@@ -1675,6 +2129,18 @@
     });
     document.addEventListener('change', function (ev) {
         var t = ev.target;
+        if (t.id === 'rv2OCat') {
+            var cc = catById(t.value);
+            $('rv2OKey').innerHTML = compOptions(t.value, '');
+            $('rv2OIcon').innerHTML = '<i class="bi ' + esc(cc ? cc.icon : 'bi-tools') + '"></i>';
+            return;
+        }
+        if (t.id === 'rv2OKey' && t.value) {
+            var name = $('rv2CfgBody').querySelector('[data-o="componenta"]');
+            var comp = (catById($('rv2OCat').value) || { components: [] }).components.filter(function (k) { return k.key === t.value; })[0];
+            if (name && comp && !name.value.trim()) { name.value = comp.name; }
+            return;
+        }
         if (t.closest && t.closest('#rv2ExecBody')) {
             if (t.id === 'rv2EFile' && t.files.length && exec.form && exec.form.id) {
                 var fd = new FormData();

@@ -2929,6 +2929,30 @@ body {
     border-top: 1px solid #eef2f7;
 }
 
+/* Cautare live in liste (assets/js/module-live-search.js) */
+.module-live-search-field {
+    position: relative;
+}
+.module-live-search-field .form-control {
+    padding-right: 2.25rem;
+}
+.module-live-search-spinner {
+    position: absolute;
+    top: 50%;
+    right: .75rem;
+    margin-top: -.5rem;
+    color: #94a3b8;
+    pointer-events: none;
+}
+.module-live-results > .card-body,
+.module-live-results > .card-footer {
+    transition: opacity .15s ease;
+}
+.module-live-results.is-loading > .card-body,
+.module-live-results.is-loading > .card-footer {
+    opacity: .6;
+}
+
 .module-list-table-wrap-vehicule {
     overflow-x: auto;
     overflow-y: hidden;

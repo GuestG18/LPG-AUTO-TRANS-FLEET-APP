@@ -1,0 +1,876 @@
+/*
+ * Tablou de bord configurabil: grila de 12 coloane, bara fiecărui card, meniuri plutitoare,
+ * panoul „Configurare panou” și cardul „Activitate vs. cheltuieli”.
+ * Cardurile reutilizate își păstrează stilurile din modulele lor; aici doar le așezăm.
+ */
+
+/* ------------------------------------------------------------------ antet + bara de unelte */
+.dash-heading {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+}
+
+.dash-toolbar {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.dash-toolbar-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 42px;
+    padding: 8px 16px;
+    border: 1px solid #cfd8e6;
+    border-radius: 10px;
+    background: #fff;
+    color: #0b2149;
+    font-weight: 700;
+    font-size: 14px;
+    box-shadow: 0 2px 6px rgba(15, 23, 42, 0.05);
+    transition: border-color .15s ease, box-shadow .15s ease, background .15s ease;
+}
+
+.dash-toolbar-btn:hover { border-color: #93b4e8; }
+.dash-toolbar-btn:focus-visible { outline: 3px solid rgba(13, 110, 253, .35); outline-offset: 2px; }
+
+.dash-toolbar-btn.is-primary {
+    border-color: #0d6efd;
+    background: #0d6efd;
+    color: #fff;
+    box-shadow: 0 8px 18px rgba(13, 110, 253, 0.22);
+}
+
+.dash-toolbar-btn.is-primary:hover { background: #0b5ed7; }
+
+/* ------------------------------------------------------------------ grila */
+.dashboard-main-grid.dash-grid {
+    grid-template-columns: repeat(12, minmax(0, 1fr));
+    align-items: stretch;
+}
+
+.dash-widget {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    grid-column: span 12;
+}
+
+@media (min-width: 1200px) {
+    .dash-size-s { grid-column: span 4; }
+    .dash-size-m { grid-column: span 6; }
+    .dash-size-l { grid-column: span 8; }
+    .dash-size-xl { grid-column: span 12; }
+}
+
+@media (min-width: 768px) and (max-width: 1199.98px) {
+    .dash-size-s, .dash-size-m { grid-column: span 6; }
+    .dash-size-l, .dash-size-xl { grid-column: span 12; }
+}
+
+.dash-widget-body {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.dash-widget-body > .dashboard-metric-card,
+.dash-widget-body > .dins-stack,
+.dash-widget-body > .dispatcher-live {
+    flex: 1 1 auto;
+}
+
+/* bara de deasupra cardului: modulul-sursă, semantica timpului, meniul ⋯ */
+.dash-widget-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 30px;
+    margin: 0 2px 6px;
+    color: #52678b;
+    font-size: 12.5px;
+    font-weight: 600;
+}
+
+.dash-widget-module {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.dash-widget-meta {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    flex-wrap: wrap;
+}
+
+.dash-widget-time,
+.dash-widget-ignored,
+.dash-time-chip,
+.dash-hidden-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: #eef3fb;
+    color: #36507d;
+    font-size: 11.5px;
+    font-weight: 700;
+    font-style: normal;
+    white-space: nowrap;
+}
+
+.dash-widget-time.is-live,
+.dash-widget-time.is-mixed,
+.dash-time-chip.is-live,
+.dash-time-chip.is-mixed { background: #e7f8ee; color: #137a3f; }
+
+.dash-widget-time.is-current,
+.dash-time-chip.is-current { background: #f2effe; color: #5b3cc4; }
+
+.dash-widget-ignored { background: #fff4e5; color: #9a5200; }
+
+.dash-hidden-chip { background: #f1f3f6; color: #667085; }
+
+.dash-live-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #16a34a;
+    box-shadow: 0 0 0 0 rgba(22, 163, 74, .5);
+    animation: dash-live-pulse 1.8s infinite;
+}
+
+@keyframes dash-live-pulse {
+    0% { box-shadow: 0 0 0 0 rgba(22, 163, 74, .45); }
+    70% { box-shadow: 0 0 0 7px rgba(22, 163, 74, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(22, 163, 74, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .dash-live-dot { animation: none; }
+}
+
+.dash-widget-menu-btn {
+    display: inline-grid;
+    place-items: center;
+    flex: 0 0 auto;
+    width: 32px;
+    height: 30px;
+    margin-left: auto;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    background: transparent;
+    color: #36507d;
+}
+
+.dash-widget-menu-btn:hover,
+.dash-widget-menu-btn[aria-expanded="true"] { border-color: #cfd8e6; background: #fff; }
+.dash-widget-menu-btn:focus-visible { outline: 3px solid rgba(13, 110, 253, .35); outline-offset: 1px; }
+
+.dash-widget-skeleton,
+.dash-widget-error {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    flex: 1 1 auto;
+    min-height: 160px;
+    padding: 18px;
+    border: 1px dashed #cfd8e6;
+    border-radius: 16px;
+    background: #f8fafd;
+    color: #52678b;
+    font-weight: 600;
+    text-align: center;
+    flex-wrap: wrap;
+}
+
+.dash-widget-error { border-color: #fecaca; background: #fff7f7; color: #b42318; }
+
+.dash-empty-layout {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 16px;
+    padding: 22px;
+    border: 1px dashed #b9c7dd;
+    border-radius: 16px;
+    background: #f8fafd;
+    color: #36507d;
+}
+
+.dash-empty-layout i { font-size: 28px; }
+.dash-empty-layout p { margin: 0; }
+
+/* ------------------------------------------------------------------ carduri reutilizate */
+/* Carduri-sursă (Intervenții, Documente) în rama comună a dashboard-ului. */
+.dash-source-card {
+    --dashboard-accent: #1c64f2;
+    --dashboard-card-border: #d5dce6;
+    --dashboard-card-bg: #ffffff;
+    --dashboard-card-shape: rgba(28, 100, 242, 0.05);
+    --dashboard-card-glow: rgba(28, 100, 242, 0.04);
+    min-height: 0;
+    gap: 14px;
+}
+
+.dash-source-card .dashboard-card-header { margin-bottom: 0; }
+
+/* Intervenții: grila de 5 coloane a paginii devine fluidă după lățimea cardului. */
+.dash-widget .iv2-kpis {
+    grid-template-columns: repeat(auto-fill, minmax(128px, 1fr));
+    gap: 10px;
+    margin-bottom: 0;
+}
+
+.dash-widget .iv2-kpi { gap: 12px; padding: 12px 14px; }
+
+/* Cardurile-sursă au înălțimea conținutului (nu se întind după vecinul mai înalt din rând). */
+.dash-widget-body > .dash-source-card { flex: 0 0 auto; }
+
+.dash-widget a.iv2-kpi { text-decoration: none; }
+
+/* Documente: rândul Bootstrap din pagina Documente, fără marginea de jos. */
+.dash-widget .document-alert-card .display-6 { font-size: 2rem; }
+.dash-source-card > .row { margin-bottom: 0 !important; }
+.dash-source-card > .card { margin-bottom: 0 !important; }
+
+/* Dispecer: cardurile din dreapta formularului, așezate în lățimea cardului. */
+.dash-widget .dins-stack { min-height: 318px; }
+.dash-widget .dins-splitter { display: none; }
+
+/* GPS live: banda din Dispecer păstrează aspectul; doar fără marginea ei de pagină. */
+.dash-widget .dispatcher-live { margin: 0; }
+
+/* ------------------------------------------------------------------ Activitate vs. cheltuieli */
+.dashboard-card-activity-split {
+    --dashboard-accent: #0f766e;
+    --dashboard-card-border: #99d6cf;
+    --dashboard-card-bg: linear-gradient(145deg, #f4fffd 0%, #e6f7f4 100%);
+    --dashboard-card-shape: rgba(15, 118, 110, 0.10);
+    --dashboard-card-glow: rgba(15, 118, 110, 0.08);
+    gap: 12px;
+}
+
+.das-caption,
+.das-empty {
+    margin: 0;
+    color: #3d5a73;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.das-empty { font-weight: 500; line-height: 1.5; }
+
+.das-groups {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+    gap: 10px;
+}
+
+.das-group {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 10px 12px;
+    border: 1px solid rgba(15, 118, 110, 0.18);
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.75);
+}
+
+.das-group-value { font-size: 26px; font-weight: 800; line-height: 1.1; color: #0f766e; }
+.das-group-label { font-size: 12.5px; font-weight: 700; color: #29435c; }
+.das-group-label small { font-weight: 600; color: #5d7389; }
+.das-group.is-trips .das-group-value { color: #1d4ed8; }
+.das-group.is-cost .das-group-value { color: #c2410c; }
+.das-group.is-idle .das-group-value { color: #64748b; }
+
+.das-block h3 {
+    margin: 4px 0 8px;
+    color: #0b2149;
+    font-size: 14px;
+    font-weight: 800;
+}
+
+.das-block h3 small { color: #5d7389; font-weight: 600; font-size: 12px; }
+
+.das-kpis {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+    gap: 8px;
+    margin: 0;
+}
+
+.das-kpis > div {
+    padding: 8px 10px;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.7);
+}
+
+.das-kpis dt { color: #5d7389; font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .02em; }
+.das-kpis dd { margin: 2px 0 0; color: #0b2149; font-size: 16px; font-weight: 800; overflow-wrap: anywhere; }
+
+.das-costs {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.das-costs li {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 6px 0;
+    border-bottom: 1px dashed rgba(15, 118, 110, 0.22);
+    font-size: 13.5px;
+    color: #29435c;
+}
+
+.das-costs li strong { white-space: nowrap; color: #0b2149; }
+.das-costs li.is-total { border-bottom: 0; font-weight: 800; }
+
+.das-details { margin-top: 8px; }
+
+.das-details summary {
+    color: #0f766e;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.das-vehicle-list {
+    max-height: 220px;
+    margin: 8px 0 0;
+    padding: 0;
+    overflow-y: auto;
+    list-style: none;
+}
+
+.das-vehicle-list li {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: 10px;
+    align-items: center;
+    padding: 5px 2px;
+    border-bottom: 1px solid rgba(15, 118, 110, 0.12);
+    font-size: 13px;
+}
+
+.das-plate { font-weight: 700; color: #0b2149; overflow-wrap: anywhere; }
+.das-cat { color: #5d7389; font-size: 12px; }
+
+@media (max-width: 575.98px) {
+    .das-vehicle-list li { grid-template-columns: minmax(0, 1fr) auto; }
+    .das-cat { display: none; }
+}
+
+/* ------------------------------------------------------------------ meniuri plutitoare */
+.dash-menu {
+    position: fixed;
+    z-index: 1080;
+    min-width: 220px;
+    max-width: min(340px, calc(100vw - 16px));
+    overflow-y: auto;
+    padding: 6px;
+    border: 1px solid #d5dce6;
+    border-radius: 12px;
+    background: #fff;
+    box-shadow: 0 18px 40px rgba(15, 23, 42, 0.18);
+}
+
+.dash-menu button,
+.dash-menu .dash-menu-link {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 8px 10px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: #172033;
+    font-size: 14px;
+    text-align: left;
+    text-decoration: none;
+}
+
+.dash-menu button span { display: flex; flex-direction: column; min-width: 0; }
+.dash-menu button small { color: #667085; font-size: 12px; }
+.dash-menu button:hover:not([disabled]),
+.dash-menu button:focus-visible,
+.dash-menu .dash-menu-link:hover,
+.dash-menu .dash-menu-link:focus-visible { background: #eef3fb; outline: none; }
+.dash-menu button[disabled] { color: #a0a9b8; }
+.dash-menu button.is-danger { color: #b42318; }
+.dash-menu hr { margin: 4px 0; opacity: .12; }
+
+.dash-menu-label {
+    padding: 6px 10px 2px;
+    color: #667085;
+    font-size: 11.5px;
+    font-weight: 800;
+    letter-spacing: .03em;
+    text-transform: uppercase;
+}
+
+.dash-menu-empty { padding: 10px; color: #52678b; font-size: 13.5px; }
+
+/* ------------------------------------------------------------------ panou de configurare */
+.dash-drawer.offcanvas-end { width: min(480px, 100vw); }
+
+.dash-drawer .offcanvas-title { margin: 0; font-size: 20px; font-weight: 800; color: #061735; }
+.dash-drawer-sub { margin: 4px 0 0; color: #52678b; font-size: 13.5px; }
+
+.dash-drawer .offcanvas-body {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+}
+
+.dash-drawer-search {
+    position: relative;
+    display: block;
+}
+
+.dash-drawer-search i {
+    position: absolute;
+    top: 50%;
+    left: 12px;
+    color: #667085;
+    transform: translateY(-50%);
+}
+
+.dash-drawer-search input {
+    width: 100%;
+    min-height: 42px;
+    padding: 8px 12px 8px 36px;
+    border: 1px solid #cfd8e6;
+    border-radius: 10px;
+}
+
+.dash-drawer-search input:focus { border-color: #0d6efd; outline: 3px solid rgba(13, 110, 253, .2); }
+
+.dash-drawer-section h3 {
+    margin: 0 0 8px;
+    color: #0b2149;
+    font-size: 14.5px;
+    font-weight: 800;
+}
+
+.dash-drawer-section h3 small { color: #667085; font-weight: 600; font-size: 12px; }
+
+.dash-order-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.dash-order-item {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border: 1px solid #d5dce6;
+    border-radius: 10px;
+    background: #fff;
+}
+
+.dash-order-item.is-dragging { opacity: .5; }
+.dash-order-item.is-drop-before { box-shadow: 0 -3px 0 #0d6efd; }
+.dash-order-item.is-drop-after { box-shadow: 0 3px 0 #0d6efd; }
+
+.dash-order-grip { color: #98a2b3; cursor: grab; }
+.dash-order-text { display: flex; flex-direction: column; min-width: 0; }
+.dash-order-text strong { color: #172033; font-size: 13.5px; overflow-wrap: anywhere; }
+.dash-order-text small { color: #667085; font-size: 12px; }
+.dash-order-item .form-select { width: auto; min-width: 96px; }
+.dash-order-size { color: #667085; font-size: 12.5px; }
+.dash-order-moves { display: inline-flex; gap: 2px; }
+
+.dash-icon-btn {
+    display: inline-grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    background: transparent;
+    color: #36507d;
+}
+
+.dash-icon-btn:hover:not([disabled]) { border-color: #cfd8e6; background: #f5f8fc; }
+.dash-icon-btn[disabled] { color: #c3cad6; }
+
+.dash-catalog-group {
+    margin: 0 0 12px;
+    padding: 0;
+    border: 0;
+}
+
+.dash-catalog-group legend {
+    margin-bottom: 6px;
+    color: #667085;
+    font-size: 11.5px;
+    font-weight: 800;
+    letter-spacing: .03em;
+    text-transform: uppercase;
+}
+
+.dash-catalog-item {
+    display: grid;
+    grid-template-columns: auto auto minmax(0, 1fr);
+    gap: 10px;
+    align-items: start;
+    margin-bottom: 6px;
+    padding: 10px 12px;
+    border: 1px solid #e3e8ef;
+    border-radius: 10px;
+    background: #fff;
+    cursor: pointer;
+}
+
+.dash-catalog-item.is-on { border-color: #93b4e8; background: #f5f9ff; }
+.dash-catalog-item .form-check-input { margin-top: 3px; }
+.dash-catalog-item > i { color: #36507d; font-size: 18px; }
+.dash-catalog-item span { display: flex; flex-direction: column; gap: 3px; min-width: 0; align-items: flex-start; }
+.dash-catalog-item strong { color: #172033; font-size: 13.5px; }
+.dash-catalog-item small { color: #667085; font-size: 12px; line-height: 1.35; }
+
+.dash-drawer-empty { margin: 0; color: #667085; font-size: 13px; }
+
+.dash-drawer-footer {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    padding: 12px 16px;
+    border-top: 1px solid #e3e8ef;
+    background: #fff;
+}
+
+.dash-drawer-status { flex: 1 1 auto; min-width: 0; color: #52678b; font-size: 13px; }
+
+@media (max-width: 575.98px) {
+    .dash-toolbar { width: 100%; }
+    .dash-toolbar > *, .dash-toolbar .dash-toolbar-btn { flex: 1 1 0; justify-content: center; }
+    .dash-order-item { grid-template-columns: auto minmax(0, 1fr) auto; }
+    .dash-order-item .form-select { grid-column: 2 / -1; justify-self: start; }
+    .dash-order-moves { grid-column: 3; grid-row: 1; }
+    .dash-drawer-status { flex-basis: 100%; order: -1; }
+}
+
+/* ------------------------------------------------------------------ confirmare */
+.dash-toast {
+    position: fixed;
+    right: 20px;
+    bottom: 20px;
+    z-index: 1090;
+    padding: 10px 16px;
+    border-radius: 10px;
+    background: #0b2149;
+    color: #fff;
+    font-weight: 600;
+    box-shadow: 0 12px 28px rgba(15, 23, 42, 0.25);
+    transition: opacity .4s ease, transform .4s ease;
+}
+
+.dash-toast.is-error { background: #b42318; }
+.dash-toast.is-out { opacity: 0; transform: translateY(8px); }
+
+/* Reîncărcarea unui card lazy după schimbarea filtrelor: conținutul vechi rămâne, estompat. */
+.dash-widget-body.is-refreshing { opacity: .55; transition: opacity .2s ease; pointer-events: none; }
+
+/* Activitate șoferi: grila de carduri din Istoric activități șofer, fluidă după lățimea cardului. */
+.dash-driver-activity .driver-history-kpi-grid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 236px), 1fr)); }
+
+/* Cât timp panoul de configurare e deschis, tab-ul global de aprobări nu-i acoperă butoanele. */
+body:has(.dash-drawer.show) .fleet-approval-drawer-toggle,
+body:has(.dash-drawer.showing) .fleet-approval-drawer-toggle { visibility: hidden; }
+
+/* Activitate șoferi: selectorul de șofer din antetul cardului. */
+.dash-driver-activity .dashboard-card-header { flex-wrap: wrap; }
+.dash-driver-tools { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
+.dash-driver-picker { width: auto; min-width: 220px; max-width: 100%; border-radius: 10px; font-weight: 600; }
+@media (max-width: 575.98px) {
+    .dash-driver-tools { width: 100%; }
+    .dash-driver-picker { flex: 1 1 100%; min-width: 0; }
+}
+
+/* Stoc piese: grila de 4 coloane a paginii devine fluidă după lățimea cardului. */
+.dash-widget .maintenance-stock-kpis { grid-template-columns: repeat(auto-fill, minmax(min(100%, 230px), 1fr)); margin-bottom: 0; }
+
+/* Cheltuieli / eToll / Consumabile: fără marginile de pagină ale componentelor reutilizate. */
+.dash-widget .chx-kpi-band { margin-bottom: 0 !important; }
+.dash-widget .etoll-kpis { margin-bottom: 0; }
+.dash-cons-module { gap: 0; }
+@media (max-width: 767.98px) {
+    .dash-widget .chx-kpi-band { grid-template-columns: 1fr; }
+    .dash-widget .chx-kpi + .chx-kpi { border-left: 0; border-top: 1px solid #eef2f8; }
+}
+
+/* Centralizator: cardurile KPI ale paginii (zonele ei de grilă nu există aici) într-o grilă fluidă. */
+.dash-cf { font-size: 13px; }
+.dash-cf-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 290px), 1fr)); gap: 12px; }
+.dash-cf-grid .cf-kpi { grid-area: auto !important; }
+.dash-cf-ref {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    margin-top: 12px; padding: 10px 14px;
+    border: 1px solid var(--cf-border, #d9e2ef); border-radius: 10px;
+    background: #fffaf6; color: var(--cf-text, #071a44); text-decoration: none; font-weight: 600;
+}
+.dash-cf-ref:hover { border-color: #f3b58f; }
+.dash-cf-ref strong { font-size: 15px; }
+.dash-cf-ref > .bi-chevron-right { margin-left: auto; }
+.dash-time-chip.is-billing_month, .dash-widget-time.is-billing_month { background: #fff1e6; color: #9a4a00; }
+
+/* ------------------------------------------------------------------ mod „Pagini” (carusel) */
+.dash-view-toggle {
+    display: inline-flex;
+    padding: 3px;
+    border: 1px solid #cfd8e6;
+    border-radius: 10px;
+    background: #fff;
+}
+.dash-view-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 34px;
+    padding: 4px 12px;
+    border: 0;
+    border-radius: 7px;
+    background: transparent;
+    color: #36507d;
+    font-weight: 700;
+    font-size: 13.5px;
+}
+.dash-view-btn.is-active { background: #e8f0fe; color: #0b4fd6; }
+.dash-view-btn:focus-visible { outline: 3px solid rgba(13, 110, 253, .35); outline-offset: 1px; }
+
+.dash-stage { position: relative; }
+.dash-widget.is-offpage { display: none !important; }
+
+.dash-arrows { display: none; }
+.dash-stage.is-carousel .dash-arrows {
+    display: block;
+    position: sticky;
+    top: calc(50vh - 23px);
+    z-index: 5;
+    height: 0;
+    margin-inline: -56px; /* acoperă și culoarul lateral: săgețile stau lângă carduri, nu peste ele */
+}
+.dash-arrow {
+    position: absolute;
+    top: 0;
+    z-index: 5;
+    display: grid;
+    place-items: center;
+    width: 46px;
+    height: 46px;
+    border: 1px solid #cfd8e6;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, .96);
+    color: #0b2149;
+    font-size: 20px;
+    box-shadow: 0 10px 24px rgba(15, 23, 42, .16);
+    transition: background .15s ease, box-shadow .15s ease, opacity .15s ease;
+}
+/* Săgețile stau în culoarul propriu al caruselului (containerul paginii nu are padding lateral
+   și ascunde depășirea pe orizontală: o săgeată în afara lui ar derula pagina la focus). */
+.dash-stage.is-carousel { padding-inline: 56px; }
+.dash-arrow.is-prev { left: 2px; }
+.dash-arrow.is-next { right: 2px; }
+.dash-arrow:hover:not(:disabled) { background: #0d6efd; color: #fff; border-color: #0d6efd; }
+.dash-arrow:focus-visible { outline: 3px solid rgba(13, 110, 253, .45); outline-offset: 2px; }
+.dash-arrow:disabled { opacity: .35; cursor: default; }
+.dash-arrow[hidden] { display: none; }
+
+.dash-pager {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: -4px 0 12px;
+    padding: 6px 8px;
+    border: 1px solid #e3e8ef;
+    border-radius: 12px;
+    background: #fff;
+    min-width: 0;
+}
+.dash-pager[hidden] { display: none; }
+.dash-pager-step {
+    display: grid;
+    place-items: center;
+    flex: 0 0 auto;
+    width: 32px;
+    height: 32px;
+    border: 1px solid #cfd8e6;
+    border-radius: 8px;
+    background: #fff;
+    color: #0b2149;
+}
+.dash-pager-step:hover:not(:disabled) { border-color: #0d6efd; color: #0d6efd; }
+.dash-pager-step:disabled { opacity: .35; }
+.dash-pager-dots { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.dash-dot {
+    width: 10px;
+    height: 10px;
+    padding: 0;
+    border: 0;
+    border-radius: 999px;
+    background: #c7d3e6;
+    transition: width .2s ease, background .2s ease;
+}
+.dash-dot.is-active { width: 26px; background: #0d6efd; }
+.dash-dot:focus-visible { outline: 3px solid rgba(13, 110, 253, .45); outline-offset: 2px; }
+.dash-pager-label {
+    min-width: 0;
+    overflow: hidden;
+    color: #52678b;
+    font-size: 13px;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+.dash-pager-label strong { color: #0b2149; margin-right: 6px; }
+
+@keyframes dash-slide-next { from { opacity: 0; transform: translateX(36px); } to { opacity: 1; transform: none; } }
+@keyframes dash-slide-prev { from { opacity: 0; transform: translateX(-36px); } to { opacity: 1; transform: none; } }
+.dash-grid.is-slide-next > .dash-widget:not(.is-offpage) { animation: dash-slide-next .28s ease both; }
+.dash-grid.is-slide-prev > .dash-widget:not(.is-offpage) { animation: dash-slide-prev .28s ease both; }
+@media (prefers-reduced-motion: reduce) {
+    .dash-grid.is-slide-next > .dash-widget, .dash-grid.is-slide-prev > .dash-widget { animation: none; }
+}
+
+@media (max-width: 767.98px) {
+    .dash-stage.is-carousel { padding-inline: 0; }
+    .dash-stage.is-carousel .dash-arrows { top: calc(50vh - 19px); margin-inline: 0; }
+    .dash-arrow { width: 38px; height: 38px; font-size: 17px; }
+    .dash-arrow.is-prev { left: 4px; }
+    .dash-arrow.is-next { right: 4px; }
+    .dash-view-btn span { display: none; }
+    .dash-pager-label span { display: none; }
+}
+@media (max-width: 575.98px) {
+    .dash-toolbar .dash-view-toggle { flex: 0 0 auto; }
+}
+
+/* Animația de pagină nu are voie să lărgească pagina (altfel containerul se derulează pe orizontală). */
+.dash-stage.is-carousel .dash-grid { overflow-x: clip; overflow-clip-margin: 30px; }
+
+/* ------------------------------------------------------------------ filtre compacte (mod „Pagini”) */
+/* Aceleași câmpuri și același comportament (se aplică la schimbare), așezate pe un singur rând. */
+.is-compact-filters .dash-heading { align-items: center; margin-bottom: 10px; }
+.is-compact-filters .dashboard-page-heading h1 { font-size: 24px; }
+.is-compact-filters .dashboard-page-heading p { display: none; }
+.is-compact-filters .dash-toolbar-btn { min-height: 36px; padding: 5px 12px; }
+.is-compact-filters .dash-view-btn { min-height: 30px; }
+
+.is-compact-filters .dashboard-filter-panel { padding: 8px 12px; border-radius: 12px; margin-bottom: 10px; }
+.is-compact-filters .dashboard-filter-form {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 16px;
+}
+.is-compact-filters .dashboard-filter-group {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+.is-compact-filters .dashboard-filter-label { margin: 0; font-size: 12.5px; white-space: nowrap; }
+.is-compact-filters .dashboard-date-input { flex: 0 0 200px; width: 200px; min-width: 0; position: relative; }
+.is-compact-filters .dashboard-date-input .form-control { width: 100%; min-width: 0; }
+.is-compact-filters .dashboard-select,
+.is-compact-filters .dashboard-date-input .form-control { min-height: 36px; height: 36px; padding-top: 4px; padding-bottom: 4px; font-size: 14px; }
+.is-compact-filters select.dashboard-select { width: 220px; }
+.is-compact-filters .dashboard-period-options { display: flex; flex-wrap: nowrap; gap: 4px; }
+.is-compact-filters .dashboard-period-option {
+    min-height: 34px;
+    padding: 4px 12px;
+    font-size: 13px;
+    white-space: nowrap;
+}
+.is-compact-filters .dashboard-apply-btn,
+.is-compact-filters .dashboard-filter-chips-row { display: none; }
+.is-compact-filters .dashboard-filter-actions { display: flex; max-width: none; margin-left: auto; }
+.is-compact-filters .dashboard-reset-btn { min-height: 36px; padding: 4px 12px; font-size: 13px; }
+.is-compact-filters .dash-pager { margin: 0 0 10px; padding: 4px 6px; }
+
+@media (max-width: 767.98px) {
+    /* Pe telefon etichetele revin deasupra câmpurilor (un rând nu încape), cu dimensiunile compacte. */
+    .is-compact-filters .dashboard-filter-group { flex: 1 1 100%; flex-direction: column; align-items: stretch; gap: 4px; }
+    .is-compact-filters .dashboard-date-input { flex: 1 1 auto; width: 100%; }
+    .is-compact-filters select.dashboard-select { width: 100%; }
+    .is-compact-filters .dashboard-period-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .is-compact-filters .dashboard-period-option { padding: 4px 4px; font-size: 12.5px; white-space: normal; text-align: center; line-height: 1.15; }
+    .is-compact-filters .dashboard-filter-actions { margin-left: 0; }
+}
+
+/* ------------------------------------------------------------------ filtrele din card (ex. Activitate șoferi) */
+.dash-card-filters {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr));
+    gap: 8px 12px;
+    align-items: end;
+    padding: 10px 12px;
+    border: 1px solid #e3e8ef;
+    border-radius: 12px;
+    background: #f8fafd;
+}
+.dash-card-filters.is-busy { opacity: .6; pointer-events: none; }
+.dash-cf-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; margin: 0; }
+.dash-cf-field.is-wide { grid-column: span 2; }
+.dash-cf-label { color: #0b2a6b; font-size: 12px; font-weight: 800; }
+.dash-card-filters .form-select,
+.dash-card-filters .form-control { min-height: 34px; font-size: 13.5px; }
+.dash-cf-period { display: flex; align-items: center; gap: 6px; }
+.dash-cf-period .form-select { flex: 1 1 auto; min-width: 0; }
+.dash-cf-period .btn { flex: 0 0 auto; }
+.dash-cf-custom { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+.dash-cf-custom[hidden] { display: none; }
+.dash-cf-reset { align-self: end; justify-self: start; white-space: nowrap; }
+
+.dash-dd-toggle { text-align: left; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.dash-dd-menu {
+    z-index: 1085;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px;
+    border: 1px solid #d5dce6;
+    border-radius: 12px;
+    background: #fff;
+    box-shadow: 0 18px 40px rgba(15, 23, 42, .18);
+}
+.dash-dd-menu[hidden] { display: none; }
+.dash-dd-quick { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12.5px; }
+.dash-dd-quick button { padding: 0; border: 0; background: none; color: #0d6efd; font-weight: 700; }
+.dash-dd-quick span { color: #667085; }
+.dash-dd-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+.dash-dd-option { display: flex; align-items: center; gap: 8px; padding: 5px 4px; border-radius: 6px; font-size: 13.5px; cursor: pointer; }
+.dash-dd-option:hover { background: #f1f5fb; }
+.dash-dd-option[hidden] { display: none; }
+.dash-dd-empty { margin: 4px; color: #667085; font-size: 13px; }
+.dash-dd-foot { display: flex; justify-content: flex-end; }
+
+@media (max-width: 767.98px) {
+    .dash-cf-field.is-wide { grid-column: auto; }
+}
+.dash-dd-option.is-dropped small { margin-left: auto; color: #b45309; font-size: 11.5px; }

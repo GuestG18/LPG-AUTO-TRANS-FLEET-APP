@@ -2,6 +2,7 @@
 declare(strict_types=1);
 
 require_once dirname(__DIR__) . '/services/ReviziiV2Service.php';
+require_once dirname(__DIR__) . '/services/ReviziiV2NecesarService.php';
 
 /**
  * Revizii & Mentenanță (V2): pagina unica ?page=revizii si actiunile JSON v2_*.
@@ -72,6 +73,14 @@ final class ReviziiV2Controller
             'v2_import_preview' => fn () => $this->post('configure', fn (array $in): array => $this->service->importPreview((string) ($in['text'] ?? ''))),
             'v2_import_apply' => fn () => $this->post('configure', fn (array $in): array => $this->service->importApply((string) ($in['text'] ?? ''),
                 (int) ($in['sablon_x_id'] ?? 0), ($in['sablon_y_id'] ?? '') !== '' ? (int) $in['sablon_y_id'] : null, $this->userId())),
+            // Necesar piese & consumabile (cerere de pregatire / aprovizionare legata de lucrare).
+            'v2_necesar_preview' => fn () => $this->json(fn (): array => $this->necesarPreview((string) ($_GET['ids'] ?? ''))),
+            'v2_necesar' => fn () => $this->json(fn (): array => $this->necesar()->detail((int) ($_GET['id'] ?? 0))),
+            'v2_necesar_create' => fn () => $this->post('edit', fn (array $in): array => $this->necesarCreate($in)),
+            'v2_necesar_update' => fn () => $this->post('edit', function (array $in): array {
+                $this->necesar()->update((int) ($in['id'] ?? 0), $in, $this->userId());
+                return ['necesar' => $this->necesar()->detail((int) ($in['id'] ?? 0))];
+            }),
             'v2_doc_upload' => fn () => $this->upload(),
             'v2_doc' => fn () => $this->document(),
         ];
@@ -81,6 +90,45 @@ final class ReviziiV2Controller
         $map[$action]();
 
         return true;
+    }
+
+    private function necesar(): ReviziiV2NecesarService
+    {
+        return new ReviziiV2NecesarService($this->db, $this->service);
+    }
+
+    /** @return array<string, mixed> necesarul calculat pentru mai multe vehicule (erorile raman pe vehicul) */
+    private function necesarPreview(string $ids): array
+    {
+        $result = [];
+        $summary = $this->necesar()->summaryByVehicle();
+        foreach (array_slice(array_unique(array_filter(array_map('intval', explode(',', $ids)))), 0, 60) as $vehicleId) {
+            try {
+                $row = $this->necesar()->preview($vehicleId, $summary[$vehicleId]['id'] ?? null);
+                $row['cerere'] = $summary[$vehicleId] ?? null;
+                $result[] = $row;
+            } catch (InvalidArgumentException $exception) {
+                $result[] = ['vehicle_id' => $vehicleId, 'eroare' => $exception->getMessage(), 'cerere' => $summary[$vehicleId] ?? null];
+            }
+        }
+
+        return ['vehicule' => $result, 'statusuri' => ReviziiV2NecesarService::STATUSES, 'statusuri_linii' => ReviziiV2NecesarService::LINE_STATUSES];
+    }
+
+    /** @param array<string, mixed> $in */
+    private function necesarCreate(array $in): array
+    {
+        $created = [];
+        $errors = [];
+        foreach (array_unique(array_filter(array_map('intval', (array) ($in['vehicle_ids'] ?? [])))) as $vehicleId) {
+            try {
+                $created[] = $this->necesar()->create(['vehicle_id' => $vehicleId] + $in, $this->userId());
+            } catch (InvalidArgumentException $exception) {
+                $errors[] = ['vehicle_id' => $vehicleId, 'mesaj' => $exception->getMessage()];
+            }
+        }
+
+        return ['create' => $created, 'erori' => $errors];
     }
 
     /** @return array<string, mixed> */
@@ -96,6 +144,13 @@ final class ReviziiV2Controller
             'vehicul' => (function () use ($data, $userId): int {
                 $this->service->saveVehicleConfig($data, $userId);
                 return (int) ($data['vehicle_id'] ?? 0);
+            })(),
+            'plan_vehicule' => (function () use ($data, $userId): int {
+                $result = $this->service->assignPlanBulk((array) ($data['vehicle_ids'] ?? []), ($data['plan_id'] ?? '') !== '' ? (int) $data['plan_id'] : null, $userId);
+                if ($result['respinse'] !== []) {
+                    throw new InvalidArgumentException('Aplicat la ' . $result['aplicate'] . ' vehicule; respinse: ' . implode('; ', $result['respinse']));
+                }
+                return $result['aplicate'];
             })(),
             'setari' => (function () use ($data, $userId): int {
                 $this->service->saveSettingsConfig($data, $userId);

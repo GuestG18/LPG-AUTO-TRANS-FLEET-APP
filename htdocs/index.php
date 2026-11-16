@@ -393,12 +393,14 @@ require_once __DIR__ . '/services/PayrollCalculatorService.php';
 require_once __DIR__ . '/services/PayrollMonthService.php';
 require_once __DIR__ . '/services/OperationalCostService.php';
 require_once __DIR__ . '/services/DashboardOperationalCostService.php';
+require_once __DIR__ . '/services/DashboardWidgetRegistry.php';
 require_once __DIR__ . '/services/OcrSpaceService.php';
 require_once __DIR__ . '/services/OcrInvoiceHeuristics.php';
 require_once __DIR__ . '/services/OcrPartsLineExtractor.php';
 require_once __DIR__ . '/services/InvoiceOcrService.php';
 require_once __DIR__ . '/services/PartsInvoiceOcrService.php';
 require_once __DIR__ . '/services/AutoComponentCatalogService.php';
+require_once __DIR__ . '/services/CatalogIconResolver.php';
 require_once __DIR__ . '/services/ConsumabileStockService.php';
 require_once __DIR__ . '/services/VehicleFluidService.php';
 require_once __DIR__ . '/services/AdBlueService.php';
@@ -489,6 +491,9 @@ if (in_array($page, ['vehicule_usoare', 'vehicule_grele'], true) && isset($modul
         $vehicleBaseConditions = [];
     }
 
+    // Pastrat pentru legatura „Vezi și în cealaltă listă” (ModuleController::buildOtherVehicleListHint).
+    $modules['vehicule']['vehicle_base_conditions'] = $vehicleBaseConditions;
+
     $lightVehicleTypes = ['autovehicul' => 'Autoturism', 'autoutilitara' => 'Autoutilitara'];
     $heavyVehicleTypes = [
         'cap_tractor' => 'Cap tractor',
@@ -537,6 +542,17 @@ try {
         redirect(url('index.php?page=dashboard'));
     }
 
+    // Lista generala ?page=vehicule nu mai exista: ramane doar ruta pentru fisa / editare / actiuni pe vehicul.
+    // Lista (si exportul ei) trimite in Vehicule ușoare sau Vehicule grele, cu aceleasi filtre.
+    if (is_logged_in() && $page === 'vehicule' && in_array($action, ['index', 'export'], true)) {
+        $vehicleListQuery = $_GET;
+        unset($vehicleListQuery['page'], $vehicleListQuery['live']);
+        if ($action === 'index') {
+            unset($vehicleListQuery['action']);
+        }
+        redirect(build_query_url(['page' => resolve_vehicle_list_page($db, $vehicleListQuery)] + $vehicleListQuery));
+    }
+
     // Garda centrala de acces per-pagina si per-endpoint (drepturi de acces).
     // Adminul trece mereu; utilizatorii neconfigurati pastreaza accesul implicit al rolului.
     // Endpoint-urile protejate sunt declarate de fiecare modul in permissions/modules/.
@@ -579,7 +595,7 @@ try {
 
         case 'dashboard':
             require_auth();
-            (new DashboardController($db))->index();
+            (new DashboardController($db))->handle((string) $action);
             break;
 
         case 'inactive_approvals':

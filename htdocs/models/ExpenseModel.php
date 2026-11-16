@@ -1107,6 +1107,17 @@ class ExpenseModel extends BaseModel
             $countByCategory[(string) $row['categorie']] = (int) $row['cnt'];
             $count += (int) $row['cnt'];
         }
+        // Numărătorile de mai sus (taburile Toate / Administrative / Operaționale) rămân fără filtrul
+        // de categorie; SUMELE însă respectă categoria aleasă: cu „Administrativă” documentele
+        // operaționale nu intră în total / în banda KPI (și invers), la fel ca lista și carburantul.
+        $activeCategory = (string) ($filters['categorie'] ?? '');
+        if (isset($byCategory[$activeCategory])) {
+            foreach (array_keys($byCategory) as $category) {
+                if ($category !== $activeCategory) {
+                    $byCategory[$category] = 0.0;
+                }
+            }
+        }
         $grandTotal = $byCategory['administrativa'] + $byCategory['operationala'];
 
         // Distributia pe alocare: strict sumele alocate (o cheltuiala multi-vehicul

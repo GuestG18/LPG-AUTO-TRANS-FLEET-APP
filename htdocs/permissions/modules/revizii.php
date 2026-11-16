@@ -64,5 +64,9 @@ return [
         'v2_config_save'        => 'configure',
         'v2_import_preview'     => 'configure',
         'v2_import_apply'       => 'configure',
+        'v2_necesar_preview'    => 'view',
+        'v2_necesar'            => 'view',
+        'v2_necesar_create'     => 'edit',
+        'v2_necesar_update'     => 'edit',
     ],
 ];

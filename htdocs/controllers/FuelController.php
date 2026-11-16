@@ -104,6 +104,36 @@ class FuelController
         }
     }
 
+    /**
+     * Cardurile KPI pentru Tabloul de bord: aceleasi apeluri ca pagina (asocieri automate la zi,
+     * getDashboardData + getKpiSparklines) pe filtrele cardului / panoului, in cheile paginii
+     * (perioada, vehicule dupa numar, carburant, marca, categorie, tip transport).
+     *
+     * @return array{fuelData: array, filters: array, vehicleGroups: array}
+     */
+    public function dashboardKpiData(array $input): array
+    {
+        // Aceleași chei și aceeași validare ca formularul paginii (collectFilters).
+        $filters = $this->collectFilters(array_intersect_key($input, array_flip(['date_from', 'date_to', 'vehicles', 'fuel_type', 'brand', 'vehicle_class', 'transport_group'])));
+        $this->model->ensureSchema();
+        $this->model->refreshAutomaticAssociationsIfStale((string) $filters['date_from'], (string) $filters['date_to']);
+        $this->model->enableRequestReadCache();
+        $data = $this->model->getDashboardData($filters);
+        try {
+            $data['kpi_sparklines'] = $this->model->getKpiSparklines($filters);
+        } catch (Throwable $exception) {
+            error_log('[FuelController][dashboard_sparklines] ' . $exception->getMessage());
+            $data['kpi_sparklines'] = [];
+        }
+        $candidates = array_filter((array) ($data['vehicle_options'] ?? []), static fn (array $v): bool => trim((string) ($v['vehicle_registration'] ?? '')) !== '');
+
+        return [
+            'fuelData' => $data,
+            'filters' => $filters,
+            'vehicleGroups' => build_vehicle_capacity_groups($candidates, ['id_key' => 'vehicle_registration', 'fallback_label' => 'Fără categorie']),
+        ];
+    }
+
     private function indexAction(): void
     {
         $filters = $this->collectFilters($_GET);

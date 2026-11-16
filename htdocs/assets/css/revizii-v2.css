@@ -365,3 +365,198 @@
 .rv2-km-hint { font-size: 0.72rem; color: var(--rv2-muted); margin-top: 0.3rem; min-height: 1em; }
 .rv2-modal .dispatcher-datetime-field { position: relative; }
 @media (max-width: 767.98px) { .rv2-km-grid { grid-template-columns: 1fr; } }
+
+/* ======================================================================
+   Macheta „Revizii scadente — Detalii” (2026-11-16): panou analitic, iconite
+   din Catalog componente, panou vehicul (plan / secventa / necesar), necesar piese.
+   ====================================================================== */
+.rv2-cicon { color: var(--rv2-blue); font-size: 1rem; width: 1.15em; text-align: center; display: inline-block; }
+.rv2-comp .rv2-cicon, .rv2-oplist .rv2-cicon { color: #3b5bdb; }
+.rv2-neg { color: #d92d2d; font-weight: 700; }
+
+/* KPI — aproape de macheta */
+.rv2-kpi { min-height: 104px; padding: 0.85rem 1rem 0.8rem; border-radius: 12px; }
+.rv2-kpi-icon { width: 44px; height: 44px; flex-basis: 44px; border-radius: 11px; font-size: 1.3rem; }
+.rv2-kpi-label { font-size: 0.7rem; letter-spacing: 0.01em; }
+.rv2-kpi-value { font-size: 1.6rem; font-weight: 800; }
+.rv2-kpi-desc { text-align: center; margin-top: 0.3rem; color: #475569; }
+.rv2-kpi-alert { text-align: center; font-size: 0.74rem; color: var(--rv2-red); font-weight: 500; margin-top: 0.05rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rv2-kpi[data-tone="red"].is-active { border: 2px solid var(--rv2-red); box-shadow: 0 6px 18px rgba(224, 49, 49, 0.12); background: linear-gradient(135deg, #fff 0%, #fff1f1 100%); }
+.rv2-kpi.is-active::after { content: "\F633"; font-size: 1.05rem; top: 7px; right: 10px; }
+.rv2-kpi[data-tone="red"] .rv2-kpi-icon { background: transparent; border: 0; font-size: 1.75rem; }
+
+/* Panoul analitic (expandat sub KPI) */
+.rv2-kpi-expand-inner.is-due { background: #fff7f7; border: 1.5px solid #f3b4b4; border-radius: 12px; padding: 1rem 1.25rem 1.05rem; box-shadow: 0 2px 10px rgba(224, 49, 49, 0.05); }
+.rv2-due-head { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 0.95rem; }
+.rv2-due-title { display: flex; align-items: center; gap: 0.7rem; min-width: 0; flex-wrap: wrap; }
+.rv2-due-title > i { color: var(--rv2-red); font-size: 1.45rem; line-height: 1; }
+.rv2-due-title h3 { font-size: 1.12rem; font-weight: 700; margin: 0; letter-spacing: -0.01em; }
+.rv2-due-sum { font-size: 0.82rem; color: #475569; margin-left: 0.5rem; }
+.rv2-due-sum span { margin: 0 0.2rem; color: var(--rv2-soft); }
+.rv2-due-tabs { display: flex; align-items: center; gap: 0.55rem; flex-wrap: wrap; }
+.rv2-due-tab { height: 32px; padding: 0 0.95rem; border-radius: 7px; border: 1px solid var(--rv2-border-strong); background: #fff; color: #1e293b; font-size: 0.8rem; font-weight: 500; transition: background 180ms ease, border-color 180ms ease, color 180ms ease; white-space: nowrap; }
+.rv2-due-tab:hover { border-color: var(--rv2-blue); color: var(--rv2-blue); }
+.rv2-due-tab.is-on { background: var(--rv2-blue); border-color: var(--rv2-blue); color: #fff; box-shadow: 0 2px 6px rgba(31, 111, 235, 0.25); }
+.rv2-due-collapse { width: 32px; height: 32px; border: 0; background: transparent; color: #1e293b; border-radius: 7px; font-size: 1rem; }
+.rv2-due-collapse:hover { background: rgba(15, 27, 51, 0.06); }
+.rv2-due-grid { display: grid; grid-template-columns: minmax(250px, 1.12fr) minmax(200px, 0.95fr) minmax(220px, 1.05fr) minmax(300px, 1.45fr); gap: 0; }
+.rv2-due-col { padding: 0 1.4rem; border-left: 1px solid #f1d5d5; min-width: 0; }
+.rv2-due-col:first-child { padding-left: 0; border-left: 0; }
+.rv2-due-col:last-child { padding-right: 0; }
+.rv2-due-h { font-size: 0.86rem; font-weight: 700; color: #0f1b33; margin-bottom: 0.7rem; }
+.rv2-due-h .bi { color: var(--rv2-soft); font-size: 0.78rem; margin-left: 0.25rem; cursor: help; }
+.rv2-due-sev { display: flex; align-items: center; gap: 1.4rem; }
+.rv2-donut { position: relative; width: 122px; height: 122px; flex: 0 0 122px; border: 0; padding: 0; background: transparent; border-radius: 50%; }
+.rv2-donut svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+.rv2-donut circle { fill: none; stroke-width: 15; }
+.rv2-donut-bg { stroke: #f1e3e3; }
+.rv2-donut-seg { cursor: pointer; transition: opacity 200ms ease, stroke-width 200ms ease; }
+.rv2-donut-seg:hover { stroke-width: 17; }
+.rv2-donut-seg.is-dim { opacity: 0.28; }
+.rv2-donut-c { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; pointer-events: none; }
+.rv2-donut-c b { font-size: 1.6rem; font-weight: 800; line-height: 1; color: #0f1b33; }
+.rv2-donut-c small { font-size: 0.78rem; color: #334155; margin-top: 0.15rem; }
+.rv2-due-legend { display: flex; flex-direction: column; gap: 0.15rem; flex: 1; min-width: 0; }
+.rv2-due-leg { display: flex; align-items: center; gap: 0.6rem; border: 0; background: transparent; padding: 0.42rem 0.4rem; border-radius: 7px; font-size: 0.84rem; color: #1e293b; text-align: left; transition: background 160ms ease, opacity 160ms ease; }
+.rv2-due-leg:hover { background: rgba(224, 49, 49, 0.06); }
+.rv2-due-leg.is-on { background: rgba(224, 49, 49, 0.09); font-weight: 600; }
+.rv2-due-leg.is-dim { opacity: 0.5; }
+.rv2-due-leg .dot { width: 10px; height: 10px; border-radius: 50%; flex: 0 0 10px; }
+.rv2-due-leg .lbl { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rv2-due-leg b { font-size: 0.9rem; min-width: 1.6rem; text-align: right; font-variant-numeric: tabular-nums; }
+.rv2-due-type { display: flex; align-items: center; gap: 0.75rem; width: 100%; border: 0; background: transparent; padding: 0.4rem 0.35rem; margin-bottom: 0.45rem; border-radius: 8px; text-align: left; transition: background 160ms ease, opacity 160ms ease; }
+.rv2-due-type:hover { background: rgba(124, 58, 237, 0.06); }
+.rv2-due-type.is-on { background: rgba(124, 58, 237, 0.1); }
+.rv2-due-type.is-dim { opacity: 0.5; }
+.rv2-due-tic { width: 34px; height: 34px; flex: 0 0 34px; border-radius: 9px; background: #efe8ff; color: var(--rv2-purple); display: inline-flex; align-items: center; justify-content: center; font-size: 1.05rem; }
+.rv2-due-tbody { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.45rem; }
+.rv2-due-trow { display: flex; justify-content: space-between; font-size: 0.86rem; color: #1e293b; }
+.rv2-due-trow b { font-variant-numeric: tabular-nums; }
+.rv2-due-tbar { height: 6px; border-radius: 4px; background: #e9e3f7; overflow: hidden; display: block; }
+.rv2-due-tbar > span { display: block; height: 100%; border-radius: 4px; background: linear-gradient(90deg, #7c3aed, #9b6cf3); transition: width 400ms var(--rv2-ease); }
+.rv2-due-comps { display: flex; flex-direction: column; }
+.rv2-due-comp { display: flex; align-items: center; gap: 0.65rem; border: 0; border-bottom: 1px solid #f1dede; background: transparent; padding: 0.42rem 0.25rem; text-align: left; font-size: 0.85rem; transition: background 160ms ease; border-radius: 0; }
+.rv2-due-comp:last-child { border-bottom: 0; }
+.rv2-due-comp:hover { background: rgba(31, 111, 235, 0.05); }
+.rv2-due-comp.is-on { background: var(--rv2-blue-50); box-shadow: inset 3px 0 0 var(--rv2-blue); }
+.rv2-due-cic { width: 22px; display: inline-flex; justify-content: center; }
+.rv2-due-cic .rv2-cicon { color: #3b5bdb; font-size: 1.02rem; }
+.rv2-due-cname { flex: 1; min-width: 0; color: var(--rv2-blue); text-decoration: underline; text-underline-offset: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rv2-due-comp small { color: var(--rv2-muted); font-size: 0.72rem; white-space: nowrap; }
+.rv2-due-comp b { min-width: 1.4rem; text-align: right; font-variant-numeric: tabular-nums; color: #0f1b33; }
+.rv2-due-more { border: 0; background: transparent; color: var(--rv2-blue); font-size: 0.76rem; padding: 0.3rem 0.25rem 0; }
+.rv2-due-veh { display: grid; grid-template-columns: 20px minmax(76px, auto) minmax(0, 1fr) auto; align-items: center; gap: 0.65rem; width: 100%; border: 0; background: transparent; padding: 0.36rem 0.3rem; border-radius: 7px; text-align: left; font-size: 0.85rem; transition: background 160ms ease; }
+.rv2-due-veh:hover, .rv2-due-veh.is-on { background: rgba(31, 111, 235, 0.06); }
+.rv2-due-veh i { color: var(--rv2-blue); font-size: 1rem; }
+.rv2-due-veh b { white-space: nowrap; }
+.rv2-due-veh .mdl { color: #334155; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rv2-due-pill { justify-self: end; padding: 0.2rem 0.6rem; border-radius: 6px; font-size: 0.8rem; font-weight: 700; white-space: nowrap; }
+.rv2-due-pill.is-depasit { background: #fde3e3; color: #d92d2d; }
+.rv2-due-pill.is-scadent { background: #fff0d6; color: #c26a00; }
+.rv2-due-pill.is-soon7 { background: #eef1f6; color: #475569; }
+.rv2-due-all { border: 0; background: transparent; color: var(--rv2-blue); font-weight: 600; font-size: 0.84rem; padding: 0.45rem 0.3rem 0; text-decoration: underline; text-underline-offset: 2px; }
+.rv2-due-actions { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-top: 1rem; }
+.rv2-due-actions .rv2-btn-primary { height: 36px; padding: 0 1.4rem; }
+.rv2-due-btn { height: 36px; padding: 0 1.15rem; border: 1px solid var(--rv2-border-strong); border-radius: 9px; background: #fff; color: #1e293b; font-weight: 500; font-size: 0.85rem; display: inline-flex; align-items: center; gap: 0.5rem; transition: border-color 160ms ease, color 160ms ease, background 160ms ease; }
+.rv2-due-btn:hover:not(:disabled) { border-color: var(--rv2-blue); color: var(--rv2-blue); }
+.rv2-due-btn:disabled, .rv2-due-actions .rv2-btn-primary:disabled { opacity: 0.5; }
+
+/* Tabel: tip revizie, status */
+.rv2-tbadge { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 24px; border-radius: 6px; background: #e8eaf7; border: 1px solid #d9dcf0; color: #1e293b; font-weight: 700; font-size: 0.8rem; }
+.rv2-tbadge.is-y { background: #efe8ff; border-color: #ddd0fb; color: var(--rv2-purple); }
+.rv2-status { border-radius: 7px; min-width: 74px; padding: 0.3rem 0.65rem; }
+.rv2-status-scadent { --c: #f08c00; }
+.rv2-status-depasit { --c: #d92d2d; }
+.rv2-tone-scadent { --c: #f08c00; }
+
+/* Panou vehicul: plan, secventa, km, necesar */
+.rv2-planbox { margin-top: 0.85rem; }
+.rv2-planbox-title { font-weight: 700; font-size: 0.86rem; margin-bottom: 0.45rem; }
+.rv2-planbox-title span { font-weight: 500; color: var(--rv2-muted); }
+.rv2-planbox-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.55rem; }
+.rv2-plan-card { display: flex; align-items: center; gap: 0.6rem; border: 1px solid var(--rv2-border); border-radius: 9px; padding: 0.5rem 0.65rem; background: #fbfaff; }
+.rv2-plan-card .ic { width: 30px; height: 30px; flex: 0 0 30px; border-radius: 8px; background: #efe8ff; color: var(--rv2-purple); display: inline-flex; align-items: center; justify-content: center; }
+.rv2-plan-card b { display: block; font-size: 0.82rem; }
+.rv2-plan-card small { display: block; font-size: 0.72rem; color: #475569; }
+.rv2-psec-seq { border-top: 0; margin-top: 0.7rem; padding-top: 0; }
+.rv2-psec-seq .rv2-psec-title { justify-content: flex-start; gap: 0.35rem; flex-wrap: wrap; }
+.rv2-psec-seq .rv2-psec-title .rv2-pill { margin-left: auto; }
+/* Modalele / drawerele stau in afara #rv2: aceleasi variabile de culoare. */
+.rv2-modal, .rv2-drawer { --rv2-border: #e2e8f2; --rv2-border-strong: #d3dbe8; --rv2-text: #0f1b33; --rv2-muted: #64748b; --rv2-soft: #94a3b8; --rv2-blue: #1f6feb; --rv2-blue-600: #1a5fd0; --rv2-blue-50: #eef4ff; --rv2-green: #16a34a; --rv2-amber: #f59e0b; --rv2-amber-50: #fff7e8; --rv2-red: #e03131; --rv2-purple: #7c3aed; --rv2-purple-50: #f5f0ff; --rv2-gray-50: #f1f4f8; --rv2-ease: cubic-bezier(0.2, 0.7, 0.2, 1); }
+.rv2-modal .rv2-cicon, .rv2-drawer .rv2-cicon { color: #3b5bdb; }
+.rv2-step-km { font-size: 0.64rem; color: #334155; font-weight: 500; white-space: nowrap; }
+.rv2-kmrow { display: grid; grid-template-columns: 1fr 1fr 1.1fr; gap: 0.6rem; margin-top: 0.85rem; padding-top: 0.75rem; border-top: 1px solid var(--rv2-border); }
+.rv2-kmrow > div + div { border-left: 1px solid var(--rv2-border); padding-left: 0.6rem; }
+.rv2-kmrow span { display: block; font-size: 0.74rem; color: #475569; }
+.rv2-kmrow b { display: block; font-size: 1rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.rv2-kmrow .rv2-prog-bar { margin-top: 0.3rem; height: 5px; }
+.rv2-nec-box { display: flex; align-items: center; gap: 0.7rem; margin-top: 0.85rem; border: 1px solid #cdebd8; background: #f2fbf5; border-radius: 10px; padding: 0.6rem 0.75rem; }
+.rv2-nec-ic { width: 32px; height: 32px; flex: 0 0 32px; border-radius: 8px; background: #dcf3e4; color: #16a34a; display: inline-flex; align-items: center; justify-content: center; }
+.rv2-nec-txt { flex: 1; min-width: 0; }
+.rv2-nec-txt b { display: block; font-size: 0.82rem; }
+.rv2-nec-txt small { display: block; font-size: 0.74rem; color: #334155; }
+.rv2-nec-bar { height: 5px; border-radius: 4px; background: #d7e9dd; overflow: hidden; margin-top: 0.3rem; max-width: 230px; }
+.rv2-nec-bar > span { display: block; height: 100%; background: #16a34a; border-radius: 4px; transition: width 400ms var(--rv2-ease); }
+.rv2-nec-btn { border: 1px solid var(--rv2-blue); color: var(--rv2-blue); background: #fff; border-radius: 8px; font-size: 0.78rem; font-weight: 600; height: 32px; padding: 0 0.8rem; white-space: nowrap; }
+.rv2-nec-btn:hover:not(:disabled) { background: var(--rv2-blue-50); }
+.rv2-nec-btn:disabled { opacity: 0.5; }
+
+/* Modal necesar */
+.rv2-nec-veh { border: 1px solid var(--rv2-border); border-radius: 12px; padding: 0.75rem 0.85rem; margin-bottom: 0.85rem; }
+.rv2-nec-head { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; flex-wrap: wrap; margin-bottom: 0.5rem; }
+.rv2-nec-sum { display: flex; flex-wrap: wrap; gap: 0.4rem 1.1rem; font-size: 0.8rem; margin-bottom: 0.5rem; }
+.rv2-nec-form { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: flex-end; width: 100%; }
+.rv2-nec-form > div { min-width: 160px; }
+.rv2-nbadge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 6px; font-size: 0.72rem; font-weight: 600; white-space: nowrap; }
+.rv2-nbadge.is-green { background: #e3f6ea; color: #15803d; }
+.rv2-nbadge.is-red { background: #fde3e3; color: #c81e1e; }
+.rv2-nbadge.is-amber { background: #fff0d6; color: #b45309; }
+.rv2-nbadge.is-blue { background: var(--rv2-blue-50); color: var(--rv2-blue); }
+.rv2-nbadge.is-gray { background: var(--rv2-gray-50); color: var(--rv2-muted); }
+.rv2-bulkplan { min-width: 320px; }
+.rv2-bulkplan .form-label { font-size: 0.72rem; }
+
+@media (max-width: 1399.98px) {
+    .rv2-due-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 1.1rem; }
+    .rv2-due-col:nth-child(3) { padding-left: 0; border-left: 0; }
+    .rv2-due-col:nth-child(2) { padding-right: 0; }
+}
+@media (max-width: 767.98px) {
+    .rv2-due-grid { grid-template-columns: minmax(0, 1fr); }
+    .rv2-due-col { padding: 0 !important; border-left: 0 !important; }
+    .rv2-due-tabs { width: 100%; }
+    .rv2-due-tab { flex: 1 1 auto; }
+    .rv2-planbox-grid, .rv2-kmrow { grid-template-columns: 1fr; }
+    .rv2-kmrow > div + div { border-left: 0; padding-left: 0; }
+    .rv2-due-veh { grid-template-columns: 20px auto minmax(0, 1fr); }
+    .rv2-due-pill { grid-column: 2 / -1; justify-self: start; }
+}
+/* compactare (comparatie cu macheta la 1672 × 941) */
+.rv2-kpi { min-height: 0; padding: 0.7rem 0.95rem 0.6rem; }
+.rv2-kpi-desc { margin-top: 0.2rem; }
+.rv2-kpi-bar { margin-top: 0.45rem; }
+.rv2-kpi-expand-inner.is-due { padding: 0.8rem 1.2rem 0.85rem; }
+.rv2-due-head { margin-bottom: 0.7rem; }
+.rv2-due-h { margin-bottom: 0.45rem; }
+.rv2-donut { width: 112px; height: 112px; flex-basis: 112px; }
+.rv2-due-leg { padding: 0.3rem 0.4rem; }
+.rv2-due-type { padding: 0.3rem 0.35rem; margin-bottom: 0.3rem; }
+.rv2-due-comp { padding: 0.3rem 0.25rem; }
+.rv2-due-veh { padding: 0.28rem 0.3rem; }
+.rv2-due-more { padding-top: 0.15rem; }
+.rv2-due-all { padding-top: 0.3rem; }
+.rv2-due-actions { margin-top: 0.7rem; }
+
+@media (prefers-reduced-motion: reduce) {
+    .rv2-donut-seg, .rv2-due-tbar > span, .rv2-nec-bar > span { transition: none !important; }
+}
+
+/* Piesa din Stoc Piese legata de operatiune */
+.rv2-part { display: flex; align-items: center; gap: 0.3rem; font-size: 0.72rem; color: #334155; margin-top: 0.15rem; white-space: normal; }
+.rv2-part i { color: #16a34a; }
+.rv2-exec-part .form-select { min-width: 150px; }
+.rv2-exec-part .rv2-part { font-size: 0.74rem; }
+.rv2-cfg-table .rv2-part-sel { min-width: 220px; max-width: 280px; }
+.rv2-cfg-table select[data-r="logica"] { min-width: 76px; }
+.rv2-cfg-table select[data-r="produs_id"] { min-width: 160px; }
+.rv2-cfg-table input[data-r^="interval_"], .rv2-cfg-table input[data-r="cantitate"] { min-width: 64px; }

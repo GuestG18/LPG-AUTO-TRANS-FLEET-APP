@@ -228,11 +228,15 @@ class ModuleController
 
     private function indexAction(string $moduleKey, array $module): void
     {
-        if ($moduleKey === 'vehicule') {
+        // Cererile cautarii live (assets/js/module-live-search.js) refolosesc aceeasi ruta, dar inlocuiesc
+        // doar tabelul: statusurile s-au sincronizat la incarcarea paginii, iar panourile laterale nu se schimba.
+        $isLiveResultsRequest = ($_GET['live'] ?? '') === '1';
+
+        if ($moduleKey === 'vehicule' && !$isLiveResultsRequest) {
             $this->entityStatusService->syncAllVehicleStatuses();
         }
 
-        if ($moduleKey === 'soferi') {
+        if ($moduleKey === 'soferi' && !$isLiveResultsRequest) {
             $this->entityStatusService->syncAllDriverStatuses();
         }
 
@@ -290,11 +294,15 @@ class ModuleController
             $viewData['urgentDocuments'] = $this->documentModel->getUrgentDocuments($vehicleId, 5);
         }
 
-        if ($moduleKey === 'soferi') {
+        if ($moduleKey === 'soferi' && !$isLiveResultsRequest) {
             $viewData['inactiveDriverOverview'] = $this->buildInactiveDriverOverview();
         }
 
         if ($moduleKey === 'vehicule') {
+            $viewData['otherVehicleList'] = $this->buildOtherVehicleListHint($module, $search, $filters);
+        }
+
+        if ($moduleKey === 'vehicule' && !$isLiveResultsRequest) {
             $vehicleRoutePage = $this->moduleRoutePage($moduleKey, $module);
             if (in_array($vehicleRoutePage, ['vehicule_usoare', 'vehicule_grele'], true)) {
                 $viewData['inactiveVehicleOverview'] = $this->buildInactiveVehicleOverview($vehicleRoutePage);
@@ -337,6 +345,56 @@ class ModuleController
         }
 
         render('module/list.php', $viewData);
+    }
+
+    /**
+     * Vehiculele care corespund cautarii / filtrelor, dar sunt in cealalta lista (usoare <-> grele).
+     * Lista generala ?page=vehicule nu mai exista, deci o selectie mixta (ex. din Dashboard) ar ascunde
+     * altfel o parte din vehicule. Se calculeaza doar cand ceva restrange lista si tipul nu e ales.
+     *
+     * @return array{page:string,label:string,count:int}|null
+     */
+    private function buildOtherVehicleListHint(array $module, string $search, array $filters): ?array
+    {
+        $routePage = $this->moduleRoutePage('vehicule', $module);
+        if (!in_array($routePage, ['vehicule_usoare', 'vehicule_grele'], true) || !isset($module['vehicle_base_conditions'])) {
+            return null;
+        }
+
+        $typeFilter = $filters['tip_vehicul'] ?? '';
+        if ($typeFilter !== '' && $typeFilter !== []) {
+            return null;
+        }
+
+        $hasNarrowing = $search !== '' || array_filter(
+            $filters,
+            static fn($value): bool => $value !== '' && $value !== []
+        ) !== [];
+        if (!$hasNarrowing) {
+            return null;
+        }
+
+        $otherPage = $routePage === 'vehicule_grele' ? 'vehicule_usoare' : 'vehicule_grele';
+        if (function_exists('can_route') && !can_route($otherPage)) {
+            return null;
+        }
+
+        $lightList = "'" . implode("', '", vehicle_light_types()) . "'";
+        $otherModule = $module;
+        $otherModule['base_conditions'] = array_merge((array) $module['vehicle_base_conditions'], [
+            $otherPage === 'vehicule_usoare' ? "t.tip_vehicul IN ($lightList)" : "t.tip_vehicul NOT IN ($lightList)",
+        ]);
+
+        try {
+            $count = (int) ($this->moduleModel->getPaginated($otherModule, $search, $filters, 1, 1)['total_rows'] ?? 0);
+        } catch (Throwable $exception) {
+            error_log('[ModuleController][other-vehicle-list] ' . $exception->getMessage());
+            return null;
+        }
+
+        return $count > 0
+            ? ['page' => $otherPage, 'label' => $otherPage === 'vehicule_usoare' ? 'Vehicule ușoare' : 'Vehicule grele', 'count' => $count]
+            : null;
     }
 
     private function buildInactiveVehicleOverview(string $routePage, int $limit = 8): array
@@ -6847,7 +6905,7 @@ class ModuleController
                 }
                 $clean = [];
                 foreach ($record as $key => $value) {
-                    if (is_int($key) || in_array($key, ['created_at', 'updated_at', 'sidebar_order', 'harta_flota_ascunse', 'dashboard_v2_carduri'], true)) {
+                    if (is_int($key) || in_array($key, ['created_at', 'updated_at', 'sidebar_order', 'harta_flota_ascunse', 'dashboard_v2_carduri', 'dashboard_layout'], true)) {
                         continue;
                     }
                     if (is_scalar($value) || $value === null) {
@@ -6977,6 +7035,14 @@ class ModuleController
             if ($vehicleId > 0 && isset($_GET['vehicle_id'])) {
                 return build_query_url(['page' => 'vehicule', 'action' => 'show', 'id' => $vehicleId]);
             }
+        }
+
+        // Fisa / formularul deschise pe ruta generala ?page=vehicule se intorc in lista vehiculului.
+        if ($moduleKey === 'vehicule' && !in_array($routePage, ['vehicule_usoare', 'vehicule_grele'], true)) {
+            $vehicleType = $formData['tip_vehicul'] ?? $record['tip_vehicul'] ?? $_GET['tip_vehicul'] ?? '';
+            $vehicleType = is_string($vehicleType) ? $vehicleType : '';
+
+            return build_query_url(['page' => vehicle_list_page_for_type($vehicleType)]);
         }
 
         return build_query_url(['page' => $routePage]);

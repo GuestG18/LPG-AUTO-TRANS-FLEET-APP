@@ -606,14 +606,7 @@ $pageSubtitle = match ($section) {
     <?php endif; ?>
 
     <?php if ($section === 'stock' && !$isConsumabileTab): ?>
-        <div class="maintenance-kpi-grid maintenance-stock-kpis">
-            <?php foreach ([
-                ['icon' => 'bi-cash-stack', 'tone' => 'green', 'title' => 'Valoare totală stoc', 'value' => $currency((float) ($stockKpis['valoare_totala'] ?? 0)), 'note' => 'valoare de achiziție'],
-                ['icon' => 'bi-box-seam', 'tone' => 'blue', 'title' => 'Total piese', 'value' => (string) ((int) ($stockKpis['total_piese'] ?? 0)), 'note' => 'repere în catalog'],
-                ['icon' => 'bi-exclamation-triangle', 'tone' => 'orange', 'title' => 'Piese sub stoc minim', 'value' => (string) ((int) ($stockKpis['sub_minim'] ?? 0)), 'note' => 'necesită aprovizionare'],
-                ['icon' => 'bi-hourglass-split', 'tone' => 'purple', 'title' => 'Piese fără mișcare', 'value' => (string) ((int) ($stockKpis['fara_miscare'] ?? 0)), 'note' => 'în ultimele 180 zile'],
-            ] as $kpi): ?><article class="maintenance-kpi-card tone-<?= e($kpi['tone']) ?>"><div class="maintenance-kpi-main"><span class="maintenance-kpi-icon"><i class="bi <?= e($kpi['icon']) ?>"></i></span><div><div class="maintenance-kpi-title"><?= e($kpi['title']) ?></div><div class="maintenance-kpi-value"><?= e($kpi['value']) ?></div><div class="maintenance-kpi-note"><?= e($kpi['note']) ?></div></div></div></article><?php endforeach; ?>
-        </div>
+        <?php require __DIR__ . '/_stock_kpis.php'; ?>
         <form class="maintenance-filter-card maintenance-stock-filter" method="get">
             <input type="hidden" name="page" value="mentenanta"><input type="hidden" name="action" value="stock">
             <div class="maintenance-filter-field maintenance-search-field"><label>Căutare</label><input class="form-control" type="search" name="search" value="<?= e((string) ($filters['search'] ?? '')) ?>" placeholder="Cod, denumire, OEM, locație, furnizor..." autocomplete="off" data-stock-search></div>

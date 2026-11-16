@@ -67,7 +67,11 @@ class DashboardOperationalCostService
             'months' => $months,
             'prorated' => false,
             'light_only' => $category === 'usoare',
+            // Populațiile pentru cardul „Activitate vs. cheltuieli”: aceleași unități ale motorului,
+            // cu cursele (după data începerii, fără cele șterse), km, venitul și costul lor.
+            'units' => [],
         ];
+        $unitStats = [];
 
         $categories = ['fix' => [], 'variabil' => []];
         $elementStatus = [];
@@ -100,6 +104,20 @@ class DashboardOperationalCostService
                     $this->addValue($result, $categories, (string) $info['tip'], (string) $unit['category'], (string) $unit['category_label'],
                         (string) $code, (string) $info['label'], $value, (int) $unit['vehicle_id']);
                 }
+                $unitId = (int) $unit['vehicle_id'];
+                $unitStats[$unitId] ??= [
+                    'vehicle_id' => $unitId,
+                    'label' => (string) $unit['label'],
+                    'semi_label' => $unit['semi_label'] ?? null,
+                    'category_label' => (string) $unit['category_label'],
+                    'vehicle_status' => (string) ($unit['vehicle_status'] ?? ''),
+                    'trips' => 0, 'km' => 0, 'revenue' => 0.0, 'cost' => 0.0,
+                ];
+                $unitStats[$unitId]['trips'] += (int) ($unit['trips'] ?? 0);
+                $unitStats[$unitId]['km'] += (int) ($unit['km'] ?? 0);
+                $unitStats[$unitId]['revenue'] += (float) ($unit['revenue'] ?? 0);
+                $unitStats[$unitId]['cost'] += (float) ($unit['fixed_total'] ?? 0) + (float) ($unit['variable_total'] ?? 0);
+
                 // unitatea se numără în categorie chiar dacă nu are încă nicio valoare
                 foreach (['fix', 'variabil'] as $tip) {
                     $this->ensureCategory($categories, $tip, (string) $unit['category'], (string) $unit['category_label']);
@@ -162,6 +180,7 @@ class DashboardOperationalCostService
         }
 
         $result['total'] = $result['fixed_total'] + $result['variable_total'];
+        $result['units'] = array_values($unitStats);
 
         return $result;
     }

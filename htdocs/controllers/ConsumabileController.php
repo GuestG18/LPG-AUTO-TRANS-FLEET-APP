@@ -26,6 +26,25 @@ final class ConsumabileController
         $this->fluids = new VehicleFluidService($db);
     }
 
+    /**
+     * Cardul „Alerte active” pentru Tabloul de bord: aceleași apeluri ca subtabul Prezentare
+     * (alertele reîmprospătate dacă e cazul, deschise + rezolvate 7 zile, recipientele care expiră).
+     */
+    public function dashboardAlerts(): array
+    {
+        $this->service->ensureSchema();
+        $alerts = new ConsumabileAlertService($this->db);
+        $alerts->ensureSchema();
+        $alerts->refreshIfDue();
+
+        return [
+            'overview' => $this->service->overview(),
+            'alerts' => $alerts->openAlerts(),
+            'alerts_resolved' => $alerts->recentlyResolved(7),
+            'can_operate' => false, // închiderea manuală rămâne în pagina Consumabile (consumabile.js)
+        ];
+    }
+
     /** Datele tabului (doar subtabul deschis se incarca). */
     public function viewData(): array
     {

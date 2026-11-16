@@ -14,13 +14,6 @@ $ivFilters = is_array($boot['filters'] ?? null) ? $boot['filters'] : [];
 $ivCoordinators = is_array($boot['coordinators'] ?? null) ? $boot['coordinators'] : [];
 $ivCan = is_array($boot['can'] ?? null) ? $boot['can'] : [];
 $ivStatusLabels = InterventionWorkflowModel::STATUS_LABELS;
-$ivKpis = [
-    ['status' => 'de_verificat', 'label' => 'De verificat', 'icon' => 'bi-exclamation-circle', 'tone' => 'blue'],
-    ['status' => 'programata', 'label' => 'Programate', 'icon' => 'bi-calendar3', 'tone' => 'indigo'],
-    ['status' => 'in_service', 'label' => 'În service', 'icon' => 'bi-tools', 'tone' => 'purple'],
-    ['status' => 'in_asteptare', 'label' => 'În așteptare', 'icon' => 'bi-pause-circle', 'tone' => 'orange'],
-    ['status' => 'finalizata', 'label' => 'Finalizate', 'icon' => 'bi-check-lg', 'tone' => 'green'],
-];
 $ivKpiValues = is_array($boot['list']['kpis'] ?? null) ? $boot['list']['kpis'] : [];
 $ivVehicles = [];
 foreach ($vehicles as $vehicle) {
@@ -55,19 +48,12 @@ $ivBootJson = [
 ];
 ?>
 <div class="iv2" data-iv2>
-    <div class="iv2-kpis" role="group" aria-label="Sumar intervenții pe status">
-        <?php foreach ($ivKpis as $kpi): ?>
-            <button class="iv2-kpi <?= ($ivFilters['status'] ?? '') === $kpi['status'] ? 'is-active' : '' ?>" type="button"
-                    data-iv2-kpi="<?= e($kpi['status']) ?>" aria-pressed="<?= ($ivFilters['status'] ?? '') === $kpi['status'] ? 'true' : 'false' ?>"
-                    title="Filtrează: <?= e($kpi['label']) ?>">
-                <span class="iv2-kpi-icon tone-<?= e($kpi['tone']) ?>"><i class="bi <?= e($kpi['icon']) ?>" aria-hidden="true"></i></span>
-                <span>
-                    <span class="iv2-kpi-value" data-iv2-kpi-value><?= e((string) (int) ($ivKpiValues[$kpi['status']] ?? 0)) ?></span>
-                    <span class="iv2-kpi-label"><?= e($kpi['label']) ?></span>
-                </span>
-            </button>
-        <?php endforeach; ?>
-    </div>
+    <?php
+    // Cardurile de status (comune cu Tabloul de bord): butoane-filtru aici.
+    $ivActiveStatus = (string) ($ivFilters['status'] ?? '');
+    $ivKpiHref = null;
+    require __DIR__ . '/_interventions_v2_kpis.php';
+    ?>
 
     <form class="iv2-filters" data-iv2-filters autocomplete="off" role="search">
         <div class="iv2-search">

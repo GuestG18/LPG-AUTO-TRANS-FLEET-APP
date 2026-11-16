@@ -1003,7 +1003,7 @@ if ($phaseCompact) {
                             <?php $zoneExtraKmCost = (float) ($zone['cost_extra_km'] ?? 0); ?>
                             <option value="<?= e((string) $zoneId) ?>" <?= (string) ($raceFormData['zona_distributie_id'] ?? '') === (string) $zoneId ? 'selected' : '' ?>>
                                 <?= e((string) ($zone['nume'] ?? '-')) ?>
-                                (tarif zonÃ„Æ’: <?= e(format_number_ro((float) ($zone['tarif_distributie'] ?? 0), 2)) ?> lei<?php if ($zoneExtraKmCost > 0): ?>, extra km: <?= e(format_number_ro($zoneExtraKmCost, 2)) ?> lei/km<?php endif; ?>)
+                                (tarif zonă: <?= e(format_number_ro((float) ($zone['tarif_distributie'] ?? 0), 2)) ?> lei<?php if ($zoneExtraKmCost > 0): ?>, extra km: <?= e(format_number_ro($zoneExtraKmCost, 2)) ?> lei/km<?php endif; ?>)
                             </option>
                         <?php endforeach; ?>
                         <?php if (!$storedZoneInList && (int) $selectedZoneId > 0): ?>
@@ -2588,8 +2588,8 @@ document.addEventListener('DOMContentLoaded', function () {
         <div class="modal-dialog">
             <div class="modal-content">
                 <div class="modal-header">
-                    <h5 class="modal-title" id="kmRevizieAlertEditTitle">AlertÄƒ revizie vehicul</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="ÃŽnchide"></button>
+                    <h5 class="modal-title" id="kmRevizieAlertEditTitle">Alertă revizie vehicul</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Închide"></button>
                 </div>
                 <div class="modal-body">
                     <p class="mb-2">Unul sau mai multe vehicule au ajuns la pragul de revizie:</p>
@@ -2600,7 +2600,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     </ul>
                 </div>
                 <div class="modal-footer">
-                    <button type="button" class="btn btn-primary" data-bs-dismiss="modal">Am Ã®nÈ›eles</button>
+                    <button type="button" class="btn btn-primary" data-bs-dismiss="modal">Am înțeles</button>
                 </div>
             </div>
         </div>

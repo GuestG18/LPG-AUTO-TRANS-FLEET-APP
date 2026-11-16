@@ -1018,6 +1018,74 @@ function format_value_html(mixed $value, array $meta = [], array $row = []): str
     }
 }
 
+/** Tipurile de vehicul afisate in „Vehicule ușoare”; restul sunt in „Vehicule grele”. */
+function vehicle_light_types(): array
+{
+    return ['autovehicul', 'autoutilitara'];
+}
+
+/** Lista (vehicule_usoare / vehicule_grele) in care apare un vehicul de tipul dat. */
+function vehicle_list_page_for_type(?string $vehicleType): string
+{
+    return in_array(strtolower(trim((string) $vehicleType)), vehicle_light_types(), true)
+        ? 'vehicule_usoare'
+        : 'vehicule_grele';
+}
+
+/**
+ * Lista generala ?page=vehicule a fost retrasa (2026-11-16): linkurile vechi (Dashboard, redirecturi,
+ * semne de carte) ajung in Vehicule ușoare sau Vehicule grele. Se alege dupa tipurile cerute
+ * (tip_vehicul), altfel dupa vehiculele selectate (ids[]) sau dupa numarul cautat (q).
+ * Selectiile mixte merg in Vehicule grele; lista arata acolo un link catre vehiculele usoare ramase.
+ */
+function resolve_vehicle_list_page(PDO $db, array $query): string
+{
+    $types = array_values(array_filter(
+        array_map(static fn($type): string => strtolower(trim((string) $type)), (array) ($query['tip_vehicul'] ?? [])),
+        static fn(string $type): bool => $type !== ''
+    ));
+
+    try {
+        if ($types === []) {
+            $ids = array_values(array_unique(array_filter(
+                array_map('intval', (array) ($query['ids'] ?? [])),
+                static fn(int $id): bool => $id > 0
+            )));
+            $search = strtoupper(str_replace([' ', '-', '.', '/'], '', trim((string) ($query['q'] ?? ''))));
+
+            if ($ids !== []) {
+                $placeholders = implode(',', array_fill(0, count($ids), '?'));
+                $stmt = $db->prepare("SELECT DISTINCT tip_vehicul FROM vehicule WHERE id IN ($placeholders)");
+                $stmt->execute($ids);
+                $types = array_map('strval', $stmt->fetchAll(PDO::FETCH_COLUMN));
+            } elseif ($search !== '') {
+                $stmt = $db->prepare(
+                    "SELECT DISTINCT tip_vehicul FROM vehicule
+                     WHERE REPLACE(REPLACE(REPLACE(REPLACE(UPPER(COALESCE(nr_inmatriculare, '')), ' ', ''), '-', ''), '.', ''), '/', '') LIKE ?"
+                );
+                $stmt->execute(['%' . $search . '%']);
+                $types = array_map('strval', $stmt->fetchAll(PDO::FETCH_COLUMN));
+            }
+        }
+    } catch (Throwable $exception) {
+        error_log('[resolve_vehicle_list_page] ' . $exception->getMessage());
+        $types = [];
+    }
+
+    $allLight = $types !== [] && array_diff(array_map('strtolower', $types), vehicle_light_types()) === [];
+    $target = $allLight ? 'vehicule_usoare' : 'vehicule_grele';
+
+    // Utilizatorul cu acces doar la cealalta lista ajunge in lista lui.
+    if (function_exists('can_route') && !can_route($target)) {
+        $other = $target === 'vehicule_grele' ? 'vehicule_usoare' : 'vehicule_grele';
+        if (can_route($other)) {
+            $target = $other;
+        }
+    }
+
+    return $target;
+}
+
 function build_query_url(array $params = []): string
 {
     $cleanParams = [];

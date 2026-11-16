@@ -15,25 +15,10 @@ $isCompare = !empty($isCompare);
 $canFinancial = !empty($canFinancial);
 $selectedDriverIds = array_map('intval', (array) ($filters['driver_ids'] ?? [$driverId]));
 
-$fmtNumber = static function (mixed $value, int $decimals = 2): string {
-    if ($value === null || $value === '') {
-        return '-';
-    }
-    return format_number_ro((float) $value, $decimals);
-};
-$fmtMoney = static function (mixed $value) use ($fmtNumber): string {
-    return $fmtNumber((float) $value, 2) . ' lei';
-};
+require __DIR__ . '/_kpi_helpers.php'; // $fmtNumber, $fmtMoney, $fmtDuration, $fmtDate, $diurnaNoteFor
 $fmtPercent = static function (mixed $value) use ($fmtNumber): string {
     return $fmtNumber((float) $value, 1) . '%';
 };
-$fmtDuration = static function (mixed $minutes): string {
-    $minutes = max(0, (int) $minutes);
-    $hours = intdiv($minutes, 60);
-    $remaining = $minutes % 60;
-    return $hours . 'h ' . str_pad((string) $remaining, 2, '0', STR_PAD_LEFT) . 'm';
-};
-$fmtDate = static fn (mixed $value): string => format_date_ro((string) ($value ?? ''));
 $activeDaysLabel = static function (mixed $value): string {
     if ($value === null || $value === '') {
         return '-';
@@ -121,28 +106,6 @@ $topBeneficiaries = array_slice($topBeneficiaries, 0, 3, true);
 
 $dailyPreviewRows = array_slice((array) ($dashboard['dailyRows'] ?? []), 0, 3);
 
-// Nota diurnelor: valoarea in lei dupa regula soferului din Contabilitate Personal.
-$diurnaNoteFor = static function (array $k) use ($fmtMoney): string {
-    $policy = (array) ($k['diurna_policy'] ?? []);
-    if (($policy['status'] ?? '') === DriverDiurnaModel::STATUS_NONE && (int) ($k['diurne'] ?? 0) === 0) {
-        return 'nu primeste diurna';
-    }
-    $parts = [];
-    if (!isset($k['diurne_value'])) {
-        return 'din ' . (int) ($k['diurne_trips'] ?? 0) . ' curse';
-    }
-    if ((float) ($k['diurne_value'] ?? 0) > 0) {
-        $parts[] = $fmtMoney($k['diurne_value']);
-    }
-    if ((int) ($k['diurne_unvalued'] ?? 0) > 0) {
-        $parts[] = (int) $k['diurne_unvalued'] . ' fara valoare / zi';
-    }
-    if ((int) ($k['diurne_missing'] ?? 0) > 0) {
-        $parts[] = (int) $k['diurne_missing'] . ' curse fara ora';
-    }
-
-    return $parts === [] ? 'din ' . (int) ($k['diurne_trips'] ?? 0) . ' curse' : implode(' · ', $parts);
-};
 $diurneNote = $diurnaNoteFor($kpis);
 
 // Distributie si Primar + Distributie livreaza (Tone livrate); Primar si

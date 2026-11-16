@@ -113,6 +113,84 @@ class DriverActivityHistoryController
         return $row;
     }
 
+    /**
+     * Cardurile KPI pentru Tabloul de bord, cu aceleasi reguli ca pagina:
+     *  - fara sofer ales: totalurile tuturor soferilor cu activitate in perioada (lista
+     *    selectorului paginii, calculul comparatiei);
+     *  - un sofer ales: dashboard-ul lui individual (exact ce arata pagina pentru el);
+     *  - mai multi: comparatia lor.
+     * Soferii alesi fara activitate in perioada raman in 'dropped' (pagina face la fel).
+     * Datele financiare se curata ca in pagina. Filtrele vin din dashboard: perioada + vehicul.
+     *
+     * @param list<int> $requestedDriverIds
+     */
+    public function dashboardCardData(
+        string $dateStart,
+        string $dateEnd,
+        int $vehicleId,
+        array $requestedDriverIds = [],
+        int $beneficiaryId = 0,
+        string $transportType = ''
+    ): array {
+        // Aceeași validare ca formularul paginii (resolveFilters), cu filtrele alese în card.
+        $filters = $this->resolveFilters([
+            'date_start' => $dateStart,
+            'date_end' => $dateEnd,
+            'vehicle_id' => $vehicleId,
+            'beneficiar_id' => $beneficiaryId,
+            'transport_type' => $transportType,
+        ]);
+        $options = $this->model->getDriverOptions($filters);
+        $activeIds = array_values(array_filter(array_map('intval', array_column($options, 'id'))));
+        $requested = array_values(array_unique(array_filter(array_map('intval', $requestedDriverIds))));
+        $selected = $requested === [] ? $activeIds : array_values(array_intersect($requested, $activeIds));
+
+        $filters['driver_ids'] = $selected;
+        $filters['driver_id'] = (int) ($selected[0] ?? 0);
+        $driver = null;
+        $kpis = [];
+        $vehicleOptions = [];
+        if (count($selected) === 1 && $requested !== []) {
+            $dashboard = $this->dashboardFor($selected[0], $filters);
+            $kpis = (array) ($dashboard['kpis'] ?? []);
+            $driver = is_array($dashboard['driver'] ?? null) ? $dashboard['driver'] : null;
+            $vehicleOptions = (array) ($dashboard['vehicleOptions'] ?? []);
+        } elseif ($selected !== []) {
+            $comparison = $this->comparisonFor($selected, $filters);
+            $kpis = (array) ($comparison['kpis'] ?? []);
+            $vehicleOptions = (array) ($comparison['vehicleOptions'] ?? []);
+        }
+
+        return [
+            'kpis' => $kpis,
+            'filters' => $filters,
+            'driver' => $driver,
+            'is_all' => $requested === [],
+            'driver_count' => count($selected),
+            'active_count' => count($activeIds),
+            'options' => array_map(static fn(array $o): array => ['id' => (int) $o['id'], 'nume' => (string) ($o['nume'] ?? '')], $options),
+            // id => nume: șoferii aleși în card, dar fără activitate cu filtrele de acum (rămân bifați în listă).
+            'dropped' => (function (array $ids): array {
+                $map = [];
+                foreach ($ids as $id) {
+                    $names = $this->model->getDriverNames([$id]);
+                    if ($names !== []) {
+                        $map[(int) $id] = (string) $names[0];
+                    }
+                }
+                return $map;
+            })(array_values(array_diff($requested, $selected))),
+            'can_financial' => $this->canFinancial,
+            // Opțiunile selectorilor din card: aceleași surse ca formularul paginii.
+            'vehicle_options' => array_values(array_map(static fn(array $v): array => [
+                'id' => (int) ($v['id'] ?? 0),
+                'label' => trim((string) ($v['nr_inmatriculare'] ?? '') . ' - ' . (string) ($v['marca'] ?? '') . ' ' . (string) ($v['model'] ?? '')),
+            ], $vehicleOptions)),
+            'beneficiary_options' => array_map(static fn(array $b): array => ['id' => (int) ($b['id'] ?? 0), 'nume' => (string) ($b['nume'] ?? '')], $this->model->getBeneficiaryOptions()),
+            'transport_labels' => DriverActivityHistoryModel::TRANSPORT_LABELS,
+        ];
+    }
+
     public function handle(string $action): void
     {
         match ($action) {

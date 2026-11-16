@@ -20,6 +20,8 @@ class EtollStatementController
 
     /** @var array<string, array<string, mixed>> filteredData() memorat pe perioada */
     private array $dataMemo = [];
+    /** Parametrii filtrelor: $_GET, sau cei dați de Tabloul de bord (dashboardKpiData). */
+    private ?array $queryOverride = null;
 
     public function __construct(private PDO $db)
     {
@@ -70,6 +72,63 @@ class EtollStatementController
             default:
                 $this->indexAction();
         }
+    }
+
+    private function query(): array
+    {
+        return $this->queryOverride ?? $_GET;
+    }
+
+    /**
+     * Totalurile pentru Tabloul de bord: aceeași selecție ca pagina (sesiunile perioadei cu
+     * filtrele aplicate), pe intervalul dashboard-ului și, opțional, pe numărul unui vehicul.
+     */
+    public function dashboardKpiData(string $dateFrom, string $dateTo, array $cardFilters = []): array
+    {
+        // Aceleași chei ca filtrele paginii (nr, cap, cat, ben, tip, status), validate de filters().
+        $this->queryOverride = ['perioada' => 'interval', 'de_la' => $dateFrom, 'pana_la' => $dateTo]
+            + array_intersect_key($cardFilters, array_flip(['nr', 'cap', 'cat', 'ben', 'tip', 'status']));
+        $period = EtollStatementModel::period($this->queryOverride);
+        $data = $this->filteredData($period);
+        $topups = $this->model->topups($period['de_la'], $period['pana_la']);
+        $beneficiaries = $this->model->beneficiaries(array_merge($data['all_sessions'], $data['all_open']));
+        $this->queryOverride = null;
+
+        // Opțiunile filtrelor, construite ca în views/etoll/index.php (capacitate, categorie, beneficiari, tip, status).
+        $none = EtollStatementModel::NONE;
+        $plates = [];
+        $capacity = [];
+        $categories = [];
+        foreach ($data['vehicles'] as $vehicle) {
+            $plates[(string) $vehicle['etoll_plate']] = (string) ($vehicle['nr_inmatriculare'] ?? '') !== '' ? (string) $vehicle['nr_inmatriculare'] : (string) $vehicle['etoll_plate'];
+            $capKey = EtollStatementModel::capacityKey($vehicle['capacitate_transport'] ?? null);
+            $capacity[$capKey] = $capKey === $none ? 'Capacitate necunoscută' : (string) vehicle_capacity_format_tons($vehicle['capacitate_transport']);
+            $catKey = (string) ($vehicle['categorie_capacitate_id'] ?? '') ?: $none;
+            $categories[$catKey] = [
+                'label' => $catKey === $none ? 'Fără categorie' : (string) ($vehicle['categorie_capacitate'] ?? ('#' . $catKey)),
+                'order' => $catKey === $none ? PHP_INT_MAX : (int) ($vehicle['categorie_capacitate_ordine'] ?? 0),
+            ];
+        }
+        asort($plates, SORT_NATURAL);
+        uksort($capacity, static fn($a, $b): int => ((string) $a === $none ? PHP_INT_MAX : (float) $a) <=> ((string) $b === $none ? PHP_INT_MAX : (float) $b));
+        uasort($categories, static fn(array $a, array $b): int => ($a['order'] <=> $b['order']) ?: strnatcasecmp($a['label'], $b['label']));
+
+        return [
+            'period' => $period,
+            'totals' => EtollStatementModel::sessionTotals($data['sessions']),
+            'summary' => $this->model->summary($period['de_la'], $period['pana_la']),
+            'openSessions' => $data['open'],
+            'selectedPlates' => $data['filters']['nr'],
+            'topupCount' => count(array_filter($topups, static fn(array $r): bool => $r['tx_id'] !== null)),
+            'filterOptions' => [
+                'nr' => $plates,
+                'cap' => $capacity,
+                'cat' => array_map(static fn(array $c): string => $c['label'], $categories),
+                'ben' => $beneficiaries + [$none => 'Fără beneficiar (neasociată)'],
+                'tip' => EtollStatementModel::TRANSPORT_TYPES + [$none => 'Fără cursă / Km service asociat'],
+                'status' => EtollStatementModel::STATUSES,
+            ],
+        ];
     }
 
     private function indexAction(): void
@@ -653,8 +712,9 @@ class EtollStatementController
      */
     private function filters(): array
     {
-        $list = static function (string $name, string $pattern): array {
-            $raw = $_GET[$name] ?? [];
+        $query = $this->query();
+        $list = static function (string $name, string $pattern) use ($query): array {
+            $raw = $query[$name] ?? [];
             $values = [];
             foreach (is_array($raw) ? $raw : [$raw] as $value) {
                 $value = trim((string) $value);
@@ -684,8 +744,9 @@ class EtollStatementController
      */
     private function closedAtFilter(): array
     {
-        $parse = static function (string $name): ?DateTimeImmutable {
-            $value = trim((string) ($_GET[$name] ?? ''));
+        $query = $this->query();
+        $parse = static function (string $name) use ($query): ?DateTimeImmutable {
+            $value = trim((string) ($query[$name] ?? ''));
             $date = preg_match('/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}$/', $value) === 1
                 ? DateTimeImmutable::createFromFormat('!Y-m-d H:i', str_replace('T', ' ', $value))
                 : false;
@@ -735,7 +796,7 @@ class EtollStatementController
     /** @return array<int, string> nr. auto alese in filtru (nr[]=B652NET&nr[]=...), normalizate; gol = toate */
     private function plateFilter(): array
     {
-        $raw = $_GET['nr'] ?? [];
+        $raw = $this->query()['nr'] ?? [];
         $plates = [];
         foreach (is_array($raw) ? $raw : [$raw] as $value) {
             $plate = preg_replace('/[^A-Z0-9]+/', '', strtoupper((string) $value)) ?? '';
