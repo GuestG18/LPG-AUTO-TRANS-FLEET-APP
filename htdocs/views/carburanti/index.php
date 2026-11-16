@@ -2861,6 +2861,21 @@ document.addEventListener('DOMContentLoaded', function () {
                         presets.appendChild(button);
                     });
                     fp.calendarContainer.appendChild(presets);
+
+                    // Alegerea unei luni din lista derulanta selecteaza luna
+                    // intreaga, inchide calendarul si aplica filtrul imediat.
+                    // (Sagetile < > raman doar navigare, pentru intervale libere.)
+                    fp.calendarContainer.querySelectorAll('.flatpickr-monthDropdown-months').forEach(function (monthSelect) {
+                        monthSelect.addEventListener('change', function () {
+                            var month = parseInt(monthSelect.value, 10);
+                            if (isNaN(month)) {
+                                return;
+                            }
+                            var year = fp.currentYear;
+                            fp.setDate([new Date(year, month, 1), new Date(year, month + 1, 0)], false);
+                            fp.close();
+                        });
+                    });
                 },
                 onClose: function (selectedDates) {
                     if (selectedDates.length === 2) {
