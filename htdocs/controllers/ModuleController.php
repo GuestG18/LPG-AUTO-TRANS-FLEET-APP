@@ -135,6 +135,12 @@ class ModuleController
             case 'tire_position_candidates':
                 $this->tirePositionCandidatesAction($moduleKey);
                 return;
+            case 'tire_fleet_targets':
+                $this->tireFleetTargetsAction($moduleKey);
+                return;
+            case 'tire_fleet_move':
+                $this->tireFleetMoveAction($moduleKey);
+                return;
             case 'tire_fleet_component':
                 $this->tireFleetComponentAction($moduleKey);
                 return;
@@ -3650,6 +3656,109 @@ class ModuleController
         } catch (Throwable $exception) {
             error_log('[tire_fleet_unit] ' . $exception->getMessage());
             $this->tireMountJson(['ok' => false, 'error' => 'Detaliile vehiculului nu au putut fi incarcate.'], 500);
+        }
+    }
+
+    /**
+     * Vehiculele unui rand din schema (cheia "id" sau "cap-semiremorca"), doar daca randul e inca
+     * valabil: un ansamblu trebuie sa aiba cuplajul activ intre aceleasi vehicule.
+     *
+     * @return list<int>
+     */
+    private function tireFleetUnitVehicleIds(string $key): array
+    {
+        if (preg_match('/^(\d+)(?:-(\d+))?$/', $key, $match) !== 1) {
+            throw new RuntimeException('Vehicul invalid.');
+        }
+        $tractorId = (int) $match[1];
+        $trailerId = isset($match[2]) ? (int) $match[2] : 0;
+        if ($trailerId <= 0) {
+            return [$tractorId];
+        }
+        $coupling = $this->vehicleCouplingModel->getActiveCouplingByTractor($tractorId);
+        if ($coupling === null || (int) ($coupling['semiremorca_id'] ?? 0) !== $trailerId) {
+            throw new RuntimeException('Cuplajul cap tractor + semiremorcă s-a schimbat. Reîncarcă pagina.');
+        }
+
+        return [$tractorId, $trailerId];
+    }
+
+    /** JSON: pozitiile pe care anvelopa trasa in schema se poate muta (verde / rosu, cu motiv). */
+    private function tireFleetTargetsAction(string $moduleKey): void
+    {
+        if ($moduleKey !== 'mentenanta') {
+            $this->tireMountJson(['ok' => false, 'error' => 'Modul invalid.'], 404);
+        }
+        session_write_close();
+        try {
+            $vehicleIds = $this->tireFleetUnitVehicleIds(trim((string) ($_GET['key'] ?? '')));
+            $result = $this->tireModel->getFleetMoveTargets((int) ($_GET['tire_id'] ?? 0), $vehicleIds);
+            $this->tireMountJson(['ok' => true, 'source' => $result['source'], 'targets' => (object) $result['targets']]);
+        } catch (RuntimeException $exception) {
+            if ($exception instanceof PDOException) {
+                error_log('[tire_fleet_targets] ' . $exception->getMessage());
+                $this->tireMountJson(['ok' => false, 'error' => 'Pozițiile compatibile nu au putut fi verificate.'], 500);
+            }
+            $this->tireMountJson(['ok' => false, 'error' => $exception->getMessage()], 422);
+        } catch (Throwable $exception) {
+            error_log('[tire_fleet_targets] ' . $exception->getMessage());
+            $this->tireMountJson(['ok' => false, 'error' => 'Pozițiile compatibile nu au putut fi verificate.'], 500);
+        }
+    }
+
+    /**
+     * POST JSON din schema: op=move (o anvelopa pe o pozitie libera) sau op=swap (doua anvelope
+     * montate isi schimba pozitiile). Momentul operatiei = acum (ca butoanele rapide): km SAS se
+     * opresc / pornesc de la acest minut. Verificarea completa se face in model, in tranzactie.
+     */
+    private function tireFleetMoveAction(string $moduleKey): void
+    {
+        if ($moduleKey !== 'mentenanta' || $_SERVER['REQUEST_METHOD'] !== 'POST') {
+            $this->tireMountJson(['ok' => false, 'error' => 'Cerere invalidă.'], 405);
+        }
+        if (!verify_csrf_token($_POST['_token'] ?? null)) {
+            $this->tireMountJson(['ok' => false, 'error' => 'Token CSRF invalid. Reîncarcă pagina și reîncearcă.'], 419);
+        }
+
+        $operation = (string) ($_POST['op'] ?? '');
+        $moment = date('Y-m-d H:i');
+        $now = date('Y-m-d H:i:s');
+        try {
+            $vehicleIds = $this->tireFleetUnitVehicleIds(trim((string) ($_POST['key'] ?? '')));
+            if ($operation === 'move') {
+                $this->tireModel->fleetMoveTire(
+                    (int) ($_POST['tire_id'] ?? 0),
+                    (int) ($_POST['source_position_id'] ?? 0),
+                    (int) ($_POST['target_position_id'] ?? 0),
+                    $vehicleIds,
+                    $moment,
+                    $now,
+                    $this->currentUserId()
+                );
+            } elseif ($operation === 'swap') {
+                $this->tireModel->fleetSwapTires(
+                    (int) ($_POST['tire_a'] ?? 0),
+                    (int) ($_POST['position_a'] ?? 0),
+                    (int) ($_POST['tire_b'] ?? 0),
+                    (int) ($_POST['position_b'] ?? 0),
+                    $vehicleIds,
+                    $moment,
+                    $now,
+                    $this->currentUserId()
+                );
+            } else {
+                $this->tireMountJson(['ok' => false, 'error' => 'Operație necunoscută.'], 422);
+            }
+            $this->tireMountJson(['ok' => true]);
+        } catch (RuntimeException $exception) {
+            if ($exception instanceof PDOException) {
+                error_log('[tire_fleet_move] ' . $exception->getMessage());
+                $this->tireMountJson(['ok' => false, 'error' => 'Operația nu a putut fi salvată. Nimic nu s-a modificat.'], 500);
+            }
+            $this->tireMountJson(['ok' => false, 'error' => $exception->getMessage(), 'stale' => $exception->getCode() === 409], 422);
+        } catch (Throwable $exception) {
+            error_log('[tire_fleet_move] ' . $exception->getMessage());
+            $this->tireMountJson(['ok' => false, 'error' => 'Operația nu a putut fi salvată. Nimic nu s-a modificat.'], 500);
         }
     }
 

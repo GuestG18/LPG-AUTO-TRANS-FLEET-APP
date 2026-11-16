@@ -352,3 +352,16 @@
     .rv2 *, .rv2 *::before, .rv2 *::after { transition: none !important; animation: none !important; }
     .rv2-kpi:hover { transform: none; }
 }
+
+/* Kilometraj la executia reviziei: GPS (SAS), CAN, butuc (manual) + sursa folosita in calcul. */
+.rv2-km-box { border: 1px solid var(--rv2-border); border-radius: 10px; padding: 0.75rem 0.9rem; background: #fbfcfe; }
+.rv2-km-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.75rem; }
+@media (max-width: 1199.98px) { .rv2-km-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.rv2-km-src { border: 1px solid var(--rv2-border); border-radius: 8px; padding: 0.55rem 0.65rem; background: #fff; transition: border-color 160ms ease, box-shadow 160ms ease; }
+.rv2-km-src:has(input[type="radio"]:checked) { border-color: var(--rv2-blue); box-shadow: 0 0 0 2px rgba(31, 111, 235, 0.12); }
+.rv2-km-src .form-control { margin-top: 0.35rem; font-variant-numeric: tabular-nums; }
+.rv2-km-sub { font-weight: 400; color: var(--rv2-muted); font-size: 0.72rem; }
+.rv2-km-use { font-size: 0.72rem; color: var(--rv2-muted); display: inline-flex; align-items: center; gap: 0.25rem; cursor: pointer; white-space: nowrap; }
+.rv2-km-hint { font-size: 0.72rem; color: var(--rv2-muted); margin-top: 0.3rem; min-height: 1em; }
+.rv2-modal .dispatcher-datetime-field { position: relative; }
+@media (max-width: 767.98px) { .rv2-km-grid { grid-template-columns: 1fr; } }

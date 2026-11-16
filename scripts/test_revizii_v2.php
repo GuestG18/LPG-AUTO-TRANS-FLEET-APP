@@ -356,6 +356,60 @@ try {
     check('import: „da” = criteriu candidat, fără valoare inventată', $preview['rows'][2]['criterii'] === 'km' && $preview['rows'][2]['valori'] === '');
     check('import cu erori nu se aplică', expectError(fn () => $svc->importApply("Componentă\tOperațiune\nX\t", $tx, $ty, 1)) === 'ok');
 
+    // Km la executie: GPS + CAN separat din acelasi raport SAS (stub, fara apel live), fallback pe citiri salvate.
+    $segments = [
+        ['start' => date('Y-m-d 08:00:00', $now - 86400), 'end' => date('Y-m-d 10:00:00', $now - 86400), 'can_index_start_km' => 499000, 'can_index_end_km' => 499150, 'gps_index_end_km' => 512150, 'gps_km' => 150],
+        ['start' => date('Y-m-d 14:00:00', $now - 86400), 'end' => date('Y-m-d 16:00:00', $now - 86400), 'can_index_start_km' => 499150, 'can_index_end_km' => 499300, 'gps_index_end_km' => 512300, 'gps_km' => 150],
+    ];
+    $pickCan = ComponentSasKmService::pick($segments, date('Y-m-d 12:00:00', $now - 86400), ['can']);
+    $pickGps = ComponentSasKmService::pick($segments, date('Y-m-d 12:00:00', $now - 86400), ['gps']);
+    check('SAS: CAN și GPS citite separat la același moment (staționa)', $pickCan['km'] === 499150 && $pickGps['km'] === 512150 && !$pickCan['moving']);
+    $pickMoving = ComponentSasKmService::pick($segments, date('Y-m-d 15:00:00', $now - 86400), ['gps']);
+    check('SAS: în mers → km GPS de la pornirea tronsonului, cu interval', $pickMoving['km'] === 512150 && $pickMoving['moving'] && $pickMoving['range'] === [512150, 512300]);
+    check('SAS: implicit (fără surse) CAN are prioritate, ca la montare', ComponentSasKmService::pick($segments, date('Y-m-d 12:00:00', $now - 86400))['source'] === 'can');
+    $stubCan = new class ($segments) extends SasCanKmService {
+        public function __construct(private array $segs) {}
+        public function travelSheet(int $carId, string $from, string $to): array { return ['segments' => $this->segs]; }
+    };
+    $db->prepare('INSERT INTO revizii_sas_vehicule (vehicle_id, sas_car_id, plate) VALUES (:v, 999999, :p)')->execute([':v' => $vA, ':p' => 'TST V2 A']);
+    $svc->reset();
+    $svc->setSasKmService(new ComponentSasKmService($db, $stubCan));
+    $at = $svc->kmAtExecution($vA, date('Y-m-d 12:00', $now - 86400));
+    check('execuție: GPS și CAN încărcate din SAS pentru momentul ales', $at['can']['km'] === 499150 && $at['gps']['km'] === 512150 && $at['message'] === null);
+    $atB = $svc->kmAtExecution($vC, date("Y-m-d H:i", $now - 86400 * 5));
+    check('execuție: fără SAS → citirea salvată CAN (marcată „salvată”)', ($atB['can']['km'] ?? null) === 300000 && $atB['can']['stored'] === true && $atB['gps'] === null);
+    // CardOil: odometrul tastat la pompa, alimentarea cea mai apropiata (fuel_fillups, fara apel API).
+    $fuelType = (string) $db->query("SELECT fuel_type FROM fuel_fillups LIMIT 1")->fetchColumn() ?: 'motorina';
+    $fill = $db->prepare("INSERT INTO fuel_fillups (api_id, source_type, vehicle_registration, fillup_datetime, odometer_km, fuel_type, quantity_liters, total_value, is_full, station_name, created_at, updated_at)
+                          VALUES (:a, 'api', :p, :d, :km, :ft, 100, 700, 0, :st, NOW(), NOW())");
+    foreach ([['tstv2-f1', 'TST-V2-A', $now - 3 * 86400, 498000, 'Statie 1'], ['tstv2-f2', 'TST V2 A', $now - 20 * 3600, 499050, 'Statie 2'], ['tstv2-f3', 'TSTV2A', $now - 30 * 86400, 450000, 'Veche']] as [$api, $plate, $ts, $kmF, $st]) {
+        $fill->execute([':a' => $api, ':p' => $plate, ':d' => date('Y-m-d H:i:s', $ts), ':km' => $kmF, ':ft' => $fuelType, ':st' => $st]);
+    }
+    $co = $svc->cardOilAt('TST V2 A', $now - 3600);
+    check('CardOil: ultima alimentare dinaintea momentului (nr. scris diferit, aceeași mașină)', $co !== null && $co['km'] === 499050 && str_contains($co['note'], 'Statie 2') && str_contains($co['note'], 'înainte'));
+    $co = $svc->cardOilAt('TST V2 A', $now - 4 * 86400);
+    check('CardOil: fără alimentare înainte (7 zile) → prima de după', $co !== null && $co['km'] === 498000 && str_contains($co['note'], 'după'));
+    check('CardOil: alimentare în afara ferestrei de 7 zile ignorată', $svc->cardOilAt('TST V2 A', $now - 40 * 86400) === null);
+    $at = $svc->kmAtExecution($vA, date('Y-m-d H:i', $now - 3600));
+    check('execuție: CardOil încărcat lângă GPS și CAN', ($at['cardoil']['km'] ?? null) === 499050 && $at['cardoil']['label'] === 'CardOil · km tastat la pompă');
+    check('execuție: momentul din viitor e refuzat', expectError(fn () => $svc->kmAtExecution($vA, date('Y-m-d H:i', $now + 86400)), 'viitor') === 'ok');
+
+    // Trei surse salvate pe lucrare; calculul folosește sursa aleasă.
+    $svc->reset();
+    $oid = $svc->saveWorkOrder(['vehicle_id' => $vA, 'status' => 'in_desfasurare', 'km_can' => '499150', 'km_gps' => '512150', 'km_butuc' => '498900', 'km_cardoil' => '499050', 'km_sursa' => 'can'], 1);
+    $o = $svc->model()->workOrder($oid);
+    check('lucrare: GPS, CAN, CardOil și butuc salvate separat; km de calcul = CAN', (float) $o['km_can'] === 499150.0 && (float) $o['km_gps'] === 512150.0 && (float) $o['km_butuc'] === 498900.0
+        && (float) $o['km_cardoil'] === 499050.0
+        && (float) $o['km_executie'] === 499150.0 && $o['km_sursa'] === 'can');
+    $items = array_map(static fn (array $it): array => ['id' => $it['id'], 'status' => 'completed'], $o['items']);
+    $svc->finalizeWorkOrder($oid, ['data_executie' => date('Y-m-d H:i', $now - 600), 'km_can' => '499150', 'km_gps' => '512150', 'km_butuc' => '498900', 'km_cardoil' => '499050', 'km_sursa' => 'can', 'tehnician' => 'T', 'items' => $items], 1);
+    $e = $db->prepare('SELECT km, km_sursa, km_can, km_gps, km_butuc, km_cardoil FROM revizii_v2_executii WHERE lucrare_id = :l LIMIT 1');
+    $e->execute([':l' => $oid]);
+    $er = $e->fetch(PDO::FETCH_ASSOC);
+    check('execuțiile păstrează cele patru valori', (float) $er['km_can'] === 499150.0 && (float) $er['km_gps'] === 512150.0 && (float) $er['km_butuc'] === 498900.0 && (float) $er['km_cardoil'] === 499050.0);
+    $a = $row($vA);
+    check('referința pe aceeași sursă ca odometrul curent (CAN cu CAN, nu GPS)', $a['km']['source'] === 'can' && $a['last']['km'] == 499150);
+
     // Explicatie
     $explain = $svc->explain($vA);
     check('simulare: pașii calculului pe datele reale', count($explain['steps']) >= 5);

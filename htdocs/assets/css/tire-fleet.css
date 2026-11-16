@@ -147,6 +147,42 @@
 .ft-svg .ft-pill.is-selected rect { stroke: #0b4fd6; stroke-width: 2; }
 .ft-svg text { font-family: inherit; }
 
+/* Mutare prin drag & drop si schimb (assets/js/tire-fleet-moves.js); geometria schemei nu se schimba */
+.ft-schema { position: relative; }
+.ft-svg .ft-tire.is-mounted { cursor: grab; touch-action: none; }
+body.ft-is-dragging, body.ft-is-dragging * { cursor: grabbing !important; user-select: none; -webkit-user-select: none; }
+.ft-svg .ft-tire.is-drag-source { opacity: .28; }
+.ft-svg .ft-tire.is-swap-hidden { opacity: 0; }
+.ft-svg .ft-tire-ghost { pointer-events: none; filter: drop-shadow(0 3px 3px rgba(16, 24, 40, .35)); }
+.ft-svg .ft-tire-ghost .ft-tire-halo { opacity: 0; }
+.ft-svg .ft-tire-ghost.is-pending .ft-tire-body { stroke: #0b4fd6; stroke-width: 2.4; }
+.ft-svg .ft-tire-ghost.is-rejected .ft-tire-body { stroke: #b4161b; stroke-width: 2.6; }
+.ft-svg .ft-tire-ghost.is-swap-a .ft-tire-body { stroke: #0b4fd6; stroke-width: 2.4; }
+.ft-svg .ft-tire-ghost.is-swap-b .ft-tire-body { stroke: #6941c6; stroke-width: 2.4; }
+.ft-drag-active .ft-svg .ft-tire.is-drop-ok .ft-tire-halo { opacity: 1; stroke: rgba(35, 164, 85, .55); }
+.ft-drag-active .ft-svg .ft-tire.is-drop-ok .ft-tire-body { stroke: #157a3d; stroke-width: 2.2; }
+.ft-drag-active .ft-svg .ft-tire.is-drop-bad .ft-tire-halo { opacity: 1; stroke: rgba(229, 56, 59, .4); }
+.ft-drag-active .ft-svg .ft-tire.is-drop-bad .ft-tire-body { stroke: #b4161b; stroke-width: 1.8; }
+.ft-drag-active .ft-svg .ft-tire.is-drop-wait .ft-tire-body { stroke-dasharray: 2 2; }
+.ft-drag-active .ft-svg .ft-tire.is-drop-hover .ft-tire-halo { stroke-width: 8; }
+.ft-drag-active .ft-svg .ft-pill.is-drop-ok rect { stroke: #157a3d; stroke-width: 1.8; }
+.ft-drag-active .ft-svg .ft-pill.is-drop-bad rect { stroke: #b4161b; }
+.ft-svg .ft-tire.is-drop-pending .ft-tire-halo { opacity: 1; stroke: rgba(21, 112, 239, .45); }
+.ft-svg .ft-tire.is-reject-flash .ft-tire-body { animation: ftReject .75s ease-in-out; }
+@keyframes ftReject { 0%, 100% { stroke-width: 1.1; } 25%, 75% { stroke: #e5383b; stroke-width: 3.2; } }
+.ft-drag-tip { position: fixed; z-index: 2000; max-width: 340px; padding: .3rem .6rem; border-radius: 6px; background: #1d2939; color: #fff; font-size: .8rem; line-height: 1.35; box-shadow: 0 4px 14px rgba(16, 24, 40, .25); pointer-events: none; }
+.ft-drag-tip.is-ok { background: #157a3d; }
+.ft-drag-tip.is-bad { background: #b4161b; }
+.ft-drag-tip[hidden] { display: none; }
+.ft-swap-btn { position: absolute; z-index: 3; transform: translate(-50%, -50%); white-space: nowrap; padding: .2rem .65rem; font-weight: 600; border-radius: 999px; box-shadow: 0 4px 12px rgba(21, 112, 239, .35); animation: ftPop .16s ease-out; }
+.ft-swap-btn.is-above { transform: translate(-50%, -100%); }
+.ft-swap-btn[hidden] { display: none; }
+@keyframes ftPop { from { opacity: 0; scale: .85; } to { opacity: 1; scale: 1; } }
+.ft-toast-stack { position: fixed; right: 1rem; bottom: 1rem; z-index: 2100; display: flex; flex-direction: column; gap: .5rem; width: min(440px, calc(100vw - 2rem)); }
+.ft-toast { display: flex; align-items: flex-start; gap: .75rem; margin: 0; padding: .65rem .85rem; font-size: .88rem; box-shadow: 0 6px 20px rgba(16, 24, 40, .16); }
+.ft-toast > span { flex: 1 1 auto; }
+.ft-toast .btn-close { flex: 0 0 auto; padding: .35rem; font-size: .7rem; }
+
 /* Detalii (randul extins) */
 .ft-detail { padding: 0 .75rem .9rem 3.4rem; }
 .ft-detail[hidden] { display: none; }
@@ -202,18 +238,10 @@
 .ft-row-actions .dropdown { display: inline-block; }
 .ft-row-actions .modal { text-align: left; white-space: normal; }
 
-/* Anvelopa selectata */
-.ft-selected { margin: 0 0 .7rem; background: #fff; border: 1px solid var(--ft-blue-line); border-radius: 10px; padding: .85rem 1rem; box-shadow: 0 0 0 3px rgba(21, 112, 239, .07); }
-.ft-selected[hidden] { display: none; }
-.ft-selected-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; flex-wrap: wrap; margin-bottom: .6rem; }
-.ft-selected-title { font-weight: 700; font-size: 1rem; }
-.ft-selected-title small { font-weight: 500; color: var(--ft-muted); margin-left: .35rem; }
-.ft-selected-actions { display: flex; gap: .4rem; flex-wrap: wrap; }
-.ft-selected-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: .55rem 1rem; }
-.ft-selected-grid > div > span { display: block; font-size: .75rem; color: var(--ft-muted); }
-.ft-selected-grid > div > strong { display: block; font-weight: 600; font-size: .9rem; }
-.ft-selected-history { margin-top: .7rem; border-top: 1px dashed var(--ft-border); padding-top: .55rem; font-size: .82rem; }
-.ft-selected-history ul { margin: .25rem 0 0; padding-left: 1.1rem; }
+/* Tabelul urmeaza selectia din schema (tire-fleet.js, applyRowFilter) */
+.ft-select-hint { display: flex; align-items: flex-start; gap: .55rem; padding: .7rem 1rem; color: var(--ft-muted); font-size: .86rem; }
+.ft-select-hint i { color: var(--ft-blue); font-size: 1rem; }
+.ft-select-hint[hidden], .ft-rows-wrap[hidden] { display: none; }
 .ft-info-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: .65rem 1.2rem; }
 .ft-info-grid > div > span { display: block; font-size: .75rem; color: var(--ft-muted); }
 .ft-info-grid strong { font-weight: 600; }
@@ -267,8 +295,9 @@
 }
 @media (prefers-reduced-motion: reduce) {
     .ft-chevron i, .ft-unit, .ft-tire-table tbody tr.ft-tire-row.is-flash > td { transition: none; animation: none; }
+    .ft-swap-btn, .ft-svg .ft-tire.is-reject-flash .ft-tire-body { animation: none; }
 }
 
 /* Antetul aplicatiei e lipit sus: derularea la rand / anvelopa lasa loc sub el. */
-.ft-unit, .ft-selected, .ft-tire-table tr.ft-tire-row { scroll-margin-top: 130px; }
+.ft-unit, .ft-tire-table tr.ft-tire-row { scroll-margin-top: 130px; }
 

@@ -49,6 +49,10 @@ final class ReviziiV2Controller
             'v2_vehicle' => fn () => $this->json(fn (): array => $this->service->vehicleDetail((int) ($_GET['id'] ?? 0))),
             'v2_explain' => fn () => $this->json(fn (): array => $this->service->explain((int) ($_GET['id'] ?? 0))),
             'v2_workorder' => fn () => $this->json(fn (): array => $this->service->workOrderForm((int) ($_GET['vehicle_id'] ?? 0), ($_GET['id'] ?? '') !== '' ? (int) $_GET['id'] : null)),
+            // Km la momentul executiei (GPS + CAN din SAS); doar cine inregistreaza revizii.
+            'v2_km_at' => fn () => can(self::PAGE, 'edit')
+                ? $this->json(fn (): array => $this->service->kmAtExecution((int) ($_GET['vehicle_id'] ?? 0), (string) ($_GET['moment'] ?? '')))
+                : $this->deny(),
             'v2_workorder_save' => fn () => $this->post('edit', fn (array $in): array => ['id' => $this->service->saveWorkOrder($in, $this->userId())]),
             'v2_workorder_finalize' => fn () => $this->post('edit', fn (array $in): array => $this->service->finalizeWorkOrder((int) ($in['id'] ?? 0), $in, $this->userId())),
             'v2_workorder_cancel' => fn () => $this->post('edit', function (array $in): array {
@@ -199,6 +203,13 @@ final class ReviziiV2Controller
             return;
         }
         $this->json(fn (): array => $work($input));
+    }
+
+    private function deny(): void
+    {
+        header('Content-Type: application/json; charset=utf-8');
+        http_response_code(403);
+        echo json_encode(['ok' => false, 'message' => 'Nu ai dreptul pentru această acțiune.'], JSON_UNESCAPED_UNICODE);
     }
 
     private function userId(): ?int

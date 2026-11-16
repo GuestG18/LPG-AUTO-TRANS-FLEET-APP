@@ -5,8 +5,9 @@
  *   vehiculului (vehicule_anvelope_pozitii). Culoarea fiecarei anvelope vine din server
  *   (TireModel::fleetTireStatus); aici nu se calculeaza nicio stare, uzura sau km.
  * - Ansamblul (cuplaj activ) = capul tractor + semiremorca desenate legat, prin sa.
- * - Click pe o anvelopa: se extinde randul, se incarca tabelul (action=tire_fleet_unit),
- *   se marcheaza randul anvelopei; click pe rand marcheaza anvelopa in schema.
+ * - Click pe o anvelopa: intra in selectie (max. 2, albastru), se extinde randul si tabelul
+ *   (action=tire_fleet_unit) arata doar randurile anvelopelor selectate; fara selectie e strans.
+ * - Mutarea prin drag & drop si schimbul a doua anvelope: tire-fleet-moves.js.
  * - Partea stanga a vehiculului e jos in desen (privit de sus, cu fata spre stanga).
  */
 (function () {
@@ -381,7 +382,7 @@
                 var y0 = item.y0;
                 var width = item.y1 - item.y0;
                 var g = el('g', {
-                    class: 'ft-tire',
+                    class: 'ft-tire' + (position.tire && Number(position.id) > 0 ? ' is-mounted' : ''),
                     tabindex: '0',
                     role: 'button',
                     'data-ft-pos': String(position.id),
@@ -478,9 +479,9 @@
         });
     };
 
-    var markSchema = function (unitEl, positionId) {
+    var markSchema = function (unitEl, positionIds) {
         unitEl.querySelectorAll('.ft-svg .ft-tire, .ft-svg .ft-pill').forEach(function (node) {
-            node.classList.toggle('is-selected', positionId !== null && node.getAttribute('data-ft-pos') === String(positionId));
+            node.classList.toggle('is-selected', positionIds.indexOf(node.getAttribute('data-ft-pos')) !== -1);
         });
     };
 
@@ -489,7 +490,8 @@
         var container = unitEl.querySelector('[data-ft-schema]');
         if (!unit || !container) { return; }
         renderSchema(container, unit);
-        if (selection.unit === unitEl.dataset.ftUnit) { markSchema(unitEl, selection.position); }
+        markSchema(unitEl, selectedIn(unitEl));
+        if (moves) { moves.refresh(unitEl); }
     };
 
     /* ------------------------------------------------------------------ Filtre, paginare */
@@ -517,7 +519,11 @@
         // Fara preferinta salvata: grila pe ecrane inguste (schema ramane lizibila), lista in rest.
         layout: storage.get('ft.layout') ? (storage.get('ft.layout') === 'grid' ? 'grid' : 'list') : (window.matchMedia('(max-width: 700px)').matches ? 'grid' : 'list')
     };
-    var selection = { unit: null, position: null, tire: null };
+    // Selectia din schema, comuna schemei si tabelului: pozitiile (id) dintr-un singur rand, max. 2,
+    // in ordinea alegerii. Mutarea / schimbul (tire-fleet-moves.js) citesc aceeasi selectie.
+    var selection = { unit: null, positions: [] };
+    var moves = null;
+    var selectedIn = function (unitEl) { return selection.unit === unitEl.dataset.ftUnit ? selection.positions : []; };
 
     var writeUrl = function () {
         var url = new URLSearchParams(window.location.search);
@@ -727,6 +733,7 @@
                 if (!data || !data.ok) { throw new Error(data && data.error ? data.error : 'Detaliile nu au putut fi încărcate.'); }
                 detail.innerHTML = data.html;
                 detail.dataset.loaded = '1';
+                applyRowFilter(unitEl, false);
                 if (data.unit) {
                     units[data.unit.key] = data.unit;
                     drawUnit(unitEl);
@@ -751,7 +758,14 @@
         detail.hidden = !open;
         if (toggle) { toggle.setAttribute('aria-expanded', open ? 'true' : 'false'); }
         if (!open) {
-            if (selection.unit === unitEl.dataset.ftUnit) { clearSelection(); }
+            unitEl._ftAutoOpened = false;
+            if (selection.unit === unitEl.dataset.ftUnit) {
+                selection = { unit: null, positions: [] };
+                markSchema(unitEl, []);
+                syncHash();
+                if (moves) { moves.refresh(unitEl); }
+            }
+            applyRowFilter(unitEl, false);
             return Promise.resolve(detail);
         }
         return loadDetail(unitEl);
@@ -766,15 +780,6 @@
         detail.querySelectorAll('[data-ft-panel]').forEach(function (panel) { panel.hidden = panel.dataset.ftPanel !== tab; });
     };
 
-    var historyFor = function (detail, tireId) {
-        var script = detail.querySelector('[data-ft-history]');
-        if (!script) { return []; }
-        if (!script._rows) {
-            try { script._rows = JSON.parse(script.textContent || '[]'); } catch (error) { script._rows = []; }
-        }
-        return script._rows.filter(function (row) { return row.tire_id === tireId; });
-    };
-
     var findPosition = function (unitKey, positionId) {
         var unit = units[unitKey];
         var found = null;
@@ -786,113 +791,113 @@
         return found;
     };
 
-    var renderSelectedPanel = function (unitEl, detail, found) {
-        var panel = detail.querySelector('[data-ft-selected]');
-        if (!panel) { return; }
-        if (!found) { panel.hidden = true; panel.innerHTML = ''; return; }
-        var position = found.position;
-        var member = found.member;
-        var tire = position.tire;
-        var where = escapeHtml(member.plate) + ' · Axa ' + position.axle + ' – ' + escapeHtml(position.axle_label) + ' · ' + escapeHtml(position.side_label);
-        var html;
-        if (!tire) {
-            html = '<div class="ft-selected-head"><div><div class="ft-selected-title">' + escapeHtml(position.code) + ' · Poziție liberă<small>' + where + '</small></div>'
-                + '<div class="small text-muted mt-1">' + (position.id > 0 ? 'Nicio anvelopă montată pe această poziție.' : 'Pozițiile vehiculului nu sunt sincronizate; montajul se activează după salvarea configurației din Configurație Axe.') + '</div></div>'
-                + '<div class="ft-selected-actions">' + (position.id > 0 ? '<button type="button" class="btn btn-sm btn-primary" data-ft-mount="' + position.id + '"><i class="bi bi-plus-lg me-1"></i>Montează anvelopă</button>' : '')
-                + '<button type="button" class="btn btn-sm btn-outline-secondary" data-ft-clear aria-label="Închide"><i class="bi bi-x-lg"></i></button></div></div>';
-        } else {
-            var statusClass = position.status;
-            var history = historyFor(detail, tire.id);
-            html = '<div class="ft-selected-head"><div class="ft-selected-title">' + escapeHtml(position.code) + ' · ' + escapeHtml(tire.label) + '<small>' + where + '</small></div>'
-                + '<div class="ft-selected-actions">'
-                + '<button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#ftTireDetails' + tire.id + '"><i class="bi bi-eye me-1"></i>Detalii</button>'
-                + '<button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#ftTireEdit' + tire.id + '"><i class="bi bi-pencil me-1"></i>Editează</button>'
-                + '<button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#ftTireMove' + tire.id + '"><i class="bi bi-arrow-left-right me-1"></i>Schimbă poziția / mută</button>'
-                + (document.getElementById('ftTireMountDate' + tire.id) ? '<button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#ftTireMountDate' + tire.id + '"><i class="bi bi-calendar-event me-1"></i>Modifică data montării</button>' : '')
-                + '<button type="button" class="btn btn-sm btn-outline-danger" data-ft-unmount="' + tire.id + '"><i class="bi bi-box-arrow-down me-1"></i>Demontează</button>'
-                + '<button type="button" class="btn btn-sm btn-outline-secondary" data-ft-clear aria-label="Închide"><i class="bi bi-x-lg"></i></button>'
-                + '</div></div>'
-                + '<div class="ft-selected-grid">'
-                + [
-                    ['Status', '<span class="ft-badge ft-badge-' + statusClass + '">' + STATUS_TEXT[statusClass] + '</span>'],
-                    ['Stare', escapeHtml(tire.condition || '—')],
-                    ['Serie', escapeHtml(tire.serial || '—')],
-                    ['Dimensiune', escapeHtml(tire.size || '—')],
-                    ['Tip anvelopă', escapeHtml(tire.type || '—')],
-                    ['DOT', escapeHtml(tire.dot || '—')],
-                    ['Uzură', tire.wear !== null ? Math.round(tire.wear) + '%' : 'Necunoscută'],
-                    ['Km parcurși', formatKm(tire.used_km)],
-                    ['Km rămași', formatKm(tire.remaining_km)],
-                    ['Montată la', formatDate(tire.mounted_at)],
-                    ['Km SAS de la', formatDateTime(tire.km_sas_from)],
-                    ['Profil', tire.tread !== null ? String(tire.tread).replace('.', ',') + ' mm' : '—']
-                ].map(function (item) { return '<div><span>' + item[0] + '</span><strong>' + item[1] + '</strong></div>'; }).join('')
-                + '</div>'
-                + '<div class="ft-selected-history"><strong>Istoric montări</strong>'
-                + (history.length === 0 ? '<div class="text-muted">Fără montări înregistrate.</div>'
-                    : '<ul>' + history.slice(0, 8).map(function (row) {
-                        return '<li>' + formatDate(row.start) + ' → ' + (row.end ? formatDate(row.end) : '<strong>prezent</strong>') + ' · ' + escapeHtml(row.plate || '—') + ' · ' + escapeHtml(row.position || '—')
-                            + (row.km !== null ? ' · ' + formatKm(row.km) : '') + '</li>';
-                    }).join('') + '</ul>')
-                + '</div>';
+    var reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+
+    // Tabelul „Detalii anvelope” arata doar randurile pozitiilor selectate in schema (si anvelopele
+    // montate fara pozitie, care n-au loc in schema). Fara selectie, tabelul e strans.
+    var applyRowFilter = function (unitEl, animate) {
+        var detail = unitEl.querySelector('[data-ft-detail]');
+        var wrap = detail ? detail.querySelector('[data-ft-rows-wrap]') : null;
+        if (!wrap) { return; }
+        var selected = selectedIn(unitEl);
+        var startHeight = wrap.hidden ? 0 : wrap.offsetHeight;
+        var vehicles = {};
+        var anyRow = false;
+        wrap.querySelectorAll('tr.ft-tire-row').forEach(function (row) {
+            var position = row.dataset.ftPosition;
+            var orphan = position === '0' && row.dataset.ftTire !== '0';
+            var show = orphan || selected.indexOf(position) !== -1;
+            row.hidden = !show;
+            row.classList.toggle('is-selected', show && !orphan);
+            if (show) { anyRow = true; vehicles[row.dataset.ftVehicle] = true; }
+        });
+        wrap.querySelectorAll('tr.ft-axle-row').forEach(function (row) { row.hidden = true; });
+        wrap.querySelectorAll('tr.ft-member-row').forEach(function (row) { row.hidden = !vehicles[row.dataset.ftMemberVehicle]; });
+        var hint = detail.querySelector('[data-ft-select-hint]');
+        if (hint) { hint.hidden = selected.length > 0; }
+
+        if (wrap._ftAnim) { wrap._ftAnim.cancel(); wrap._ftAnim = null; wrap.style.overflow = ''; }
+        wrap.hidden = false;
+        var endHeight = anyRow ? wrap.offsetHeight : 0;
+        if (!animate || reducedMotion.matches || typeof wrap.animate !== 'function' || detail.hidden || Math.abs(endHeight - startHeight) < 2) {
+            wrap.hidden = !anyRow;
+            return;
         }
-        panel.innerHTML = html;
-        panel.hidden = false;
+        // Doar inaltimea containerului se animeaza (scurt), nu continutul tabelului.
+        wrap.style.overflow = 'hidden';
+        var animation = wrap.animate([{ height: startHeight + 'px' }, { height: endHeight + 'px' }], { duration: 210, easing: 'cubic-bezier(.2, .7, .3, 1)' });
+        wrap._ftAnim = animation;
+        animation.onfinish = function () {
+            if (wrap._ftAnim !== animation) { return; }
+            wrap._ftAnim = null;
+            wrap.style.overflow = '';
+            wrap.hidden = !anyRow;
+        };
     };
 
-    var clearSelection = function () {
-        if (selection.unit) {
-            var unitEl = findUnitEl(selection.unit);
-            if (unitEl) {
-                markSchema(unitEl, null);
-                unitEl.querySelectorAll('tr.ft-tire-row.is-selected').forEach(function (row) { row.classList.remove('is-selected'); });
-                var detail = unitEl.querySelector('[data-ft-detail]');
-                if (detail) {
-                    renderSelectedPanel(unitEl, detail, null);
-                }
-            }
+    var syncHash = function () {
+        var base = window.location.pathname + window.location.search;
+        var last = selection.positions[selection.positions.length - 1];
+        if (last && Number(last) > 0) {
+            window.history.replaceState(null, '', base + '#anvelopa-p' + last);
+        } else if (/^#anvelopa-/.test(window.location.hash)) {
+            window.history.replaceState(null, '', base);
         }
-        selection = { unit: null, position: null, tire: null };
-        if (/^#anvelopa-/.test(window.location.hash)) { window.history.replaceState(null, '', window.location.pathname + window.location.search); }
     };
 
-    // Selectia: aceeasi pozitie (id) in schema si in tabel.
-    var selectPosition = function (unitEl, positionId, options) {
+    // Aplica selectia pe un rand: schema, randurile tabelului, butonul „Schimbă pozițiile”.
+    // Primul click deschide randul; ultima deselectare il inchide din nou daca selectia l-a deschis.
+    var applySelection = function (unitEl, options) {
         options = options || {};
-        if (selection.unit && selection.unit !== unitEl.dataset.ftUnit) { clearSelection(); }
-        selection = { unit: unitEl.dataset.ftUnit, position: String(positionId), tire: null };
-        markSchema(unitEl, String(positionId));
-        if (Number(positionId) > 0) {
-            window.history.replaceState(null, '', window.location.pathname + window.location.search + '#anvelopa-p' + positionId);
+        var selected = selectedIn(unitEl);
+        markSchema(unitEl, selected);
+        syncHash();
+        if (moves) { moves.refresh(unitEl); }
+        if (selected.length === 0) {
+            if (unitEl._ftAutoOpened && unitEl.classList.contains('is-open')) {
+                setOpen(unitEl, false);
+            } else {
+                applyRowFilter(unitEl, true);
+            }
+            return Promise.resolve();
         }
-        return setOpen(unitEl, true).then(function (detail) {
-            showTab(detail, 'tires');
-            var found = findPosition(unitEl.dataset.ftUnit, positionId);
-            unitEl.querySelectorAll('tr.ft-tire-row').forEach(function (row) {
-                var hit = row.dataset.ftPosition === String(positionId) && Number(positionId) !== 0;
-                row.classList.toggle('is-selected', hit);
-                if (hit) {
-                    // Randul ascuns intr-o axa restransa se deschide.
-                    var axleToggle = detail.querySelector('[data-ft-axle-toggle="' + row.dataset.ftAxleOf + '"]');
-                    if (axleToggle && axleToggle.getAttribute('aria-expanded') === 'false') { toggleAxle(detail, axleToggle); }
-                    row.classList.remove('is-flash');
-                    void row.offsetWidth;
-                    row.classList.add('is-flash');
-                    if (options.scroll) { row.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }
-                }
-            });
-            renderSelectedPanel(unitEl, detail, found);
-            if (options.scroll && !options.keepSchemaInView) {
-                var panel = detail.querySelector('[data-ft-selected]');
-                if (panel && !panel.hidden) { panel.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }
+        var wasOpen = unitEl.classList.contains('is-open');
+        if (!wasOpen) { unitEl._ftAutoOpened = true; }
+        var detail = unitEl.querySelector('[data-ft-detail]');
+        var tablePanel = detail.querySelector('[data-ft-panel="tires"]');
+        var animate = wasOpen && detail.dataset.loaded === '1' && tablePanel !== null && !tablePanel.hidden;
+        return setOpen(unitEl, true).then(function (loaded) {
+            showTab(loaded, 'tires');
+            applyRowFilter(unitEl, animate);
+            if (options.scroll) {
+                var row = loaded.querySelector('tr.ft-tire-row[data-ft-position="' + selected[selected.length - 1] + '"]');
+                if (row && row.getBoundingClientRect().bottom > window.innerHeight) { row.scrollIntoView({ block: 'nearest', behavior: reducedMotion.matches ? 'auto' : 'smooth' }); }
             }
         }).catch(function () { /* mesajul e deja in rand */ });
     };
 
-    var toggleAxle = function (detail, button) {
-        var open = button.getAttribute('aria-expanded') !== 'true';
-        button.setAttribute('aria-expanded', open ? 'true' : 'false');
-        detail.querySelectorAll('tr[data-ft-axle-of="' + button.dataset.ftAxleToggle + '"]').forEach(function (row) { row.hidden = !open; });
+    var setSelection = function (unitEl, positionIds, options) {
+        var previous = selection.unit && selection.unit !== unitEl.dataset.ftUnit ? findUnitEl(selection.unit) : null;
+        var ids = [];
+        positionIds.forEach(function (id) { if (ids.indexOf(String(id)) === -1) { ids.push(String(id)); } });
+        selection = ids.length ? { unit: unitEl.dataset.ftUnit, positions: ids.slice(-2) } : { unit: null, positions: [] };
+        if (previous) { applySelection(previous); }
+        return applySelection(unitEl, options);
+    };
+
+    // Click pe o anvelopa: o adauga / o scoate din selectie; a treia o inlocuieste pe cea mai veche.
+    var togglePosition = function (unitEl, positionId, options) {
+        if (moves && moves.isBusy()) { return; }
+        var current = selectedIn(unitEl).slice();
+        var index = current.indexOf(String(positionId));
+        if (index !== -1) { current.splice(index, 1); } else { current.push(String(positionId)); }
+        setSelection(unitEl, current, options);
+    };
+
+    var clearSelection = function () {
+        var unitEl = selection.unit ? findUnitEl(selection.unit) : null;
+        selection = { unit: null, positions: [] };
+        if (unitEl) { applySelection(unitEl); } else { syncHash(); }
     };
 
     if (listEl) {
@@ -903,7 +908,7 @@
 
             var tireNode = event.target.closest('.ft-svg .ft-tire, .ft-svg .ft-pill');
             if (tireNode) {
-                selectPosition(unitEl, tireNode.getAttribute('data-ft-pos'), { scroll: true, keepSchemaInView: false });
+                togglePosition(unitEl, tireNode.getAttribute('data-ft-pos'), { scroll: true });
                 return;
             }
             if (event.target.closest('[data-ft-toggle]')) {
@@ -927,27 +932,14 @@
             }
             var tab = event.target.closest('[data-ft-tab]');
             if (tab) { showTab(detail, tab.dataset.ftTab); return; }
-            var axleToggle = event.target.closest('[data-ft-axle-toggle]');
-            if (axleToggle) { toggleAxle(detail, axleToggle); return; }
             var mountBtn = event.target.closest('[data-ft-mount]');
             if (mountBtn) { openMount(unitEl, mountBtn.dataset.ftMount); return; }
-            if (event.target.closest('[data-ft-clear]')) { clearSelection(); return; }
-            var unmountBtn = event.target.closest('[data-ft-unmount]');
-            if (unmountBtn) {
-                // Acelasi formular de demontare din meniul randului (cu confirmarea lui).
-                var row = detail.querySelector('tr.ft-tire-row[data-ft-tire="' + unmountBtn.dataset.ftUnmount + '"]');
-                var submit = row ? row.querySelector('form[action*="unmount_tire"] button[type="submit"]') : null;
-                if (submit) { submit.click(); }
-                return;
-            }
+            // Click pe randul unei anvelope selectate: aduce schema in vedere (selectia ramane).
             var tireRow = event.target.closest('tr.ft-tire-row');
             if (tireRow && !event.target.closest('button, a, input, select, label, form, .dropdown-menu, .modal')) {
-                if (tireRow.dataset.ftPosition !== '0') {
-                    selectPosition(unitEl, tireRow.dataset.ftPosition, { scroll: false });
-                    var schema = unitEl.querySelector('[data-ft-schema]');
-                    var rect = schema ? schema.getBoundingClientRect() : null;
-                    if (rect && (rect.bottom < 80 || rect.top > window.innerHeight)) { schema.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
-                }
+                var schema = unitEl.querySelector('[data-ft-schema]');
+                var rect = schema ? schema.getBoundingClientRect() : null;
+                if (rect && (rect.bottom < 80 || rect.top > window.innerHeight)) { schema.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
             }
         });
 
@@ -955,9 +947,9 @@
             var tireNode = event.target.closest && event.target.closest('.ft-svg .ft-tire');
             if (tireNode && (event.key === 'Enter' || event.key === ' ')) {
                 event.preventDefault();
-                selectPosition(tireNode.closest('[data-ft-unit]'), tireNode.getAttribute('data-ft-pos'), { scroll: true });
+                togglePosition(tireNode.closest('[data-ft-unit]'), tireNode.getAttribute('data-ft-pos'), { scroll: true });
             }
-            if (event.key === 'Escape' && selection.unit) { clearSelection(); }
+            if (event.key === 'Escape' && selection.unit && !(moves && moves.isBusy())) { clearSelection(); }
         });
     }
 
@@ -1007,6 +999,32 @@
         mountSelect.addEventListener('change', function () { mountModalEl.querySelector('[data-ft-mount-submit]').disabled = mountSelect.value === ''; });
     }
 
+    /* ------------------------------------------------------------------ Mutare / schimb in schema */
+
+    // Interactiunea (drag & drop, schimbul a doua anvelope, animatiile) e in tire-fleet-moves.js;
+    // de aici primeste datele randurilor, selectia comuna si reincarcarea dupa o salvare reusita.
+    if (window.FleetTireMoves && listEl && configEl.dataset.moveUrl) {
+        moves = window.FleetTireMoves.create({
+            listEl: listEl,
+            targetsUrl: configEl.dataset.targetsUrl,
+            moveUrl: configEl.dataset.moveUrl,
+            csrf: configEl.dataset.csrf || '',
+            findPosition: findPosition,
+            selectedIn: function (unitEl) { return selectedIn(unitEl).slice(); },
+            // Dupa salvare: datele randului se citesc din nou (schema + tabel), selectia ramane pe
+            // aceleasi pozitii; la mutare, pozitia sursa selectata devine pozitia tinta.
+            reloadUnit: function (unitEl, moved) {
+                if (moved && selection.unit === unitEl.dataset.ftUnit) {
+                    var index = selection.positions.indexOf(String(moved.from));
+                    if (index !== -1) { selection.positions[index] = String(moved.to); }
+                }
+                var detail = unitEl.querySelector('[data-ft-detail]');
+                detail.dataset.loaded = '';
+                return loadDetail(unitEl).then(function () { syncHash(); });
+            }
+        });
+    }
+
     /* ------------------------------------------------------------------ Pornire */
 
     setLayout(state.layout);
@@ -1042,7 +1060,7 @@
             apply(true);
         }
         if (positionMatch) {
-            selectPosition(unitEl, positionMatch[1], { scroll: true });
+            setSelection(unitEl, [positionMatch[1]], { scroll: true });
         } else {
             setOpen(unitEl, true).catch(function () {});
         }

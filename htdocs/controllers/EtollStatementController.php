@@ -3,14 +3,15 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/../models/EtollStatementModel.php';
 require_once __DIR__ . '/../services/EtollStatementSyncService.php';
+require_once __DIR__ . '/../services/EtollManualService.php';
 
 /**
  * Pagina "Situație eToll" (?page=etoll): sesiunile unei perioade (luna / an / interval) cu documentele
  * din ETOLL_SITUATIE_DOCUMENTE (implicit factura CC-P + anexa TA_10), alimentarile portofelului cu facturile lor, verificarea soldului si
  * exportul (Excel; ZIP cu Excel-ul si toate PDF-urile).
  *
- * Doar citeste: datele le aduce scripts/sync_etoll_situatie.php. Nu atinge importul
- * eToll -> Facturi -> cursa.
+ * Datele le aduce scripts/sync_etoll_situatie.php. Singura scriere: inregistrarile adaugate manual
+ * (manual_save / manual_delete, EtollManualService), pentru miscarile pe care API-ul eToll nu le-a adus.
  */
 class EtollStatementController
 {
@@ -32,6 +33,8 @@ class EtollStatementController
 
         try {
             EtollStatementModel::ensureSchema($this->db);
+            // etoll_sesiuni: si sesiunile manuale se scriu aici (asocierea la cursa le citeste de aici).
+            EtollImportService::ensureSchema($this->db);
             // facturi.service_km_id (asocierea sesiunilor cu Km service) e citita in sesiuni.
             (new InvoiceModel($this->db))->ensureFacturiSchema();
         } catch (Throwable $exception) {
@@ -57,6 +60,12 @@ class EtollStatementController
             case 'export_selected':
                 $this->requireExport();
                 $this->exportSelectedAction();
+                break;
+            case 'manual_save':
+                $this->manualSaveAction();
+                break;
+            case 'manual_delete':
+                $this->manualDeleteAction();
                 break;
             default:
                 $this->indexAction();
@@ -90,7 +99,145 @@ class EtollStatementController
             'quietBalance' => $this->model->latestQuietBalance(),
             'lastSyncAt' => $this->model->lastSyncAt(),
             'canExport' => can('etoll', 'export'),
+            'canManual' => can('etoll', 'manual'),
+            'manualStats' => $this->model->manualStats($period['de_la'], $period['pana_la']),
+            'fleetPlates' => $this->fleetPlates(),
+            // Formularul manual respins la validare: se redeschide cu valorile introduse.
+            'manualOld' => $this->takeManualOld(),
         ]);
+    }
+
+    // -------------------------------------------------------------------------
+    // Inregistrari manuale
+    // -------------------------------------------------------------------------
+
+    /** POST: adauga sau modifica o sesiune / alimentare manuala (tip = sesiune | alimentare, id la editare). */
+    private function manualSaveAction(): void
+    {
+        $back = $this->manualReturnUrl();
+        $this->requireManualPost($back);
+
+        $type = ($_POST['tip'] ?? '') === 'alimentare' ? 'alimentare' : 'sesiune';
+        $id = preg_replace('/[^a-z0-9-]/', '', (string) ($_POST['id'] ?? '')) ?: null;
+        $userId = isset($_SESSION['auth_user']['id']) ? (int) $_SESSION['auth_user']['id'] : null;
+        $service = new EtollManualService($this->db, $this->root);
+        $keepForm = function (string $error) use ($type, $id, $back): void {
+            $_SESSION['etoll_manual_old'] = ['tip' => $type, 'id' => (string) $id, 'eroare' => $error]
+                + array_map(static fn($v): string => is_scalar($v) ? (string) $v : '', array_diff_key($_POST, ['_token' => true]));
+            redirect($back);
+        };
+        try {
+            if ($type === 'alimentare') {
+                $txId = $service->saveTopup($_POST, $_FILES, $userId, $id);
+                $row = $this->model->manualRecord($txId);
+                $message = sprintf('Alimentarea manuală de %s lei din %s a fost %s.', format_number_ro((float) $row['suma'], 2), date('d.m.Y H:i', strtotime((string) $row['data'])), $id !== null ? 'modificată' : 'adăugată');
+            } else {
+                $txId = $service->saveSession($_POST, $_FILES, $userId, $id);
+                $row = $this->model->manualRecord($txId);
+                $message = sprintf('Sesiunea manuală %s de %s lei, închisă la %s, a fost %s.', $row['nr_inmatriculare'], format_number_ro((float) $row['suma'], 2), date('d.m.Y H:i', strtotime((string) $row['data'])), $id !== null ? 'modificată' : 'adăugată');
+                $invoice = (new InvoiceModel($this->db))->findBySourceKey('etoll:' . $txId);
+                if ($invoice !== null && $invoice['cursa_id'] !== null) {
+                    $message .= ' Taxa e pe cursa #' . (int) $invoice['cursa_id'] . '.';
+                } elseif ($invoice !== null && ($invoice['service_km_id'] ?? null) !== null) {
+                    $message .= ' Taxa e pe perioada Km service #' . (int) $invoice['service_km_id'] . '.';
+                } else {
+                    $message .= ' Nu s-a găsit încă o cursă pentru ea (se reverifică automat la importul eToll).';
+                }
+            }
+        } catch (InvalidArgumentException $exception) {
+            $keepForm($exception->getMessage());
+
+            return;
+        } catch (Throwable $exception) {
+            error_log('[EtollStatementController][manual_save] ' . $exception->getMessage());
+            $keepForm('Înregistrarea nu a putut fi salvată. Încearcă din nou.');
+
+            return;
+        }
+
+        // Inregistrarea in afara perioadei afisate: linkul duce la luna ei.
+        $day = substr((string) $row['data'], 0, 10);
+        $period = EtollStatementModel::period($this->returnQuery());
+        $visible = $day >= $period['de_la'] && $day <= $period['pana_la'];
+        flash_set('success', $message, $visible ? null : ['url' => build_query_url(['page' => 'etoll', 'perioada' => 'luna', 'luna' => substr($day, 0, 7)]), 'label' => 'Deschide luna ' . substr($day, 0, 7)]);
+        redirect($back);
+    }
+
+    private function manualDeleteAction(): void
+    {
+        $back = $this->manualReturnUrl();
+        $this->requireManualPost($back);
+        $id = preg_replace('/[^a-z0-9-]/', '', (string) ($_POST['id'] ?? '')) ?? '';
+        try {
+            $row = $this->model->manualRecord($id);
+            (new EtollManualService($this->db, $this->root))->delete($id);
+            flash_set('success', $row !== null && (string) $row['tip'] === 'sesiune'
+                ? 'Sesiunea manuală a fost ștearsă, împreună cu factura ei din Facturi.'
+                : 'Alimentarea manuală a fost ștearsă.');
+        } catch (InvalidArgumentException $exception) {
+            flash_set('warning', $exception->getMessage());
+        } catch (Throwable $exception) {
+            error_log('[EtollStatementController][manual_delete] ' . $exception->getMessage());
+            flash_set('danger', 'Înregistrarea nu a putut fi ștearsă.');
+        }
+        redirect($back);
+    }
+
+    private function requireManualPost(string $back): void
+    {
+        if (!can('etoll', 'manual')) {
+            access_deny_403();
+        }
+        if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST' || !verify_csrf_token($_POST['_token'] ?? null)) {
+            flash_set('danger', 'Token CSRF invalid. Reîncearcă.');
+            redirect($back);
+        }
+    }
+
+    /** Filtrele paginii de pe care s-a trimis formularul (return_query), fara alti parametri. */
+    private function returnQuery(): array
+    {
+        parse_str((string) ($_POST['return_query'] ?? ''), $query);
+        $allowed = ['perioada', 'luna', 'an', 'de_la', 'pana_la', 'nr', 'cap', 'cat', 'ben', 'tip', 'status', 'inchisa_de', 'inchisa_pana', 'tab', 'sort', 'dir'];
+
+        return array_intersect_key($query, array_flip($allowed));
+    }
+
+    private function manualReturnUrl(): string
+    {
+        return build_query_url(['page' => 'etoll'] + $this->returnQuery());
+    }
+
+    /** @return array<string, string>|null */
+    private function takeManualOld(): ?array
+    {
+        $old = $_SESSION['etoll_manual_old'] ?? null;
+        unset($_SESSION['etoll_manual_old']);
+
+        return is_array($old) ? $old : null;
+    }
+
+    /**
+     * Camioanele din flota pentru formularul manual (nr. auto in formatul eToll, fara spatii).
+     *
+     * @return array<int, array{plate: string, label: string}>
+     */
+    private function fleetPlates(): array
+    {
+        $rows = $this->db->query("
+            SELECT nr_inmatriculare, marca, model FROM vehicule
+            WHERE nr_inmatriculare IS NOT NULL AND nr_inmatriculare <> ''
+            ORDER BY nr_inmatriculare
+        ")->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        $plates = [];
+        foreach ($rows as $row) {
+            $plate = InvoiceTripMatcher::normalizePlate((string) $row['nr_inmatriculare']);
+            if ($plate !== '' && !isset($plates[$plate])) {
+                $plates[$plate] = ['plate' => $plate, 'label' => trim((string) ($row['marca'] ?? '') . ' ' . (string) ($row['model'] ?? ''))];
+            }
+        }
+
+        return array_values($plates);
     }
 
     // -------------------------------------------------------------------------

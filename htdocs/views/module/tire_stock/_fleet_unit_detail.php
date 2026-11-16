@@ -4,6 +4,8 @@
  * Detalii vehicul / Istoric / Interventii / Documente. Tabelul are cate un rand per pozitie din
  * configuratie (si anvelopele montate fara pozitie activa), cu meniul si modalele existente ale
  * anvelopei (_tire_actions.php). Randat de ModuleController::tireFleetUnitAction.
+ * In pagina se vad doar randurile pozitiilor selectate in schema (tire-fleet.js, applyRowFilter);
+ * anvelopele montate fara pozitie raman mereu vizibile (nu au loc in schema).
  *
  * Intrari: $unit (TireModel::buildFleetTireOverview, un element din units), $history
  *          (TireModel::getFleetAllocationHistory), variabilele cerute de _row_context.php.
@@ -34,15 +36,6 @@ $tireModalPrefix = 'ftTire';
 // Coloanele tabelului (si colspan-ul randurilor de grup).
 $columnCount = 14;
 $memberIds = array_map(static fn (array $member): int => (int) $member['vehicle_id'], $unit['members']);
-$historyClient = array_map(static fn (array $row): array => [
-    'tire_id' => (int) ($row['tire_id'] ?? 0),
-    'vehicle_id' => (int) ($row['vehicle_id'] ?? 0),
-    'plate' => (string) ($row['nr_inmatriculare'] ?? ''),
-    'position' => (string) ($row['position_code'] ?? ''),
-    'start' => (string) ($row['data_start'] ?? ''),
-    'end' => (string) ($row['data_end'] ?? ''),
-    'km' => $row['km_end'] !== null ? max(0, (int) $row['km_end'] - (int) ($row['km_start'] ?? 0)) : null,
-], $history);
 
 $renderTireRow = static function (array $member, ?array $position, ?array $tireRow = null) use ($statusBadges, $tireDot, $formatDate, $formatKm, $wearClass, $tireModalPrefix, $unit, $tireStatusOptions, $tireAxleTypeFormOptions, $targetVehicleTypeOptions, $renderVehicleCompatibilityPicker, $initialConditionOptions) {
     $status = $position !== null ? (string) $position['status'] : 'warn';
@@ -121,8 +114,8 @@ $renderTireRow = static function (array $member, ?array $position, ?array $tireR
 </div>
 
 <div class="ft-panel" role="tabpanel" data-ft-panel="tires">
-    <div class="ft-selected m-2" data-ft-selected hidden></div>
-    <div class="table-responsive">
+    <div class="ft-select-hint" data-ft-select-hint><i class="bi bi-hand-index" aria-hidden="true"></i><span>Click pe o anvelopă din schemă pentru detaliile ei; a doua anvelopă selectată permite <strong>Schimbă pozițiile</strong>. Trage o anvelopă montată pe o poziție liberă ca s-o muți.</span></div>
+    <div class="table-responsive ft-rows-wrap" data-ft-rows-wrap>
         <table class="table ft-tire-table align-middle">
             <thead>
             <tr>
@@ -157,7 +150,7 @@ $renderTireRow = static function (array $member, ?array $position, ?array $tireR
             <tbody>
             <?php foreach ($unit['members'] as $member): ?>
                 <?php if ($isAssembly): ?>
-                    <tr class="ft-member-row"><td colspan="<?= $columnCount ?>"><i class="bi <?= $member['role'] === 'tractor' ? 'bi-truck-front' : 'bi-box' ?> me-2" aria-hidden="true"></i><?= e($member['role_label'] . ' · ' . $member['plate']) ?><?= $member['make'] !== '' ? ' <span class="fw-normal text-muted">· ' . e($member['make']) . '</span>' : '' ?></td></tr>
+                    <tr class="ft-member-row" data-ft-member-vehicle="<?= e((string) $member['vehicle_id']) ?>"><td colspan="<?= $columnCount ?>"><i class="bi <?= $member['role'] === 'tractor' ? 'bi-truck-front' : 'bi-box' ?> me-2" aria-hidden="true"></i><?= e($member['role_label'] . ' · ' . $member['plate']) ?><?= $member['make'] !== '' ? ' <span class="fw-normal text-muted">· ' . e($member['make']) . '</span>' : '' ?></td></tr>
                 <?php endif; ?>
                 <?php
                 $byAxle = [];
@@ -263,4 +256,3 @@ $renderTireRow = static function (array $member, ?array $position, ?array $tireR
     </div>
 </div>
 
-<script type="application/json" data-ft-history><?= json_encode($historyClient, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP) ?></script>

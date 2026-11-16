@@ -35,8 +35,16 @@
     var notes = form.querySelector('[data-service-km-field="observatii"]');
     var counter = form.querySelector('[data-ksv2-count]');
     var registryModal = document.getElementById('ksv2RegistryModal');
+    // Ansamblu: semiremorca ramane in service, capul tractor se intoarce fara ea.
+    var stayBox = form.querySelector('[data-ksv2-stay]');
+    var stayCheck = form.querySelector('[data-ksv2-stay-check]');
+    var stayLabel = form.querySelector('[data-ksv2-stay-label]');
+    var stayHelp = form.querySelector('[data-ksv2-stay-help]');
+    var stayTrailer = form.querySelector('[data-ksv2-stay-trailer]');
+    var stayPickup = form.querySelector('[data-ksv2-stay-pickup]');
 
-    var state = { entryId: '', vehicleId: 0, target: 'main', rows: [], linked: null, results: [], active: -1 };
+    // trailerOverride = semiremorca lasata deja in service de intrarea modificata (poate nu mai e cuplata).
+    var state = { entryId: '', vehicleId: 0, target: 'main', rows: [], linked: null, results: [], active: -1, stay: false, trailerOverride: 0 };
     var infoCache = {};
     var LINK_DEFAULT = 'Se va genera o intervenție în Mentenanță pe baza acestor informații, sau se va lega la o intervenție existentă.';
 
@@ -92,6 +100,10 @@
     }
 
     function trailer() {
+        var left = state.trailerOverride ? vehicles[state.trailerOverride] : null;
+        if (left) {
+            return { id: state.trailerOverride, plate: left.plate, model: left.model, type: left.type };
+        }
         var vehicle = vehicles[state.vehicleId];
         return vehicle && vehicle.trailer ? vehicle.trailer : null;
     }
@@ -111,17 +123,20 @@
     }
 
     function vehicleInfo(vehicleId) {
+        var empty = { configured: {}, configured_trailer: {}, open_interventions: [], open_interventions_trailer: [] };
         if (!vehicleId) {
-            return Promise.resolve({ configured: {}, configured_trailer: {}, open_interventions: [] });
+            return Promise.resolve(empty);
         }
-        if (!infoCache[vehicleId]) {
-            var url = boot.info_url + (boot.info_url.indexOf('?') === -1 ? '?' : '&') + 'vehicle_id=' + encodeURIComponent(vehicleId);
-            infoCache[vehicleId] = fetch(url, { credentials: 'same-origin', headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' } })
+        var cacheKey = vehicleId + ':' + (state.trailerOverride || 0);
+        if (!infoCache[cacheKey]) {
+            var url = boot.info_url + (boot.info_url.indexOf('?') === -1 ? '?' : '&') + 'vehicle_id=' + encodeURIComponent(vehicleId)
+                + (state.trailerOverride ? '&trailer_id=' + encodeURIComponent(state.trailerOverride) : '');
+            infoCache[cacheKey] = fetch(url, { credentials: 'same-origin', headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' } })
                 .then(function (response) { return response.json(); })
-                .then(function (data) { return data && data.success ? data : { configured: {}, configured_trailer: {}, open_interventions: [] }; })
-                .catch(function () { return { configured: {}, configured_trailer: {}, open_interventions: [] }; });
+                .then(function (data) { return data && data.success ? data : empty; })
+                .catch(function () { return empty; });
         }
-        return infoCache[vehicleId];
+        return infoCache[cacheKey];
     }
 
     function showNotice(text, tone) {
@@ -146,7 +161,44 @@
             + '<button type="button" class="' + (state.target === 'main' ? 'is-active' : '') + '" data-ksv2-target-btn="main" aria-pressed="' + (state.target === 'main') + '">'
             + esc(typeLabel(main.type)) + ' ' + esc(main.plate) + '</button>'
             + '<button type="button" class="' + (state.target === 'trailer' ? 'is-active' : '') + '" data-ksv2-target-btn="trailer" aria-pressed="' + (state.target === 'trailer') + '">'
-            + 'Semiremorcă ' + esc(coupled.plate) + ' <small>(cuplată)</small></button>';
+            + 'Semiremorcă ' + esc(coupled.plate) + ' <small>(' + (state.stay ? 'rămâne în service' : 'cuplată') + ')</small></button>';
+    }
+
+    // ------------------------------------------------------------------ semiremorca ramane in service
+
+    function renderStay() {
+        var main = mainVehicle();
+        var coupled = trailer();
+        if (!stayBox) {
+            return;
+        }
+        if (!main || !coupled) {
+            stayBox.hidden = true;
+            stayCheck.checked = false;
+            state.stay = false;
+            stayPickup.hidden = true;
+            stayTrailer.value = '';
+            return;
+        }
+        stayBox.hidden = false;
+        stayLabel.textContent = 'Semiremorca ' + coupled.plate + ' rămâne în service';
+        stayHelp.textContent = 'Capul tractor ' + main.plate + ' o lasă la service și se întoarce fără ea; semiremorca stă în service până la ridicare.';
+        state.stay = !!stayCheck.checked;
+        stayPickup.hidden = !state.stay;
+        stayTrailer.value = state.stay ? String(coupled.id) : '';
+    }
+
+    if (stayCheck) {
+        stayCheck.addEventListener('change', function () {
+            renderStay();
+            // Lucrarile se fac pe semiremorca: componentele noi merg implicit pe ea.
+            state.target = state.stay ? 'trailer' : 'main';
+            renderTarget();
+            refreshLink();
+            if (searchInput.value) {
+                runSearch();
+            }
+        });
     }
 
     targetBox.addEventListener('click', function (event) {
@@ -405,7 +457,7 @@
             if (vehicleId !== state.vehicleId || state.linked) {
                 return;
             }
-            var open = info.open_interventions || [];
+            var open = (state.stay ? info.open_interventions_trailer : info.open_interventions) || [];
             if (!open.length) {
                 return;
             }
@@ -414,7 +466,7 @@
                 return '<option value="' + item.id + '"' + (String(item.id) === wanted ? ' selected' : '') + '>Leagă de #' + item.id + ' · ' + esc(item.status_label) + ' — ' + esc(item.descriere) + '</option>';
             }).join('');
             linkSelect.hidden = false;
-            linkText.textContent = 'Vehiculul are deja ' + (open.length === 1 ? 'o intervenție deschisă' : open.length + ' intervenții deschise') + ' în Mentenanță. Poți lega plecarea la service de ea în loc să creezi alta:';
+            linkText.textContent = (state.stay ? 'Semiremorca' : 'Vehiculul') + ' are deja ' + (open.length === 1 ? 'o intervenție deschisă' : open.length + ' intervenții deschise') + ' în Mentenanță. Poți lega plecarea la service de ea în loc să creezi alta:';
         });
     }
 
@@ -435,7 +487,8 @@
     vehicleSelect.addEventListener('change', function () {
         var previous = state.vehicleId;
         state.vehicleId = Number(vehicleSelect.value || 0);
-        state.target = 'main';
+        renderStay();
+        state.target = state.stay ? 'trailer' : 'main';
         renderTarget();
         revalidate(previous);
         refreshLink();
@@ -541,7 +594,12 @@
         values = values || {};
         state.entryId = String(values.id || '');
         state.vehicleId = Number(values.vehicle_id || 0);
-        state.target = 'main';
+        state.trailerOverride = values.semiremorca_ramane ? Number(values.semiremorca_id || 0) : 0;
+        if (stayCheck) {
+            stayCheck.checked = !!values.semiremorca_ramane;
+        }
+        renderStay();
+        state.target = state.stay ? 'trailer' : 'main';
         state.linked = values.interventie || null;
         state.rows = rowsFromValues(values.components);
         linkSelect.removeAttribute('data-ksv2-initial');
@@ -566,7 +624,11 @@
     }
     var initialLink = linkSelect.getAttribute('data-ksv2-initial') || '';
     var initialId = (form.querySelector('[data-service-km-field="id"]') || {}).value || '';
-    var initialValues = { id: initialId, vehicle_id: vehicleSelect.value, components: initialRows };
+    var initialValues = {
+        id: initialId, vehicle_id: vehicleSelect.value, components: initialRows,
+        semiremorca_ramane: stayCheck && stayCheck.checked ? '1' : '',
+        semiremorca_id: stayTrailer ? stayTrailer.value : ''
+    };
     if (initialId) {
         // Dupa o eroare la modificare: interventia legata si randurile blocate vin din lista.
         document.querySelectorAll('[data-service-km-edit]').forEach(function (button) {

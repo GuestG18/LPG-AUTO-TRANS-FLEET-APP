@@ -259,6 +259,10 @@ final class ReviziiV2Model
                 data_executie DATETIME NULL,
                 km_executie DECIMAL(12,1) NULL,
                 km_sursa VARCHAR(10) NULL,
+                km_can DECIMAL(12,1) NULL,
+                km_gps DECIMAL(12,1) NULL,
+                km_butuc DECIMAL(12,1) NULL,
+                km_cardoil DECIMAL(12,1) NULL,
                 ore_executie DECIMAL(10,1) NULL,
                 tehnician VARCHAR(120) NULL,
                 observatii TEXT NULL,
@@ -311,6 +315,10 @@ final class ReviziiV2Model
                 data_executie DATETIME NOT NULL,
                 km DECIMAL(12,1) NULL,
                 km_sursa VARCHAR(10) NULL,
+                km_can DECIMAL(12,1) NULL,
+                km_gps DECIMAL(12,1) NULL,
+                km_butuc DECIMAL(12,1) NULL,
+                km_cardoil DECIMAL(12,1) NULL,
                 ore DECIMAL(10,1) NULL,
                 cantitate DECIMAL(10,3) NULL,
                 um VARCHAR(10) NULL,
@@ -692,7 +700,7 @@ final class ReviziiV2Model
     public function completeRevisions(): array
     {
         $rows = $this->db->query(
-            "SELECT id, vehicle_id, tip, nr_x, nr_y, data_executie, km_executie, ore_executie FROM revizii_v2_lucrari
+            "SELECT id, vehicle_id, tip, nr_x, nr_y, data_executie, km_executie, km_sursa, km_can, km_gps, km_butuc, km_cardoil, ore_executie FROM revizii_v2_lucrari
              WHERE completa = 1 AND status = 'finalizata' ORDER BY vehicle_id, data_executie, id"
         )->fetchAll(PDO::FETCH_ASSOC);
         $result = [];
@@ -785,13 +793,14 @@ final class ReviziiV2Model
             return (int) $id;
         }
         $stmt = $this->db->prepare(
-            'INSERT INTO revizii_v2_executii (vehicle_id, operatie_id, lucrare_id, tip_executie, reseteaza, data_executie, km, km_sursa, ore, cantitate, um,
-                produs_id, miscare_id, cost, tehnician, observatii, idempotency_key, created_by)
-             VALUES (:v, :o, :l, :t, :r, :d, :km, :ks, :ore, :q, :um, :p, :m, :c, :teh, :obs, :k, :u)'
+            'INSERT INTO revizii_v2_executii (vehicle_id, operatie_id, lucrare_id, tip_executie, reseteaza, data_executie, km, km_sursa, km_can, km_gps, km_butuc, km_cardoil,
+                ore, cantitate, um, produs_id, miscare_id, cost, tehnician, observatii, idempotency_key, created_by)
+             VALUES (:v, :o, :l, :t, :r, :d, :km, :ks, :kc, :kg, :kb, :ko, :ore, :q, :um, :p, :m, :c, :teh, :obs, :k, :u)'
         );
         $stmt->execute([
             ':v' => $data['vehicle_id'], ':o' => $data['operatie_id'], ':l' => $data['lucrare_id'] ?? null, ':t' => $data['tip_executie'],
             ':r' => !empty($data['reseteaza']) ? 1 : 0, ':d' => $data['data_executie'], ':km' => $data['km'] ?? null, ':ks' => $data['km_sursa'] ?? null,
+            ':kc' => $data['km_can'] ?? null, ':kg' => $data['km_gps'] ?? null, ':kb' => $data['km_butuc'] ?? null, ':ko' => $data['km_cardoil'] ?? null,
             ':ore' => $data['ore'] ?? null, ':q' => $data['cantitate'] ?? null, ':um' => $data['um'] ?? null, ':p' => $data['produs_id'] ?? null,
             ':m' => $data['miscare_id'] ?? null, ':c' => $data['cost'] ?? null, ':teh' => $data['tehnician'] ?? null, ':obs' => $data['observatii'] ?? null,
             ':k' => $data['idempotency_key'], ':u' => $data['created_by'] ?? null,

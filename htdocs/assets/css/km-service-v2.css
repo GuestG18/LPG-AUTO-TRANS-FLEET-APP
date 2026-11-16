@@ -243,3 +243,12 @@
 /* Lista Km service: randul deschide fisa intrarii (cheltuieli, alimentari, eToll). */
 .service-km-row { cursor: pointer; }
 .service-km-row:hover > td { background-color: rgba(13, 110, 253, 0.04); }
+
+/* Ansamblu: semiremorca ramane in service, capul tractor se intoarce fara ea. */
+.ksv2-stay {
+    padding: 10px 12px;
+    border: 1px dashed #c3d4f5;
+    border-radius: 8px;
+    background: #f7faff;
+}
+.ksv2-stay .form-check { margin-bottom: 2px; }

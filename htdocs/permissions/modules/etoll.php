@@ -18,8 +18,11 @@ return [
     'actions'     => [
         'view'   => ['label' => 'Vizualizare situație și deschidere documente'],
         'export' => ['label' => 'Export Excel și arhivă ZIP cu documentele'],
+        'manual' => ['label' => 'Adăugare manuală sesiuni / alimentări (când lipsesc din eToll)', 'group' => 'operare'],
     ],
     'endpoints'   => [
+        'manual_save' => 'manual',
+        'manual_delete' => 'manual',
         'export_xlsx' => 'export',
         'export_zip'  => 'export',
         'export_selected' => 'export',

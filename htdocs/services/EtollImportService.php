@@ -2,6 +2,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/EtollApiClient.php';
+require_once __DIR__ . '/EtollManualService.php';
 require_once __DIR__ . '/EtollPdfMerger.php';
 require_once __DIR__ . '/EtollTripMatcher.php';
 require_once __DIR__ . '/InvoiceStorageService.php';
@@ -103,6 +104,11 @@ class EtollImportService
         $from = $to->modify('-' . max(1, $days) . ' days');
 
         $stats['sesiuni_noi'] = $this->syncSessions($from, $to);
+        // O sesiune adaugata manual pe care eToll a adus-o acum: factura manuala pleaca de pe cursa
+        // inainte ca pasul 3 sa creeze factura reala (altfel taxa ar aparea de doua ori).
+        foreach (EtollManualService::reconcile($this->db, $this->invoices) as $line) {
+            ($this->log)($line);
+        }
         $stats['documente_legate'] = $this->linkDocuments($from);
         [$stats['facturi_create'], $created, $errors] = $this->createInvoices();
         $stats['erori'] += $errors;
@@ -165,7 +171,7 @@ class EtollImportService
         // Sesiunile inca fara document, si cele mai vechi decat fereastra rularii (documentul
         // poate intarzia zile), dar nu mai vechi de PENDING_LOOKBACK_DAYS.
         $cutoff = (new DateTimeImmutable('now'))->modify('-' . self::PENDING_LOOKBACK_DAYS . ' days');
-        $stmt = $this->db->prepare('SELECT session_id, inchisa_la FROM etoll_sesiuni WHERE invoice_id IS NULL AND inchisa_la >= :cutoff ORDER BY inchisa_la ASC');
+        $stmt = $this->db->prepare("SELECT session_id, inchisa_la FROM etoll_sesiuni WHERE invoice_id IS NULL AND session_id NOT LIKE 'manual-%' AND inchisa_la >= :cutoff ORDER BY inchisa_la ASC");
         $stmt->bindValue(':cutoff', $cutoff->format('Y-m-d H:i:s'), PDO::PARAM_STR);
         $stmt->execute();
         $rows = $stmt->fetchAll(PDO::FETCH_KEY_PAIR) ?: [];
@@ -242,7 +248,7 @@ class EtollImportService
     {
         $sessions = $this->db->query("
             SELECT * FROM etoll_sesiuni
-            WHERE invoice_id IS NOT NULL AND factura_id IS NULL
+            WHERE invoice_id IS NOT NULL AND factura_id IS NULL AND session_id NOT LIKE 'manual-%'
             ORDER BY inchisa_la ASC
         ")->fetchAll(PDO::FETCH_ASSOC) ?: [];
 

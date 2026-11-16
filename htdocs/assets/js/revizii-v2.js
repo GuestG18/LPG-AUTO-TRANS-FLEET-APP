@@ -820,19 +820,47 @@
         var closed = ['finalizata', 'partiala', 'anulata'].indexOf(f.status) >= 0;
         $('rv2ExecTitle').innerHTML = (exec.scheduleOnly ? 'Programează' : 'Înregistrează') + ' Revizia <span class="rv2-pill' + (f.tip === 'Y' ? ' is-y' : '') + '">' + esc(f.label) + '</span> · ' + esc(v.nr)
             + ' <span class="small text-muted fw-normal">' + (f.km_tinta ? 'țintă ' + num(f.km_tinta) + ' km' : 'fără țintă km') + (f.id ? ' · lucrarea #' + f.id + ' · ' + esc((L.work || {})[f.status] || f.status) : ' · lucrare nouă') + '</span>';
-        var now = localInput(new Date());
+        // Data executiei: valoarea salvata, altfel acum (la inregistrare; la programare ramane goala).
+        var exAt = f.data_executie ? String(f.data_executie).replace('T', ' ') : (exec.scheduleOnly ? '' : localInput(new Date()).replace('T', ' '));
+        var exDate = exAt ? exAt.slice(0, 10) : '';
+        var exTime = exAt ? exAt.slice(11, 16) : '';
+        var kmVal = function (v) { return v !== null && v !== undefined && v !== '' ? Math.round(Number(v)) : ''; };
+        // Alegerea sursei de calcul conteaza doar daca a fost salvata pe lucrare (ciorna nu are alegere).
+        exec.srcTouched = !!f.id && ['can', 'gps', 'cardoil', 'butuc'].indexOf(f.km_sursa) >= 0;
         var html = '';
         if (f.info) { html += '<div class="rv2-note is-info"><i class="bi bi-signpost-split"></i><span>' + esc(f.info) + '</span></div>'; }
         if (f.tip === 'Y') { html += '<div class="rv2-note is-info"><i class="bi bi-info-circle"></i><span>Revizia Y este un singur eveniment: include operațiunile Reviziei X plus operațiunile suplimentare Y. După finalizarea completă, următoarea Y se calculează de la km-ul acestei revizii, iar X-urile după politica planului.</span></div>'; }
         html += '<div class="row g-2 mb-3">'
             + '<div class="col-md-2"><label class="form-label" for="rv2EDp">Data programată</label><input type="date" class="form-control" id="rv2EDp" value="' + esc(f.data_programata || '') + '"></div>'
-            + '<div class="col-md-3"><label class="form-label" for="rv2EDe">Data execuției</label><input type="datetime-local" class="form-control" id="rv2EDe" max="' + now + '" value="' + esc(f.data_executie ? String(f.data_executie).replace(' ', 'T').slice(0, 16) : '') + '"></div>'
-            + '<div class="col-md-2"><label class="form-label" for="rv2EKm">Km la execuție</label><input type="text" inputmode="decimal" class="form-control" id="rv2EKm" value="' + esc(f.km_executie !== null && f.km_executie !== undefined ? Math.round(f.km_executie) : '') + '"></div>'
-            + '<div class="col-md-1"><label class="form-label" for="rv2EKs">Sursă</label><select class="form-select" id="rv2EKs">' + ['can', 'gps', 'contor', 'manual'].map(function (s) { return '<option value="' + s + '"' + ((f.km_sursa || 'manual') === s ? ' selected' : '') + '>' + s.toUpperCase() + '</option>'; }).join('') + '</select></div>'
-            + '<div class="col-md-1"><label class="form-label" for="rv2EOre">Ore motor</label><input type="text" inputmode="decimal" class="form-control" id="rv2EOre" value="' + esc(f.ore_executie || '') + '" placeholder="opțional"></div>'
-            + '<div class="col-md-2"><label class="form-label" for="rv2ETeh">Tehnician</label><input type="text" class="form-control" id="rv2ETeh" maxlength="120" value="' + esc(f.tehnician || '') + '"></div>'
-            + '<div class="col-md-1"><label class="form-label" for="rv2ELab">Manoperă (lei)</label><input type="text" inputmode="decimal" class="form-control" id="rv2ELab" value="' + esc(f.cost_manopera || '') + '"></div>'
+            // Acelasi selector ca „Data si ora inceput” din Dispecer curse (datetime-picker-field.js).
+            + '<div class="col-md-3"><label class="form-label" for="rv2EDe">Data execuției</label>'
+            + '<div class="dispatcher-datetime-field" data-datetime-picker id="rv2EDeField"><div class="input-group dispatcher-datetime-input-group">'
+            + '<input type="text" class="form-control" id="rv2EDe" placeholder="dd/mm/yyyy HH:mm" inputmode="numeric" autocomplete="off" maxlength="16" aria-label="Data execuției" data-dtp-display>'
+            + '<button type="button" class="btn btn-outline-secondary" aria-label="Deschide calendarul si ora" aria-expanded="false" data-dtp-toggle><i class="bi bi-calendar3" aria-hidden="true"></i></button></div>'
+            + '<div class="dispatcher-datetime-popover" hidden data-dtp-popover></div>'
+            + '<input type="hidden" id="rv2EDeDate" value="' + esc(exDate) + '" data-dtp-date><input type="hidden" id="rv2EDeTime" value="' + esc(exTime) + '" data-dtp-time></div></div>'
+            + '<div class="col-md-2"><label class="form-label" for="rv2EOre">Ore motor</label><input type="text" inputmode="decimal" class="form-control" id="rv2EOre" value="' + esc(f.ore_executie || '') + '" placeholder="opțional"></div>'
+            + '<div class="col-md-3"><label class="form-label" for="rv2ETeh">Tehnician</label><input type="text" class="form-control" id="rv2ETeh" maxlength="120" value="' + esc(f.tehnician || '') + '"></div>'
+            + '<div class="col-md-2"><label class="form-label" for="rv2ELab">Manoperă (lei)</label><input type="text" inputmode="decimal" class="form-control" id="rv2ELab" value="' + esc(f.cost_manopera || '') + '"></div>'
             + '</div>';
+        // Kilometraj la executie: trei surse pastrate separat; una e folosita pentru calcul.
+        var kmSrc = exec.srcTouched ? f.km_sursa : '';
+        var kmField = function (key, title, sub, value, hintId) {
+            return '<div class="rv2-km-src" data-km-src="' + key + '"><div class="d-flex justify-content-between align-items-center gap-2">'
+                + '<label class="form-label mb-0" for="rv2EKm' + key + '">' + title + ' <span class="rv2-km-sub">' + sub + '</span></label>'
+                + '<label class="rv2-km-use" title="Km folosit pentru calculul scadențelor"><input type="radio" name="rv2EKmUse" value="' + key + '"' + (kmSrc === key ? ' checked' : '') + '> calcul</label></div>'
+                + '<input type="text" inputmode="numeric" class="form-control" id="rv2EKm' + key + '" value="' + esc(kmVal(value)) + '" placeholder="' + ({ butuc: 'completează manual', cardoil: 'din alimentări CardOil' }[key] || 'se încarcă din SAS') + '">'
+                + '<div class="rv2-km-hint" id="' + hintId + '">' + (key === 'butuc' ? 'Odometrul de la butuc, citit în atelier.' : '') + '</div></div>';
+        };
+        html += '<div class="rv2-km-box mb-3"><div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2"><div class="fw-semibold"><i class="bi bi-speedometer2 me-1"></i>Kilometraj la execuție</div>'
+            + '<div class="d-flex align-items-center gap-2"><span class="small text-muted" id="rv2EKmStatus"></span>'
+            + '<button type="button" class="btn btn-sm btn-outline-primary" id="rv2EKmReload"><i class="bi bi-arrow-repeat"></i> Reîncarcă SAS + CardOil</button></div></div>'
+            + '<div class="rv2-km-grid">'
+            + kmField('gps', 'Km GPS', 'SAS', f.km_gps, 'rv2EKmgpsHint')
+            + kmField('can', 'Km CAN', 'odometru bord', f.km_can, 'rv2EKmcanHint')
+            + kmField('cardoil', 'Km CardOil', 'tastat la pompă', f.km_cardoil, 'rv2EKmcardoilHint')
+            + kmField('butuc', 'Km butuc', 'manual', f.km_butuc, 'rv2EKmbutucHint')
+            + '</div><div class="small text-muted mt-2">Toate patru se salvează. Scadențele se calculează pe sursa bifată „calcul”, comparată cu aceeași sursă la revizia următoare (GPS cu GPS, CAN cu CAN).</div></div>';
         html += '<div class="d-flex justify-content-between align-items-center mb-2"><div class="fw-semibold">Operațiuni (' + f.items.length + ')</div><div class="d-flex gap-2">'
             + '<button type="button" class="btn btn-sm btn-outline-success" data-exec-all="completed"><i class="bi bi-check-all"></i> Marchează toate efectuate</button></div></div>';
         html += '<div class="rv2-exec-scroll"><table class="rv2-exec-table"><thead><tr><th>Operațiune</th><th>Tip</th><th style="width:130px">Rezultat</th><th>Motiv</th><th>Cant. est.</th><th style="width:90px">Cant. reală</th><th style="width:200px">Din stoc (recipient)</th><th style="width:100px">Cost mat. (lei)</th><th>Observații</th></tr></thead><tbody>';
@@ -869,7 +897,57 @@
         $('rv2ExecFinalize').hidden = exec.scheduleOnly || closed;
         $('rv2ExecSave').hidden = exec.scheduleOnly || closed;
         $('rv2ExecSchedule').hidden = closed;
+        if (window.FleetDateTimePicker) { window.FleetDateTimePicker.init($('rv2ExecBody')); }
+        exec.kmMoment = f.km_can || f.km_gps ? exAt : null;
+        if (!f.km_can && !f.km_gps && exDate && exTime && !closed) { lookupExecKm(); } else { autoKmSource(); }
         execSummary();
+    }
+    // Sursa folosita in calcul, cand operatorul nu a ales-o: CAN, altfel GPS, altfel butucul, altfel CardOil.
+    function autoKmSource() {
+        if (exec.srcTouched) { return; }
+        // CardOil e ultimul: e citirea de la alimentare, nu de la momentul executiei.
+        var pick = ['can', 'gps', 'butuc', 'cardoil'].filter(function (k) { return ($('rv2EKm' + k) || {}).value; })[0];
+        if (exec.form.vehicle && exec.form.vehicle.familie === 'semiremorca') { pick = 'butuc'; }
+        root.ownerDocument.querySelectorAll('input[name="rv2EKmUse"]').forEach(function (r) { r.checked = r.value === pick; });
+    }
+    function execMoment() {
+        var d = ($('rv2EDeDate') || {}).value || '';
+        var t = ($('rv2EDeTime') || {}).value || '';
+        return d && t ? d + ' ' + t : (d || '');
+    }
+    var kmLookupSeq = 0;
+    function lookupExecKm(force) {
+        var moment = execMoment();
+        var status = $('rv2EKmStatus');
+        if (!status) { return; }
+        if (moment.length < 16) { status.textContent = 'Alege data și ora execuției ca să se încarce km din SAS.'; return; }
+        // Fiecare citire SAS dureaza ~2 s: acelasi moment nu se recere (doar butonul „Reîncarcă”).
+        if (!force && exec.kmMoment === moment) { return; }
+        exec.kmMoment = moment;
+        var seq = ++kmLookupSeq;
+        status.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Se citesc SAS și CardOil pentru ' + date(moment, true) + '…';
+        get('v2_km_at', { vehicle_id: exec.form.vehicle_id, moment: moment }).then(function (j) {
+            if (seq !== kmLookupSeq) { return; }
+            ['can', 'gps', 'cardoil'].forEach(function (k) {
+                var r = j[k];
+                var input = $('rv2EKm' + k);
+                var hint = $('rv2EKm' + k + 'Hint');
+                if (r) {
+                    input.value = r.km;
+                    var icon = k === 'cardoil' ? 'bi-fuel-pump' : (r.stored ? 'bi-database' : 'bi-broadcast');
+                    hint.innerHTML = '<span class="' + (k === 'cardoil' ? 'text-primary' : (r.stored ? 'text-warning' : 'text-success')) + '"><i class="bi ' + icon + '"></i> ' + esc(r.label) + '</span>'
+                        + (r.note ? ' · ' + esc(r.note) : '') + (r.range ? ' (' + num(r.range[0]) + '–' + num(r.range[1]) + ' km)' : '');
+                } else {
+                    input.value = '';
+                    hint.textContent = { can: 'Fără odometru CAN în SAS pentru acest moment.', gps: 'Fără index GPS în SAS pentru acest moment.', cardoil: 'Nicio alimentare CardOil cu km în ±7 zile.' }[k];
+                }
+            });
+            status.textContent = j.message || 'Încărcat din SAS și CardOil pentru ' + date(moment, true) + '.';
+            autoKmSource();
+        }).catch(function (e) {
+            if (seq !== kmLookupSeq) { return; }
+            status.textContent = e.message;
+        });
     }
     function execPayload(status) {
         var f = exec.form;
@@ -885,7 +963,9 @@
         });
         return {
             id: f.id || null, vehicle_id: f.vehicle_id, status: status,
-            data_programata: $('rv2EDp').value, data_executie: $('rv2EDe').value, km_executie: $('rv2EKm').value, km_sursa: $('rv2EKs').value,
+            data_programata: $('rv2EDp').value, data_executie: execMoment(),
+            km_can: $('rv2EKmcan').value, km_gps: $('rv2EKmgps').value, km_cardoil: $('rv2EKmcardoil').value, km_butuc: $('rv2EKmbutuc').value,
+            km_sursa: (document.querySelector('input[name="rv2EKmUse"]:checked') || {}).value || '',
             ore_executie: $('rv2EOre').value, tehnician: $('rv2ETeh').value, cost_manopera: $('rv2ELab').value, observatii: $('rv2EObs').value, items: items
         };
     }
@@ -956,7 +1036,7 @@
             + '<div class="col-md-3"><label class="form-label" for="rv2OType">Tip execuție</label><select class="form-select" id="rv2OType">' + Object.keys(L.op_types || {}).map(function (k) { return '<option value="' + k + '">' + esc(L.op_types[k]) + '</option>'; }).join('') + '</select></div>'
             + '<div class="col-md-3"><label class="form-label" for="rv2ODate">Data</label><input type="datetime-local" class="form-control" id="rv2ODate" value="' + localInput(new Date()) + '" max="' + localInput(new Date()) + '"></div>'
             + '<div class="col-md-3"><label class="form-label" for="rv2OKm">Km</label><input type="text" inputmode="decimal" class="form-control" id="rv2OKm" value="' + (v.km && v.km.value ? Math.round(v.km.value) : '') + '"></div>'
-            + '<div class="col-md-2"><label class="form-label" for="rv2OKs">Sursă km</label><select class="form-select" id="rv2OKs">' + ['can', 'gps', 'contor', 'manual'].map(function (s) { return '<option value="' + s + '"' + ((v.km && v.km.source) === s ? ' selected' : '') + '>' + s.toUpperCase() + '</option>'; }).join('') + '</select></div>'
+            + '<div class="col-md-2"><label class="form-label" for="rv2OKs">Sursă km</label><select class="form-select" id="rv2OKs">' + [['can', 'CAN'], ['gps', 'GPS'], ['cardoil', 'CardOil'], ['butuc', 'Butuc']].map(function (s) { return '<option value="' + s[0] + '"' + ((v.km && v.km.source) === s[0] ? ' selected' : '') + '>' + s[1] + '</option>'; }).join('') + '</select></div>'
             + '<div class="col-md-2"><label class="form-label" for="rv2OOre">Ore motor</label><input type="text" inputmode="decimal" class="form-control" id="rv2OOre" placeholder="opțional"></div>'
             + '<div class="col-md-2"><label class="form-label" for="rv2OQty">Cantitate</label><input type="text" inputmode="decimal" class="form-control" id="rv2OQty"></div>'
             + '<div class="col-md-1"><label class="form-label" for="rv2OUm">UM</label><input type="text" class="form-control" id="rv2OUm" maxlength="10" value="L"></div>'
@@ -1120,7 +1200,8 @@
             var snap = o.snapshot || {};
             var html = '<button type="button" class="btn btn-sm btn-link px-0 mb-2" data-hist-back><i class="bi bi-arrow-left"></i> Înapoi la listă</button>'
                 + '<h6 class="fw-bold">Revizia ' + esc(o.label) + ' · ' + esc(o.vehicul ? o.vehicul.nr_inmatriculare : '') + ' · ' + esc((L.work || {})[o.status] || o.status) + '</h6>'
-                + '<dl class="rv2-kv mb-3"><dt>Data execuției</dt><dd>' + date(o.data_executie, true) + '</dd><dt>Km / ore</dt><dd>' + num(o.km_executie) + ' km (' + esc(String(o.km_sursa || '').toUpperCase()) + ')' + (o.ore_executie ? ' · ' + num(o.ore_executie, 1) + ' h' : '') + '</dd>'
+                + '<dl class="rv2-kv mb-3"><dt>Data execuției</dt><dd>' + date(o.data_executie, true) + '</dd><dt>Km / ore</dt><dd>' + num(o.km_executie) + ' km (calcul: ' + esc(String(o.km_sursa || '').toUpperCase()) + ')'
+                    + ' · GPS ' + num(o.km_gps) + ' · CAN ' + num(o.km_can) + ' · CardOil ' + num(o.km_cardoil) + ' · butuc ' + num(o.km_butuc) + (o.ore_executie ? ' · ' + num(o.ore_executie, 1) + ' h' : '') + '</dd>'
                 + '<dt>Secvență</dt><dd>' + (o.km_tinta ? 'țintă ' + num(o.km_tinta) + ' km · ' : '') + (Number(o.completa) ? 'revizie completă (a mutat referințele)' : 'nu a mutat referințele') + '</dd>'
                 + '<dt>Plan (instantaneu)</dt><dd>' + esc(snap.plan ? snap.plan.nume : '—') + (snap.sabloane ? ' · ' + snap.sabloane.map(function (s) { return esc(s.nume) + ' v' + s.versiune; }).join(', ') : '') + '</dd>'
                 + '<dt>Tehnician</dt><dd>' + esc(o.tehnician || '—') + '</dd><dt>Costuri</dt><dd>manoperă ' + lei(o.cost_manopera) + ' · materiale ' + lei(o.cost_materiale) + ' · total <b>' + lei(o.cost_total) + '</b></dd>'
@@ -1606,17 +1687,29 @@
                 }).catch(function (e) { toast(e.message, 'err'); });
                 return;
             }
+            if (t.id === 'rv2EDeDate') { lookupExecKm(); }
+            if (t.name === 'rv2EKmUse') { exec.srcTouched = true; }
             execSummary();
         }
     });
+    document.addEventListener('click', function (ev) {
+        if (ev.target.closest && ev.target.closest('#rv2EKmReload')) { lookupExecKm(true); }
+    });
     document.addEventListener('input', function (ev) {
+        if (ev.target.closest && /^rv2EKm(can|gps|cardoil|butuc)$/.test(ev.target.id || '')) { autoKmSource(); }
         if (ev.target.closest && ev.target.closest('#rv2ExecBody') && (ev.target.getAttribute('data-f') === 'cost_material' || ev.target.id === 'rv2ELab')) { execSummary(); }
     });
     function restoreExec(p) {
-        ['data_programata:rv2EDp', 'data_executie:rv2EDe', 'km_executie:rv2EKm', 'km_sursa:rv2EKs', 'ore_executie:rv2EOre', 'tehnician:rv2ETeh', 'cost_manopera:rv2ELab', 'observatii:rv2EObs'].forEach(function (m) {
+        ['data_programata:rv2EDp', 'km_can:rv2EKmcan', 'km_gps:rv2EKmgps', 'km_cardoil:rv2EKmcardoil', 'km_butuc:rv2EKmbutuc', 'ore_executie:rv2EOre', 'tehnician:rv2ETeh', 'cost_manopera:rv2ELab', 'observatii:rv2EObs'].forEach(function (m) {
             var kv = m.split(':');
             if (p[kv[0]] !== undefined && $(kv[1])) { $(kv[1]).value = p[kv[0]]; }
         });
+        if (p.data_executie && $('rv2EDeDate')) {
+            $('rv2EDeDate').value = p.data_executie.slice(0, 10);
+            $('rv2EDeTime').value = p.data_executie.slice(11, 16);
+            if (window.FleetDateTimePicker) { window.FleetDateTimePicker.sync($('rv2EDeField')); }
+        }
+        document.querySelectorAll('input[name="rv2EKmUse"]').forEach(function (r) { r.checked = r.value === p.km_sursa; });
     }
     function onBulk(kind) {
         var ids = Object.keys(state.checked).filter(function (k) { return state.checked[k]; });

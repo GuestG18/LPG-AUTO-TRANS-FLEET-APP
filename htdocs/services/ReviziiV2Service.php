@@ -3,6 +3,10 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/ReviziiV2Engine.php';
 require_once dirname(__DIR__) . '/models/ReviziiV2Model.php';
+require_once __DIR__ . '/SasFleetClient.php';
+require_once __DIR__ . '/SasCanKmService.php';
+require_once __DIR__ . '/TrailerSasKmService.php';
+require_once __DIR__ . '/ComponentSasKmService.php';
 
 /**
  * Revizii V2 — spatiul de lucru unic: planuri X / Y (secventa calculata din km), scadente pe operatiuni,
@@ -23,6 +27,13 @@ final class ReviziiV2Service
     private ?array $cache = null;
     /** @var array<string, ?float> */
     private array $readingAtCache = [];
+    /** Citirea km din SAS la un moment (injectabila in teste, fara apeluri live). */
+    private ?ComponentSasKmService $sasKm = null;
+
+    public function setSasKmService(ComponentSasKmService $service): void
+    {
+        $this->sasKm = $service;
+    }
 
     public function __construct(private PDO $db)
     {
@@ -543,14 +554,14 @@ final class ReviziiV2Service
         $yDone = count(array_filter($history, static fn (array $h): bool => $h['tip'] === 'Y')) + (int) ($assignment['y_efectuate'] ?? 0);
 
         $revBase = $lastRev !== null
-            ? ['data' => (string) $lastRev['data_executie'], 'km' => $lastRev['km_executie'] !== null ? (float) $lastRev['km_executie'] : null,
+            ? ['data' => (string) $lastRev['data_executie'], 'km' => $this->sourceKm($vehicle, $lastRev, 'km_executie', 'data_executie', $km),
                 'label' => ReviziiV2Engine::revisionLabel((string) $lastRev['tip'], (int) $lastRev['nr_x']), 'sursa' => 'revizie']
             : (!empty($assignment['referinta_data'])
                 ? ['data' => (string) $assignment['referinta_data'], 'km' => $assignment['referinta_km'] !== null ? (float) $assignment['referinta_km'] : null,
                     'label' => $initialX > 0 ? 'X' . $initialX : (!empty($assignment['ultima_y_data']) && $assignment['ultima_y_data'] === $assignment['referinta_data'] ? 'Y' : 'Referință'),
                     'sursa' => 'preluare']
                 : null);
-        $yBaseKm = $lastY !== null && $lastY['km_executie'] !== null ? (float) $lastY['km_executie']
+        $yBaseKm = $lastY !== null ? $this->sourceKm($vehicle, $lastY, 'km_executie', 'data_executie', $km)
             : ($lastY === null && $assignment !== [] && $assignment['ultima_y_km'] !== null ? (float) $assignment['ultima_y_km'] : null);
         $origin = $assignment !== [] && $assignment['origine_grila_km'] !== null ? (float) $assignment['origine_grila_km']
             : ($assignment !== [] && $assignment['referinta_km'] !== null ? (float) $assignment['referinta_km'] : ($history !== [] && $history[0]['km_executie'] !== null ? (float) $history[0]['km_executie'] : null));
@@ -686,6 +697,144 @@ final class ReviziiV2Service
     }
 
     /**
+     * Km-ul unei referinte (revizie / executie) pe ACEEASI sursa ca odometrul curent: CAN cu CAN,
+     * GPS cu GPS (indexul GPS SAS nu e calibrat pe bord, deci nu se amesteca). Butucul / km-ul
+     * manual sunt odometre reale, compatibile cu CAN. Fara valoare pe sursa curenta, se cauta
+     * citirea salvata a sursei curente la data referintei; altfel null (criteriul ramane nemasurat).
+     */
+    private function sourceKm(array $vehicle, array $row, string $field, string $dateField, array $km): ?float
+    {
+        $current = $km['source'] ?? null;
+        if (in_array($current, ['can', 'gps'], true) && isset($row['km_' . $current]) && $row['km_' . $current] !== null) {
+            return (float) $row['km_' . $current];
+        }
+        $source = $row['km_sursa'] ?? null;
+        $value = $row[$field] ?? null;
+        $compatible = $source === null || $source === '' || $source === $current || $current === 'contor' || $current === null
+            || ($current === 'can' && in_array($source, ['butuc', 'manual', 'cardoil'], true));
+        if ($value !== null && $compatible) {
+            return (float) $value;
+        }
+        if (in_array($current, ['can', 'gps'], true) && !empty($row[$dateField])) {
+            return $this->readingAt((int) $vehicle['id'], $current, (string) $row[$dateField]);
+        }
+
+        return null;
+    }
+
+    /**
+     * Km la momentul executiei unei revizii, pe surse separate: CAN si GPS din raportul SAS
+     * (un singur apel, ComponentSasKmService::kmBySource), cu fallback pe citirile salvate
+     * (Centru Kilometraj) cand SAS nu raspunde; CardOil = odometrul tastat la pompa la cea mai
+     * apropiata alimentare (fuel_fillups, sincronizarea CardOil existenta). Butucul e manual.
+     *
+     * @return array{can: ?array, gps: ?array, cardoil: ?array, message: ?string}
+     */
+    public function kmAtExecution(int $vehicleId, string $moment): array
+    {
+        $vehicle = $this->load()['vehicles'][$vehicleId] ?? throw new InvalidArgumentException('Vehicul inexistent sau inactiv.');
+        $ts = strtotime(str_replace('T', ' ', trim($moment)));
+        if ($ts === false) {
+            throw new InvalidArgumentException('Alege data și ora execuției.');
+        }
+        if ($ts > time() + 600) {
+            throw new InvalidArgumentException('Data execuției nu poate fi în viitor.');
+        }
+        if ($vehicle['familie'] === 'semiremorca') {
+            return ['can' => null, 'gps' => null, 'cardoil' => null, 'message' => 'Semiremorca nu are odometru în SAS și nu alimentează: completează km la butuc.'];
+        }
+        $result = ['can' => null, 'gps' => null, 'cardoil' => $this->cardOilAt((string) $vehicle['nr_inmatriculare'], $ts), 'message' => null];
+        $format = static fn (?array $r): ?array => $r === null ? null : [
+            'km' => (int) $r['km'], 'label' => (string) $r['source_label'], 'note' => (string) ($r['note'] ?? ''),
+            'moving' => !empty($r['moving']), 'range' => $r['range'] ?? null, 'stored' => false,
+        ];
+        try {
+            $sas = ($this->sasKm ?? new ComponentSasKmService($this->db))->kmBySource($vehicleId, date('Y-m-d H:i', $ts));
+            if (!empty($sas['ok'])) {
+                $result['can'] = $format($sas['can'] ?? null);
+                $result['gps'] = $format($sas['gps'] ?? null);
+                if ($result['can'] === null && $result['gps'] === null) {
+                    $result['message'] = 'SAS nu are deplasări în jurul acestui moment.';
+                }
+            } else {
+                $result['message'] = (string) ($sas['message'] ?? 'SAS nu a răspuns.');
+            }
+        } catch (Throwable $exception) {
+            error_log('[ReviziiV2][kmAtExecution] ' . $exception->getMessage());
+            $result['message'] = 'SAS Fleet indisponibil: s-au folosit citirile salvate.';
+        }
+        foreach (['can' => 'CAN', 'gps' => 'GPS'] as $source => $label) {
+            if ($result[$source] !== null) {
+                continue;
+            }
+            $stored = $this->readingAt($vehicleId, $source, date('Y-m-d H:i:s', $ts));
+            if ($stored !== null) {
+                $result[$source] = ['km' => (int) round($stored), 'label' => 'Citire salvată · ' . $label, 'note' => 'Ultima citire validă din cele 7 zile dinaintea momentului.',
+                    'moving' => false, 'range' => null, 'stored' => true];
+            }
+        }
+
+        return $result;
+    }
+
+    /** Fereastra in care o alimentare CardOil e considerata apropiata de momentul executiei. */
+    private const CARDOIL_WINDOW_DAYS = 7;
+
+    /**
+     * Odometrul tastat de sofer la pompa (CardOil) la alimentarea cea mai apropiata de moment:
+     * ultima dinainte (max. 7 zile), altfel prima de dupa. Nu e citirea de la momentul executiei:
+     * se afiseaza data, statia si distanta in timp. Valorile au deja corectiile din Carburanti.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function cardOilAt(string $plate, int $ts): ?array
+    {
+        if (!$this->tableExists('fuel_fillups')) {
+            return null;
+        }
+        $key = strtoupper((string) preg_replace('/[^A-Za-z0-9]/', '', $plate));
+        if ($key === '') {
+            return null;
+        }
+        $stmt = $this->db->prepare(
+            "SELECT id, fillup_datetime, odometer_km, station_name, driver_name, quantity_liters
+             FROM fuel_fillups
+             WHERE odometer_km > 0 AND source_type IN ('api', 'manual')
+               AND fillup_datetime BETWEEN :f AND :t
+               AND UPPER(REPLACE(REPLACE(REPLACE(vehicle_registration, ' ', ''), '-', ''), '.', '')) = :k
+             ORDER BY fillup_datetime, id"
+        );
+        $stmt->execute([
+            ':f' => date('Y-m-d H:i:s', $ts - self::CARDOIL_WINDOW_DAYS * 86400),
+            ':t' => date('Y-m-d H:i:s', $ts + self::CARDOIL_WINDOW_DAYS * 86400),
+            ':k' => $key,
+        ]);
+        $before = null;
+        $after = null;
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            if ((int) strtotime((string) $row['fillup_datetime']) <= $ts) {
+                $before = $row;
+            } elseif ($after === null) {
+                $after = $row;
+            }
+        }
+        $row = $before ?? $after;
+        if ($row === null) {
+            return null;
+        }
+        $diff = abs($ts - (int) strtotime((string) $row['fillup_datetime']));
+        $span = $diff >= 86400 ? round($diff / 86400, 1) . ' zile' : ($diff >= 3600 ? round($diff / 3600, 1) . ' ore' : max(1, (int) round($diff / 60)) . ' min');
+
+        return [
+            'km' => (int) round((float) $row['odometer_km']),
+            'label' => 'CardOil · km tastat la pompă',
+            'note' => 'Alimentare ' . date('d.m.Y H:i', (int) strtotime((string) $row['fillup_datetime'])) . ($row['station_name'] ? ' (' . $row['station_name'] . ')' : '')
+                . ', cu ' . $span . ($row === $before ? ' înainte' : ' după') . '.',
+            'moving' => false, 'range' => null, 'stored' => true, 'fillup_id' => (int) $row['id'],
+        ];
+    }
+
+    /**
      * Criteriul km spre o tinta absoluta (km odometru): interval = tinta − referinta, consumat =
      * odometru − referinta. Fara referinta, intervalul e masurat de la 0 (doar restul conteaza).
      *
@@ -746,7 +895,7 @@ final class ReviziiV2Service
         $rule = $operation['regula'];
         $own = $rule['interval_km'] !== null || $rule['interval_ore'] !== null || $rule['interval_luni'] !== null;
         $baseline = $lastReset !== null
-            ? ['data' => (string) $lastReset['data_executie'], 'km' => $lastReset['km'] !== null ? (float) $lastReset['km'] : null, 'sursa' => 'executie']
+            ? ['data' => (string) $lastReset['data_executie'], 'km' => $this->sourceKm($vehicle, $lastReset, 'km', 'data_executie', $km), 'sursa' => 'executie']
             : (!empty($assignment['referinta_data']) ? ['data' => (string) $assignment['referinta_data'], 'km' => $assignment['referinta_km'] !== null ? (float) $assignment['referinta_km'] : null, 'sursa' => 'preluare'] : null);
         $mode = 'proprie';
         $effective = $rule;
@@ -1156,16 +1305,28 @@ final class ReviziiV2Service
     /** @param array<string, mixed> $input */
     private function updateOrderFields(int $orderId, array $input, ?string $status): void
     {
+        // Patru surse pastrate separat (GPS SAS, CAN, CardOil, butuc manual); km_executie = sursa aleasa pentru calcul.
+        $kms = ['can' => self::decimal($input['km_can'] ?? null), 'gps' => self::decimal($input['km_gps'] ?? null),
+            'cardoil' => self::decimal($input['km_cardoil'] ?? null), 'butuc' => self::decimal($input['km_butuc'] ?? null)];
+        $source = in_array($input['km_sursa'] ?? '', ['can', 'gps', 'cardoil', 'butuc', 'contor', 'manual'], true) ? (string) $input['km_sursa'] : null;
+        $kmUsed = $source !== null && isset($kms[$source]) && $kms[$source] !== null ? $kms[$source] : self::decimal($input['km_executie'] ?? null);
+        if ($kmUsed !== null && $source !== null && array_key_exists($source, $kms) && $kms[$source] === null) {
+            $kms[$source] = $kmUsed; // un singur km trimis (API / teste): se pune si pe sursa lui
+        }
         $stmt = $this->db->prepare(
             'UPDATE revizii_v2_lucrari SET status = COALESCE(:s, status), data_programata = :dp, data_executie = :de, km_executie = :km, km_sursa = :ks,
-                ore_executie = :ore, tehnician = :teh, observatii = :obs, cost_manopera = :cm WHERE id = :id'
+                km_can = :kc, km_gps = :kg, km_butuc = :kb, km_cardoil = :ko, ore_executie = :ore, tehnician = :teh, observatii = :obs, cost_manopera = :cm WHERE id = :id'
         );
         $stmt->execute([
             ':s' => $status,
             ':dp' => self::date($input['data_programata'] ?? null),
             ':de' => self::dateTime($input['data_executie'] ?? null),
-            ':km' => self::decimal($input['km_executie'] ?? null),
-            ':ks' => in_array($input['km_sursa'] ?? '', ['can', 'gps', 'contor', 'manual'], true) ? $input['km_sursa'] : null,
+            ':km' => $kmUsed,
+            ':ks' => $source,
+            ':kc' => $kms['can'],
+            ':kg' => $kms['gps'],
+            ':kb' => $kms['butuc'],
+            ':ko' => $kms['cardoil'],
             ':ore' => self::decimal($input['ore_executie'] ?? null),
             ':teh' => self::text($input['tehnician'] ?? null, 120),
             ':obs' => self::text($input['observatii'] ?? null, 4000),
@@ -1232,7 +1393,7 @@ final class ReviziiV2Service
                 $errors[] = 'Data execuției nu poate fi în viitor.';
             }
             if ($order['km_executie'] === null && $vehicle['familie'] !== 'semiremorca') {
-                $errors[] = 'Completează km la execuție.';
+                $errors[] = 'Completează km pentru sursa bifată „calcul” (GPS / CAN / CardOil / butuc).';
             }
             if (trim((string) $order['tehnician']) === '') {
                 $errors[] = 'Completează tehnicianul responsabil.';
@@ -1303,6 +1464,7 @@ final class ReviziiV2Service
                     'vehicle_id' => (int) $order['vehicle_id'], 'operatie_id' => (int) $item['operatie_id'], 'lucrare_id' => $orderId,
                     'tip_executie' => (string) $item['tip_operatie'], 'reseteaza' => ReviziiV2Engine::resetsBaseline((string) $item['tip_operatie']),
                     'data_executie' => $at, 'km' => $order['km_executie'], 'km_sursa' => $order['km_sursa'], 'ore' => $order['ore_executie'],
+                    'km_can' => $order['km_can'], 'km_gps' => $order['km_gps'], 'km_butuc' => $order['km_butuc'], 'km_cardoil' => $order['km_cardoil'],
                     'cantitate' => $item['cantitate_reala'], 'um' => $item['um'], 'produs_id' => $item['produs_id'], 'miscare_id' => $movementId,
                     'cost' => $cost, 'tehnician' => $order['tehnician'], 'observatii' => $item['observatii'],
                     'idempotency_key' => 'rv2-item-' . $item['id'], 'created_by' => $userId,
@@ -1374,8 +1536,9 @@ final class ReviziiV2Service
             throw new InvalidArgumentException('Cantitatea este obligatorie când se ia din stoc.');
         }
         $km = self::decimal($input['km'] ?? null);
+        $kmSource = in_array($input['km_sursa'] ?? '', ['can', 'gps', 'cardoil', 'butuc', 'contor', 'manual'], true) ? (string) $input['km_sursa'] : 'butuc';
 
-        $id = $this->transaction(function () use ($vehicleId, $operationId, $operation, $type, $at, $key, $quantity, $recipient, $km, $input, $userId): int {
+        $id = $this->transaction(function () use ($vehicleId, $operationId, $operation, $type, $at, $key, $quantity, $recipient, $km, $kmSource, $input, $userId): int {
             $existing = $this->db->prepare('SELECT id FROM revizii_v2_executii WHERE idempotency_key = :k');
             $existing->execute([':k' => $key]);
             if (($found = $existing->fetchColumn()) !== false) {
@@ -1395,7 +1558,9 @@ final class ReviziiV2Service
             $executionId = $this->model->insertExecution([
                 'vehicle_id' => $vehicleId, 'operatie_id' => $operationId, 'lucrare_id' => null, 'tip_executie' => $type,
                 'reseteaza' => ReviziiV2Engine::resetsBaseline($type), 'data_executie' => $at, 'km' => $km,
-                'km_sursa' => in_array($input['km_sursa'] ?? '', ['can', 'gps', 'contor', 'manual'], true) ? $input['km_sursa'] : 'manual',
+                'km_sursa' => $kmSource,
+                'km_can' => $kmSource === 'can' ? $km : null, 'km_gps' => $kmSource === 'gps' ? $km : null, 'km_butuc' => in_array($kmSource, ['butuc', 'manual'], true) ? $km : null,
+                'km_cardoil' => $kmSource === 'cardoil' ? $km : null,
                 'ore' => self::decimal($input['ore'] ?? null), 'cantitate' => $quantity, 'um' => self::text($input['um'] ?? null, 10),
                 'produs_id' => self::posInt($input['produs_id'] ?? null), 'miscare_id' => $movementId, 'cost' => $cost,
                 'tehnician' => self::text($input['tehnician'] ?? null, 120), 'observatii' => self::text($input['observatii'] ?? null, 500),

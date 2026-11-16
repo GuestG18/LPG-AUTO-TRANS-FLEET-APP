@@ -232,5 +232,9 @@ $fleetFormatPercent = static fn ($value): string => $value === null ? '' : numbe
 <div hidden data-ft-config
      data-unit-url="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'tire_fleet_unit'])) ?>"
      data-candidates-url="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'tire_position_candidates'])) ?>"
-     data-mount-url="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'mount_tire'])) ?>"></div>
+     data-mount-url="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'mount_tire'])) ?>"
+     data-targets-url="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'tire_fleet_targets'])) ?>"
+     data-move-url="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'tire_fleet_move'])) ?>"
+     data-csrf="<?= e(csrf_token()) ?>"></div>
+<script src="<?= e(url('assets/js/tire-fleet-moves.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/tire-fleet-moves.js'))) ?>"></script>
 <script src="<?= e(url('assets/js/tire-fleet.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/tire-fleet.js'))) ?>"></script>

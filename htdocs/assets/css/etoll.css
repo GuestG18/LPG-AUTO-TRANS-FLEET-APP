@@ -1,5 +1,6 @@
 /* Situație eToll (?page=etoll) — stilurile paginii, toate sub .etoll-page. */
-.etoll-page {
+.etoll-page,
+.etoll-manual-modal {
     --et-blue: #1673f0;
     --et-blue-dark: #0e5bd0;
     --et-blue-soft: #eaf2fe;
@@ -568,3 +569,31 @@
 /* Sesiune pe drumul la / de la service (facturi.service_km_id), in coloana Beneficiar. */
 .etoll-service-km { white-space: nowrap; }
 .etoll-service-km .bi { opacity: .7; }
+
+/* ---------- Inregistrari manuale (sesiuni / alimentari lipsa din eToll) ---------- */
+/* Variabilele vin de pe .etoll-manual-modal (modalul e mutat in <body>); doar .etoll-page are layout-ul de pagina. */
+.etoll-manual-modal { display: none; gap: 0; font-size: .875rem; }
+.etoll-badge--manual { background: #f1e8ff; color: #6a2fc2; border: 1px solid #dcc8fb; letter-spacing: .02em; text-transform: uppercase; font-size: .66rem; }
+.etoll-check-cell { white-space: nowrap; }
+.etoll-row-actions { display: inline-flex; gap: 2px; margin-left: 6px; vertical-align: middle; }
+.etoll-icon-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 26px; height: 26px; padding: 0; border: 1px solid transparent; border-radius: 7px;
+    background: transparent; color: var(--et-ink-2); cursor: pointer;
+}
+.etoll-icon-btn:hover { background: var(--et-blue-soft); border-color: var(--et-blue-line); color: var(--et-blue-dark); }
+.etoll-icon-btn.is-danger:hover { background: var(--et-danger-soft); border-color: #f5b5b5; color: var(--et-danger); }
+.etoll-icon-btn:focus-visible { outline: 2px solid var(--et-blue); outline-offset: 1px; }
+.etoll-manual-modal .modal-content { border: 0; border-radius: var(--et-radius); color: var(--et-ink); }
+.etoll-manual-modal .modal-title { font-weight: 700; font-size: 1.05rem; }
+.etoll-manual__intro { margin: 0 0 12px; color: var(--et-muted); font-size: .84rem; line-height: 1.45; }
+.etoll-manual__type { max-width: 440px; margin-bottom: 16px; }
+.etoll-manual__type span .bi { margin-right: 4px; }
+.etoll-manual__type input:disabled + span { opacity: .45; cursor: not-allowed; }
+.etoll-manual__part { min-width: 0; margin: 0; padding: 0; border: 0; }
+.etoll-manual__part .form-label { margin-bottom: 4px; font-size: .8rem; font-weight: 600; color: var(--et-ink-2); }
+.etoll-manual__part .form-text { font-size: .74rem; }
+.etoll-manual__vat { min-height: 1.2em; margin-top: -6px; font-size: .8rem; color: var(--et-ok); font-variant-numeric: tabular-nums; }
+.etoll-manual__vat.is-warn { color: var(--et-danger); }
+.etoll-manual__foot { margin: 14px 0 0; padding-top: 10px; border-top: 1px dashed var(--et-line); color: var(--et-muted); font-size: .78rem; }
+.etoll-manual-modal .modal-footer .etoll-btn { height: 36px; }

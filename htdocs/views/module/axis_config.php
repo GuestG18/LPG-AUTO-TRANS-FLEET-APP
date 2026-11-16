@@ -713,7 +713,7 @@ $showVehicleColumnInPositions = $axisVehicleView === 'ansamblu';
             <div class="text-muted">Anvelope &gt; Configurarea axelor</div>
         </div>
         <div class="d-flex flex-wrap gap-2">
-            <a class="btn btn-outline-secondary" href="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'tire_stock'])) ?>">Stoc anvelope</a>
+            <a class="btn btn-outline-secondary" href="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'tire_stock'])) ?>">Anvelope</a>
             <?php if ($record !== null): ?>
                 <a class="btn btn-outline-primary" href="<?= e(build_query_url(['page' => 'vehicule', 'action' => 'show', 'id' => (int) $record['id']])) ?>">Detalii vehicul</a>
             <?php endif; ?>

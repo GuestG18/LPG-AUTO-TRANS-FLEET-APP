@@ -46,17 +46,28 @@ class VehicleServiceKmModel extends BaseModel
      */
     public function getRecentEntries(int $days = 90): array
     {
+        // Semiremorca lasata in service: intrarea capului tractor ramane in lista cat timp
+        // semiremorca ei e afisata (formularul se deschide pe intrarea capului tractor).
+        $since = date('Y-m-d', strtotime('-' . max(1, $days) . ' days'));
         $stmt = $this->db->prepare("
-            SELECT s.*, v.nr_inmatriculare, v.marca, v.model, d.nume AS sofer_nume, u.nume AS created_by_name
+            SELECT s.*, v.nr_inmatriculare, v.marca, v.model, v.tip_vehicul, d.nume AS sofer_nume, u.nume AS created_by_name,
+                   pv.nr_inmatriculare AS parent_nr_inmatriculare, p.vehicle_id AS parent_vehicle_id,
+                   c.id AS semi_service_km_id, c.vehicle_id AS semi_vehicle_id, cv.nr_inmatriculare AS semi_nr_inmatriculare,
+                   c.data_intoarcere AS semi_data_intoarcere, c.ora_intoarcere AS semi_ora_intoarcere
             FROM vehicule_service_km s
             INNER JOIN vehicule v ON v.id = s.vehicle_id
             LEFT JOIN soferi d ON d.id = s.driver_id
             LEFT JOIN utilizatori u ON u.id = s.created_by
+            LEFT JOIN vehicule_service_km p ON p.id = s.parent_service_km_id
+            LEFT JOIN vehicule pv ON pv.id = p.vehicle_id
+            LEFT JOIN vehicule_service_km c ON c.parent_service_km_id = s.id
+            LEFT JOIN vehicule cv ON cv.id = c.vehicle_id
             WHERE s.data_intoarcere IS NULL
                OR s.data_intoarcere >= :since
+               OR (c.id IS NOT NULL AND (c.data_intoarcere IS NULL OR c.data_intoarcere >= :since_semi))
             ORDER BY (s.data_intoarcere IS NULL) DESC, s.data_plecare DESC, s.id DESC
         ");
-        $stmt->execute([':since' => date('Y-m-d', strtotime('-' . max(1, $days) . ' days'))]);
+        $stmt->execute([':since' => $since, ':since_semi' => $since]);
         $rows = array_map([self::class, 'withDuration'], $stmt->fetchAll(PDO::FETCH_ASSOC));
 
         $ids = array_map(static fn (array $row): int => (int) $row['id'], $rows);
@@ -76,12 +87,19 @@ class VehicleServiceKmModel extends BaseModel
     {
         $stmt = $this->db->prepare("
             SELECT s.*, v.nr_inmatriculare, v.marca, v.model, d.nume AS sofer_nume,
-                   u.nume AS created_by_name, uu.nume AS updated_by_name
+                   u.nume AS created_by_name, uu.nume AS updated_by_name,
+                   pv.nr_inmatriculare AS parent_nr_inmatriculare,
+                   c.id AS semi_service_km_id, cv.nr_inmatriculare AS semi_nr_inmatriculare,
+                   c.data_intoarcere AS semi_data_intoarcere, c.ora_intoarcere AS semi_ora_intoarcere
             FROM vehicule_service_km s
             INNER JOIN vehicule v ON v.id = s.vehicle_id
             LEFT JOIN soferi d ON d.id = s.driver_id
             LEFT JOIN utilizatori u ON u.id = s.created_by
             LEFT JOIN utilizatori uu ON uu.id = s.updated_by
+            LEFT JOIN vehicule_service_km p ON p.id = s.parent_service_km_id
+            LEFT JOIN vehicule pv ON pv.id = p.vehicle_id
+            LEFT JOIN vehicule_service_km c ON c.parent_service_km_id = s.id
+            LEFT JOIN vehicule cv ON cv.id = c.vehicle_id
             WHERE s.id = :id
         ");
         $stmt->execute([':id' => $id]);
@@ -433,6 +451,71 @@ class VehicleServiceKmModel extends BaseModel
         return (int) $this->db->lastInsertId();
     }
 
+    /** Randul semiremorcii lasate in service de intrarea capului tractor $parentId (null = nu a ramas). */
+    public function findTrailerStay(int $parentId): ?array
+    {
+        if ($parentId <= 0) {
+            return null;
+        }
+        $stmt = $this->db->prepare('SELECT * FROM vehicule_service_km WHERE parent_service_km_id = :parent_id LIMIT 1');
+        $stmt->execute([':parent_id' => $parentId]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        return $row === false ? null : $row;
+    }
+
+    /**
+     * Semiremorca ramane in service, capul tractor se intoarce fara ea: perioada ei de service e un
+     * rand propriu (vehicle_id = semiremorca, 0 km - nu are GPS si nu se deplaseaza singura), cu
+     * plecarea, service-ul si sesizarea copiate din intrarea capului tractor. Intoarcerea ei e
+     * ridicarea din service ($pickupDate null = inca in service).
+     */
+    public function saveTrailerStay(array $parent, int $trailerId, ?string $pickupDate, ?string $pickupTime, ?int $userId): int
+    {
+        $existing = $this->findTrailerStay((int) $parent['id']);
+        $params = [
+            ':vehicle_id' => $trailerId,
+            ':driver_id' => $parent['driver_id'] !== null ? (int) $parent['driver_id'] : null,
+            ':data_plecare' => (string) $parent['data_plecare'],
+            ':ora_plecare' => $parent['ora_plecare'],
+            ':data_intoarcere' => $pickupDate,
+            ':ora_intoarcere' => $pickupDate !== null ? $pickupTime : null,
+            ':service_nume' => $parent['service_nume'],
+            ':motiv' => $parent['motiv'],
+            ':observatii' => $parent['observatii'],
+            ':prioritate' => (string) ($parent['prioritate'] ?? 'normala'),
+        ];
+        if ($existing !== null) {
+            $params[':updated_by'] = $userId;
+            $params[':updated_at'] = date('Y-m-d H:i:s');
+            $params[':id'] = (int) $existing['id'];
+            $this->db->prepare('
+                UPDATE vehicule_service_km
+                SET vehicle_id = :vehicle_id, driver_id = :driver_id,
+                    data_plecare = :data_plecare, ora_plecare = :ora_plecare,
+                    data_intoarcere = :data_intoarcere, ora_intoarcere = :ora_intoarcere,
+                    service_nume = :service_nume, motiv = :motiv, observatii = :observatii,
+                    prioritate = :prioritate, updated_by = :updated_by, updated_at = :updated_at
+                WHERE id = :id
+            ')->execute($params);
+
+            return (int) $existing['id'];
+        }
+        $params[':parent_id'] = (int) $parent['id'];
+        $params[':created_by'] = $userId;
+        $params[':created_at'] = date('Y-m-d H:i:s');
+        $this->db->prepare('
+            INSERT INTO vehicule_service_km
+                (vehicle_id, parent_service_km_id, driver_id, data_plecare, ora_plecare, data_intoarcere, ora_intoarcere,
+                 km, service_nume, motiv, observatii, prioritate, created_by, created_at)
+            VALUES
+                (:vehicle_id, :parent_id, :driver_id, :data_plecare, :ora_plecare, :data_intoarcere, :ora_intoarcere,
+                 0, :service_nume, :motiv, :observatii, :prioritate, :created_by, :created_at)
+        ')->execute($params);
+
+        return (int) $this->db->lastInsertId();
+    }
+
     /** Service-urile folosite deja (sugestii in formular), cele mai recente primele. */
     public function knownServiceNames(int $limit = 40): array
     {
@@ -565,9 +648,12 @@ class VehicleServiceKmModel extends BaseModel
                 (SELECT COUNT(*) FROM information_schema.COLUMNS
                   WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'vehicule_service_km' AND COLUMN_NAME = 'prioritate') AS priority_column,
                 (SELECT COUNT(*) FROM information_schema.TABLES
-                  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'service_km_cheltuieli') AS expense_table
+                  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'service_km_cheltuieli') AS expense_table,
+                (SELECT COUNT(*) FROM information_schema.COLUMNS
+                  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'vehicule_service_km' AND COLUMN_NAME = 'parent_service_km_id') AS parent_column
         ")->fetch(PDO::FETCH_ASSOC) ?: [];
-        if ((int) ($state['service_table'] ?? 0) > 0 && (int) ($state['priority_column'] ?? 0) > 0 && (int) ($state['expense_table'] ?? 0) > 0) {
+        if ((int) ($state['service_table'] ?? 0) > 0 && (int) ($state['priority_column'] ?? 0) > 0 && (int) ($state['expense_table'] ?? 0) > 0
+            && (int) ($state['parent_column'] ?? 0) > 0) {
             self::$schemaReady = true;
             return;
         }
@@ -606,6 +692,20 @@ class VehicleServiceKmModel extends BaseModel
             $this->db->exec(
                 "ALTER TABLE vehicule_service_km
                  ADD COLUMN prioritate ENUM('scazuta','normala','ridicata','critica') NOT NULL DEFAULT 'normala' AFTER observatii"
+            );
+        }
+        // Semiremorca lasata in service: randul ei (vehicle_id = semiremorca) arata spre intrarea
+        // capului tractor care a dus-o; se sterge odata cu ea.
+        $parentColumn = $this->db->query(
+            "SELECT COUNT(*) FROM information_schema.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'vehicule_service_km' AND COLUMN_NAME = 'parent_service_km_id'"
+        )->fetchColumn();
+        if ((int) $parentColumn === 0) {
+            $this->db->exec(
+                "ALTER TABLE vehicule_service_km
+                 ADD COLUMN parent_service_km_id BIGINT UNSIGNED NULL AFTER vehicle_id,
+                 ADD UNIQUE KEY uq_service_km_parent (parent_service_km_id),
+                 ADD CONSTRAINT fk_service_km_parent FOREIGN KEY (parent_service_km_id) REFERENCES vehicule_service_km(id) ON DELETE CASCADE"
             );
         }
         // Cheltuielile perioadei de service (ca "Adauga cheltuiala" de pe cursa). factura_id = randul

@@ -845,14 +845,20 @@ class InterventionWorkflowModel extends BaseModel
      * registru, vehiculul componentei e vehiculul insusi sau semiremorca lui cuplata, iar
      * ramura (Sasiu / Rezervor) exista pe tipul acelui vehicul.
      *
+     * $trailerId = semiremorca lasata in service de acest vehicul: ea ia locul cuplajului curent
+     * (dupa ce a ramas in service, capul tractor poate fi cuplat deja cu alta).
+     *
      * @param array<int,array<string,mixed>> $rows
      * @return array<int,array{item_id:int,key:string,primary:string,position:string,operation:string,vehicle_id:?int}>
      */
-    public function normalizeDispatcherComponents(int $vehicleId, array $rows): array
+    public function normalizeDispatcherComponents(int $vehicleId, array $rows, ?int $trailerId = null): array
     {
         $catalog = (new AutoComponentCatalogService($this->db))->components(true);
         $context = $this->vehicleContext();
         $vehicle = $context[$vehicleId] ?? null;
+        if ($vehicle !== null && $trailerId !== null && $trailerId > 0 && isset($context[$trailerId])) {
+            $vehicle['trailer'] = ['id' => $trailerId] + array_diff_key($context[$trailerId], ['trailer' => true]);
+        }
         $result = [];
         foreach (array_slice($rows, 0, 50) as $row) {
             if (!is_array($row)) {
@@ -1000,6 +1006,50 @@ class InterventionWorkflowModel extends BaseModel
             }
         }
         return false;
+    }
+
+    /**
+     * Muta interventia unei intrari Km service pe alta intrare / alt vehicul din acelasi ansamblu
+     * (cap tractor <-> semiremorca lasata in service). Lucrarile isi pastreaza vehiculul real:
+     * vehicle_id NULL inseamna "vehiculul interventiei", deci se rescrie relativ la noul vehicul.
+     * Interventia inchisa (finalizata / anulata / convertita) nu se muta.
+     */
+    public function moveServiceKmIntervention(int $interventionId, int $serviceKmId, int $vehicleId, ?int $userId, string $note): bool
+    {
+        $intervention = $this->getIntervention($interventionId);
+        if ($intervention === null || !empty($intervention['converted_maintenance_id'])
+            || in_array($intervention['status_interventie'], ['finalizata', 'anulata'], true)) {
+            return false;
+        }
+        $oldVehicleId = (int) $intervention['vehicle_id'];
+        if ($oldVehicleId === $vehicleId && (int) ($intervention['service_km_id'] ?? 0) === $serviceKmId) {
+            return true;
+        }
+        $own = !$this->db->inTransaction();
+        if ($own) {
+            $this->db->beginTransaction();
+        }
+        try {
+            if ($oldVehicleId !== $vehicleId) {
+                $this->db->prepare('UPDATE mentenanta_interventii_lucrari SET vehicle_id = :old WHERE intervention_id = :id AND vehicle_id IS NULL')
+                    ->execute([':old' => $oldVehicleId, ':id' => $interventionId]);
+                $this->db->prepare('UPDATE mentenanta_interventii_lucrari SET vehicle_id = NULL WHERE intervention_id = :id AND vehicle_id = :new')
+                    ->execute([':new' => $vehicleId, ':id' => $interventionId]);
+            }
+            $this->db->prepare(
+                'UPDATE mentenanta_interventii_programate SET service_km_id = :sk, vehicle_id = :v, updated_at = :u, updated_by = :b WHERE id = :id'
+            )->execute([':sk' => $serviceKmId, ':v' => $vehicleId, ':u' => date('Y-m-d H:i:s'), ':b' => $userId, ':id' => $interventionId]);
+            $this->logEvent($interventionId, 'km_service', $note, ['service_km_id' => $serviceKmId, 'vehicle_id' => $vehicleId, 'vehicle_id_anterior' => $oldVehicleId], $userId);
+            if ($own) {
+                $this->db->commit();
+            }
+        } catch (Throwable $exception) {
+            if ($own && $this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            throw $exception;
+        }
+        return true;
     }
 
     /** Interventia legata de o intrare Km service (service_km_id e unic). */

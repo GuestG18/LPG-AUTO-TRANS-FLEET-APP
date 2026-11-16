@@ -69,6 +69,18 @@ class EtollStatementModel
     /** Valoarea de filtru pentru "fara" (fara beneficiar, fara categorie, fara cursa...). */
     public const NONE = '0';
 
+    /**
+     * Prefixul inregistrarilor adaugate manual (tx_id si session_id): sesiuni / alimentari pe care
+     * API-ul eToll nu le-a adus. Sincronizarea nu le atinge; cand eToll aduce totusi aceeasi
+     * miscare, EtollManualService::reconcile() o marcheaza "inlocuita_de" si ea iese din calcule.
+     */
+    public const MANUAL_PREFIX = 'manual-';
+
+    public static function isManual(?string $id): bool
+    {
+        return $id !== null && str_starts_with($id, self::MANUAL_PREFIX);
+    }
+
     public function __construct(private PDO $db)
     {
     }
@@ -87,6 +99,11 @@ class EtollStatementModel
             ['etoll_documente', 'cota_tva', 'DECIMAL(5,2) NULL AFTER tva'],
             ['etoll_alimentari_facturi', 'fara_tva', 'DECIMAL(12,2) NULL AFTER total'],
             ['etoll_alimentari_facturi', 'tva', 'DECIMAL(12,2) NULL AFTER fara_tva'],
+            // Inregistrarile manuale (2026_11_13_000002_etoll_manual.sql).
+            ['etoll_tranzactii', 'observatii', 'VARCHAR(255) NULL AFTER session_id'],
+            ['etoll_tranzactii', 'adaugat_de', 'INT UNSIGNED NULL AFTER observatii'],
+            ['etoll_tranzactii', 'inlocuita_de', 'VARCHAR(80) NULL AFTER adaugat_de'],
+            ['etoll_tranzactii', 'inlocuita_la', 'DATETIME NULL AFTER inlocuita_de'],
         ];
         $check = $db->prepare('
             SELECT COUNT(*) FROM information_schema.COLUMNS
@@ -233,10 +250,10 @@ class EtollStatementModel
             return ['n' => (int) ($row['n'] ?? 0), 'suma' => round((float) ($row['suma'] ?? 0), 2)];
         };
 
-        $topupsBefore = $sum("SELECT COUNT(*) n, SUM(suma) suma FROM etoll_tranzactii WHERE tip = 'alimentare' AND data < :s", [':s' => $start]);
-        $usageBefore = $sum("SELECT COUNT(*) n, SUM(suma) suma FROM etoll_tranzactii WHERE tip = 'sesiune' AND in_curs = 0 AND data < :s", [':s' => $start]);
-        $topups = $sum("SELECT COUNT(*) n, SUM(suma) suma FROM etoll_tranzactii WHERE tip = 'alimentare' AND data >= :s AND data < :e", [':s' => $start, ':e' => $end]);
-        $usage = $sum("SELECT COUNT(*) n, SUM(suma) suma FROM etoll_tranzactii WHERE tip = 'sesiune' AND in_curs = 0 AND data >= :s AND data < :e", [':s' => $start, ':e' => $end]);
+        $topupsBefore = $sum("SELECT COUNT(*) n, SUM(suma) suma FROM etoll_tranzactii WHERE tip = 'alimentare' AND inlocuita_de IS NULL AND data < :s", [':s' => $start]);
+        $usageBefore = $sum("SELECT COUNT(*) n, SUM(suma) suma FROM etoll_tranzactii WHERE tip = 'sesiune' AND in_curs = 0 AND inlocuita_de IS NULL AND data < :s", [':s' => $start]);
+        $topups = $sum("SELECT COUNT(*) n, SUM(suma) suma FROM etoll_tranzactii WHERE tip = 'alimentare' AND inlocuita_de IS NULL AND data >= :s AND data < :e", [':s' => $start, ':e' => $end]);
+        $usage = $sum("SELECT COUNT(*) n, SUM(suma) suma FROM etoll_tranzactii WHERE tip = 'sesiune' AND in_curs = 0 AND inlocuita_de IS NULL AND data >= :s AND data < :e", [':s' => $start, ':e' => $end]);
         $topupInvoices = $sum('SELECT COUNT(*) n, SUM(total) suma FROM etoll_alimentari_facturi WHERE data >= :s AND data < :e', [':s' => $start, ':e' => $end]);
         $topupVat = $this->db->prepare('SELECT SUM(fara_tva) fara_tva, SUM(tva) tva FROM etoll_alimentari_facturi WHERE data >= :s AND data < :e');
         $topupVat->execute([':s' => $start, ':e' => $end]);
@@ -254,14 +271,14 @@ class EtollStatementModel
                 SUM(d.fara_tva IS NULL) fara_tva_lipsa
             FROM etoll_tranzactii t
             LEFT JOIN etoll_documente d ON d.session_id = t.session_id
-            WHERE t.tip = 'sesiune' AND t.in_curs = 0 AND t.data >= :s AND t.data < :e
+            WHERE t.tip = 'sesiune' AND t.in_curs = 0 AND t.inlocuita_de IS NULL AND t.data >= :s AND t.data < :e
         ");
         $docs->execute([':s' => $start, ':e' => $end, ':tol' => self::TOLERANCE]);
         $docRow = $docs->fetch(PDO::FETCH_ASSOC) ?: [];
 
         $opening = round($topupsBefore['suma'] - $usageBefore['suma'], 2);
         $closing = round($opening + $topups['suma'] - $usage['suma'], 2);
-        $coverage = $this->db->query("SELECT MIN(data) FROM etoll_tranzactii")->fetchColumn();
+        $coverage = $this->db->query("SELECT MIN(data) FROM etoll_tranzactii WHERE tx_id NOT LIKE 'manual-%'")->fetchColumn();
 
         return [
             'sold_inceput' => $opening,
@@ -331,7 +348,7 @@ class EtollStatementModel
     public function sessions(string $from, string $to, array $plates = []): array
     {
         $sql = "
-            SELECT t.tx_id, t.session_id, t.suma, t.data AS inchisa_la, t.nr_inmatriculare, t.remorci,
+            SELECT t.tx_id, t.session_id, t.suma, t.data AS inchisa_la, t.nr_inmatriculare, t.remorci, t.observatii, t.adaugat_de,
                    d.numar_document, d.inceput, d.sfarsit, d.origine, d.destinatie, d.km_tarifabil,
                    d.total_etoll, d.fara_tva, d.tva, d.cota_tva, d.factura_path, d.anexa_path, d.desfasurator_path, d.eroare,
                    c.id AS cursa_id, c.beneficiar_id, c.tip_transport, bt.nume AS beneficiar,
@@ -345,7 +362,7 @@ class EtollStatementModel
             LEFT JOIN configurare_beneficiari_transport bt ON bt.id = c.beneficiar_id
             -- Sau perioada Km service (drumul la / de la service), cand sesiunea nu e pe o cursa.
             LEFT JOIN vehicule_service_km sk ON sk.id = f.service_km_id
-            WHERE t.tip = 'sesiune' AND t.in_curs = 0 AND t.data >= :s AND t.data < :e
+            WHERE t.tip = 'sesiune' AND t.in_curs = 0 AND t.inlocuita_de IS NULL AND t.data >= :s AND t.data < :e
         ";
         $params = [':s' => $from . ' 00:00:00', ':e' => date('Y-m-d', strtotime($to . ' +1 day')) . ' 00:00:00'];
         if ($plates !== []) {
@@ -395,7 +412,7 @@ class EtollStatementModel
     public function topups(string $from, string $to): array
     {
         $params = [':s' => $from . ' 00:00:00', ':e' => date('Y-m-d', strtotime($to . ' +1 day')) . ' 00:00:00'];
-        $stmt = $this->db->prepare("SELECT tx_id, suma, data FROM etoll_tranzactii WHERE tip = 'alimentare' AND data >= :s AND data < :e ORDER BY data ASC");
+        $stmt = $this->db->prepare("SELECT tx_id, suma, data, observatii FROM etoll_tranzactii WHERE tip = 'alimentare' AND inlocuita_de IS NULL AND data >= :s AND data < :e ORDER BY data ASC");
         $stmt->execute($params);
         $topups = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
 
@@ -450,7 +467,7 @@ class EtollStatementModel
                 MAX(veh.model) AS model
             FROM (
                 SELECT DISTINCT nr_inmatriculare AS nr FROM etoll_tranzactii
-                WHERE tip = 'sesiune' AND nr_inmatriculare IS NOT NULL AND data >= :s AND data < :e
+                WHERE tip = 'sesiune' AND inlocuita_de IS NULL AND nr_inmatriculare IS NOT NULL AND data >= :s AND data < :e
             ) p
             LEFT JOIN vehicule veh ON REPLACE(UPPER(veh.nr_inmatriculare), ' ', '') = p.nr
             LEFT JOIN vehicule_cuplaje cuplaj ON cuplaj.tractor_id = veh.id AND cuplaj.activ = 1
@@ -488,7 +505,7 @@ class EtollStatementModel
             LEFT JOIN configurare_beneficiari_transport bt ON bt.id = c.beneficiar_id
             -- Sau perioada Km service (drumul la / de la service), cand sesiunea nu e pe o cursa.
             LEFT JOIN vehicule_service_km sk ON sk.id = f.service_km_id
-            WHERE t.tip = 'sesiune' AND t.in_curs = 1 AND t.data >= :s AND t.data < :e
+            WHERE t.tip = 'sesiune' AND t.in_curs = 1 AND t.inlocuita_de IS NULL AND t.data >= :s AND t.data < :e
             ORDER BY t.data ASC, t.tx_id ASC
         ");
         $stmt->execute([':s' => $from . ' 00:00:00', ':e' => date('Y-m-d', strtotime($to . ' +1 day')) . ' 00:00:00']);
@@ -690,6 +707,55 @@ class EtollStatementModel
     {
         $stmt = $this->db->prepare('SELECT * FROM etoll_alimentari_facturi WHERE invoice_id = :id');
         $stmt->execute([':id' => $invoiceId]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        return $row === false ? null : $row;
+    }
+
+    /**
+     * Inregistrarile manuale din perioada (dupa data lor): cate sunt active si cate au fost
+     * inlocuite de datele eToll (sincronizarea a adus aceeasi sesiune / alimentare).
+     *
+     * @return array{sesiuni: int, alimentari: int, inlocuite: int}
+     */
+    public function manualStats(string $from, string $to): array
+    {
+        $stmt = $this->db->prepare("
+            SELECT
+                COALESCE(SUM(tip = 'sesiune' AND inlocuita_de IS NULL), 0) sesiuni,
+                COALESCE(SUM(tip = 'alimentare' AND inlocuita_de IS NULL), 0) alimentari,
+                COALESCE(SUM(inlocuita_de IS NOT NULL), 0) inlocuite
+            FROM etoll_tranzactii
+            WHERE tx_id LIKE 'manual-%' AND data >= :s AND data < :e
+        ");
+        $stmt->execute([':s' => $from . ' 00:00:00', ':e' => date('Y-m-d', strtotime($to . ' +1 day')) . ' 00:00:00']);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
+
+        return ['sesiuni' => (int) ($row['sesiuni'] ?? 0), 'alimentari' => (int) ($row['alimentari'] ?? 0), 'inlocuite' => (int) ($row['inlocuite'] ?? 0)];
+    }
+
+    /**
+     * O inregistrare manuala, cu tot ce trebuie pentru formularul de editare.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function manualRecord(string $txId): ?array
+    {
+        if (!self::isManual($txId)) {
+            return null;
+        }
+        $stmt = $this->db->prepare("
+            SELECT t.*, d.numar_document, d.inceput, d.sfarsit, d.origine, d.destinatie, d.km_tarifabil,
+                   d.fara_tva, d.tva, d.cota_tva, d.factura_path, d.anexa_path, d.desfasurator_path,
+                   af.invoice_id AS af_invoice_id, af.numar_document AS af_numar_document, af.fara_tva AS af_fara_tva,
+                   af.tva AS af_tva, af.pdf_path AS af_pdf_path
+            FROM etoll_tranzactii t
+            LEFT JOIN etoll_documente d ON d.session_id = t.session_id
+            LEFT JOIN etoll_alimentari_facturi af ON af.invoice_id = t.tx_id
+            WHERE t.tx_id = :id
+            LIMIT 1
+        ");
+        $stmt->execute([':id' => $txId]);
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
 
         return $row === false ? null : $row;

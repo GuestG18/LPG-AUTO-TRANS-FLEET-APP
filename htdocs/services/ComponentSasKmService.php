@@ -32,13 +32,52 @@ class ComponentSasKmService
      */
     public function kmAt(int $vehicleId, string $moment): array
     {
+        $report = $this->report($vehicleId, $moment);
+        if (!$report['ok']) {
+            return $report;
+        }
+        $result = self::pick($report['segments'], $report['moment']);
+        if ($result === null) {
+            return ['ok' => false, 'message' => 'SAS nu are deplasări în jurul acestui moment (' . self::LOOKBACK_DAYS . ' zile înainte).'];
+        }
+
+        return ['ok' => true] + $result;
+    }
+
+    /**
+     * Odometrul CAN si indexul GPS SEPARAT, din acelasi raport SAS (un singur apel) — pentru
+     * formularele care pastreaza ambele valori (ex. inregistrarea unei revizii).
+     *
+     * @return array{ok: bool, can?: ?array, gps?: ?array, message?: string}
+     */
+    public function kmBySource(int $vehicleId, string $moment): array
+    {
+        $report = $this->report($vehicleId, $moment);
+        if (!$report['ok']) {
+            return $report;
+        }
+
+        return [
+            'ok' => true,
+            'can' => self::pick($report['segments'], $report['moment'], ['can']),
+            'gps' => self::pick($report['segments'], $report['moment'], ['gps']),
+        ];
+    }
+
+    /**
+     * Tronsoanele SAS din jurul momentului (7 zile inainte, 1 zi dupa).
+     *
+     * @return array{ok: bool, segments?: list<array<string, mixed>>, moment?: string, message?: string}
+     */
+    private function report(int $vehicleId, string $moment): array
+    {
         $at = DateTimeImmutable::createFromFormat('Y-m-d H:i', trim($moment));
         if ($at === false) {
-            return ['ok' => false, 'message' => 'Alege data și ora montării.'];
+            return ['ok' => false, 'message' => 'Alege data și ora.'];
         }
         $now = new DateTimeImmutable();
         if ($at > $now) {
-            return ['ok' => false, 'message' => 'Momentul montării este în viitor.'];
+            return ['ok' => false, 'message' => 'Momentul ales este în viitor.'];
         }
 
         $stmt = $this->db->prepare('SELECT tip_vehicul FROM vehicule WHERE id = :id');
@@ -58,21 +97,17 @@ class ComponentSasKmService
         $to = min($at->modify('+1 day'), $now);
         $report = ($this->can ?? new SasCanKmService())->travelSheet($carId, $from->format('Y-m-d H:i:s'), $to->format('Y-m-d H:i:s'));
 
-        $result = self::pick($report['segments'] ?? [], $at->format('Y-m-d H:i:s'));
-        if ($result === null) {
-            return ['ok' => false, 'message' => 'SAS nu are deplasări în jurul acestui moment (' . self::LOOKBACK_DAYS . ' zile înainte).'];
-        }
-
-        return ['ok' => true] + $result;
+        return ['ok' => true, 'segments' => $report['segments'] ?? [], 'moment' => $at->format('Y-m-d H:i:s')];
     }
 
     /**
      * Odometrul la $moment din tronsoanele raportului (sortate cronologic). Functie pura.
      *
      * @param list<array<string, mixed>> $segments
+     * @param list<string> $sources ordinea surselor incercate (implicit CAN, apoi GPS)
      * @return array{km: int, source: string, source_label: string, moving: bool, range: ?array{0:int,1:int}, note: string}|null
      */
-    public static function pick(array $segments, string $moment): ?array
+    public static function pick(array $segments, string $moment, array $sources = ['can', 'gps']): ?array
     {
         $before = null;
         $during = null;
@@ -92,7 +127,7 @@ class ComponentSasKmService
             }
         }
 
-        foreach (['can', 'gps'] as $source) {
+        foreach ($sources as $source) {
             $startOf = static function (array $segment) use ($source): ?float {
                 if ($source === 'can') {
                     return self::positive($segment['can_index_start_km'] ?? null);
@@ -101,7 +136,7 @@ class ComponentSasKmService
                 return $end !== null && isset($segment['gps_km']) ? $end - (float) $segment['gps_km'] : null;
             };
             $endOf = static fn (array $segment): ?float => self::positive($segment[$source === 'can' ? 'can_index_end_km' : 'gps_index_end_km'] ?? null);
-            $label = $source === 'can' ? 'SAS · odometru CAN (bord)' : 'SAS · index GPS (fără CAN)';
+            $label = $source === 'can' ? 'SAS · odometru CAN (bord)' : (count($sources) === 1 ? 'SAS · index GPS' : 'SAS · index GPS (fără CAN)');
 
             if ($during !== null) {
                 $low = $startOf($during);

@@ -1728,9 +1728,16 @@ class DispecerCurseController
         try {
             new MaintenanceModel($this->db); // schema Mentenanta + Interventii V2, inainte de citiri
             $workflow = new InterventionWorkflowModel($this->db);
-            $summaries = $workflow->serviceKmSummaries(array_column($serviceKmEntries, 'id'));
+            $summaries = $workflow->serviceKmSummaries(array_merge(
+                array_column($serviceKmEntries, 'id'),
+                array_filter(array_column($serviceKmEntries, 'semi_service_km_id'))
+            ));
             foreach ($serviceKmEntries as &$serviceKmEntry) {
                 $serviceKmEntry['interventie'] = $summaries[(int) $serviceKmEntry['id']] ?? null;
+                // Semiremorca ramasa in service: interventia e pe ea (capul tractor doar a dus-o).
+                if (!empty($serviceKmEntry['semi_service_km_id'])) {
+                    $serviceKmEntry['interventie_semiremorca'] = $summaries[(int) $serviceKmEntry['semi_service_km_id']] ?? null;
+                }
             }
             unset($serviceKmEntry);
             $serviceKmContext['catalog'] = $workflow->componentCatalog();
@@ -2022,6 +2029,32 @@ class DispecerCurseController
             $errors['km'] = 'Km trebuie să fie un număr pozitiv.';
         }
 
+        // Ansamblu: semiremorca ramane in service, capul tractor se intoarce fara ea. Perioada ei e
+        // un rand propriu, legat de aceasta intrare, care se modifica doar din formularul capului tractor.
+        $current = $id > 0 ? $model->find($id) : null;
+        if ($current !== null && !empty($current['parent_service_km_id'])) {
+            flash_set('warning', 'Perioada semiremorcii se modifică din intrarea capului tractor care a dus-o (Km service #' . (int) $current['parent_service_km_id'] . ').');
+            redirect($listUrl);
+        }
+        $trailerStay = $id > 0 ? $model->findTrailerStay($id) : null;
+        $trailerStays = !empty($_POST['semiremorca_ramane']);
+        $trailerId = 0;
+        $pickup = null;
+        $pickupTime = null;
+        if ($trailerStays) {
+            $pickup = $date('data_ridicare');
+            if (trim((string) ($_POST['data_ridicare'] ?? '')) !== '' && $pickup === null) {
+                $errors['data_ridicare'] = 'Data ridicării semiremorcii nu este validă.';
+            }
+            $pickupTime = $pickup !== null ? $time('ora_ridicare') : null;
+            if ($departure !== null && $pickup !== null
+                && $pickup . ' ' . ($pickupTime ?? '23:59:59') < $departure . ' ' . ($departureTime ?? '00:00:00')) {
+                $errors['data_ridicare'] = 'Ridicarea semiremorcii nu poate fi înainte de plecarea la service.';
+            }
+        } elseif ($trailerStay !== null && $model->getExpenses((int) $trailerStay['id']) !== []) {
+            $errors['semiremorca_ramane'] = 'Perioada semiremorcii are cheltuieli; șterge-le din fișa ei înainte să debifezi „Semiremorca rămâne în service”.';
+        }
+
         if ($errors === [] && $departure !== null) {
             $overlap = $model->findOverlap($vehicleId, $departure, $return, $id);
             if ($overlap !== null) {
@@ -2055,13 +2088,38 @@ class DispecerCurseController
         $components = [];
         $linkInterventionId = max(0, (int) ($_POST['link_intervention_id'] ?? 0));
         $workflow = null;
+        $vehicleContext = [];
         if ($errors === [] && $vehicleId > 0) {
             try {
                 new MaintenanceModel($this->db); // schema (DDL) inainte de orice scriere
                 $workflow = new InterventionWorkflowModel($this->db);
-                $components = $workflow->normalizeDispatcherComponents($vehicleId, $componentRows);
+                $vehicleContext = $workflow->vehicleContext();
+                if ($trailerStays) {
+                    // Semiremorca deja lasata ramane aceeasi, chiar daca intre timp capul tractor s-a cuplat cu alta.
+                    $trailerId = $trailerStay !== null ? (int) $trailerStay['vehicle_id'] : (int) ($vehicleContext[$vehicleId]['trailer']['id'] ?? 0);
+                    if ($trailerId <= 0) {
+                        $errors['semiremorca_ramane'] = 'Vehiculul nu are o semiremorcă cuplată care să rămână în service.';
+                    } elseif ($departure !== null && ($trailerOverlap = $model->findOverlap($trailerId, $departure, $pickup, (int) ($trailerStay['id'] ?? 0))) !== null) {
+                        $errors['data_ridicare'] = sprintf(
+                            'Semiremorca are deja o perioadă de service care se suprapune (%s – %s).',
+                            date('d.m.Y', (int) strtotime((string) $trailerOverlap['data_plecare'])),
+                            $trailerOverlap['data_intoarcere'] !== null ? date('d.m.Y', (int) strtotime((string) $trailerOverlap['data_intoarcere'])) : 'în service'
+                        );
+                    }
+                }
+                // Interventia se muta intre capul tractor si semiremorca doar cat timp e deschisa.
+                $movingFrom = $trailerStays && $trailerStay === null && $id > 0 ? $workflow->findByServiceKm($id)
+                    : (!$trailerStays && $trailerStay !== null ? $workflow->findByServiceKm((int) $trailerStay['id']) : null);
+                if ($movingFrom !== null && (!empty($movingFrom['converted_maintenance_id']) || in_array((string) $movingFrom['status_interventie'], ['finalizata', 'anulata'], true))) {
+                    $errors['semiremorca_ramane'] = 'Intervenția #' . (int) $movingFrom['id'] . ' este închisă și nu se mai poate muta '
+                        . ($trailerStays ? 'pe semiremorcă' : 'înapoi pe capul tractor') . '.';
+                }
+                $components = $workflow->normalizeDispatcherComponents(
+                    $vehicleId,
+                    $componentRows,
+                    $trailerId > 0 ? $trailerId : ($trailerStay !== null ? (int) $trailerStay['vehicle_id'] : null)
+                );
                 // Scopul tehnic confirmat de coordonator e legat de vehicul: nu se muta pe altul din Km service.
-                $current = $id > 0 ? $model->find($id) : null;
                 $linked = $id > 0 ? $workflow->findByServiceKm($id) : null;
                 if ($current !== null && $linked !== null && (int) $current['vehicle_id'] !== $vehicleId && $workflow->hasTechnicalScope((int) $linked['id'])) {
                     $errors['vehicle_id'] = 'Intervenția #' . (int) $linked['id'] . ' are deja lucrări evaluate de coordonator pentru acest vehicul; vehiculul nu se mai poate schimba din Km service.';
@@ -2075,6 +2133,7 @@ class DispecerCurseController
             $this->setFormFlash('service_km', array_intersect_key($_POST, array_flip([
                 'id', 'vehicle_id', 'driver_id', 'data_plecare', 'ora_plecare', 'data_intoarcere',
                 'ora_intoarcere', 'km', 'service_nume', 'motiv', 'observatii', 'prioritate', 'components_json', 'link_intervention_id',
+                'semiremorca_ramane', 'semiremorca_id', 'data_ridicare', 'ora_ridicare',
             ])), $errors);
             flash_set('danger', 'Km service nu au fost salvați: ' . implode(' ', $errors));
             redirect($listUrl);
@@ -2098,7 +2157,50 @@ class DispecerCurseController
             $saved = $model->find($savedId);
             audit_log_write($this->db, 'vehicule_service_km', $savedId, $id > 0 ? 'update' : 'create',
                 ($id > 0 ? 'Km service actualizat' : 'Km service adăugat') . ' #' . $savedId, $previous, $saved, $this->currentUserId());
-            $interventionId = $saved !== null ? $this->syncServiceKmToMaintenance($saved, $previous, $id > 0 ? null : $linkInterventionId) : 0;
+            $trailerNote = '';
+            if ($saved !== null && $trailerStays && $trailerId > 0) {
+                // Semiremorca ramane in service: perioada si interventia ei, pe semiremorca.
+                $trailerPlate = (string) ($vehicleContext[$trailerId]['plate'] ?? ('#' . $trailerId));
+                $childBefore = $trailerStay;
+                $childId = $model->saveTrailerStay($saved, $trailerId, $pickup, $pickupTime, $this->currentUserId());
+                $child = $model->find($childId);
+                audit_log_write($this->db, 'vehicule_service_km', $childId, $childBefore !== null ? 'update' : 'create',
+                    'Semiremorca ' . $trailerPlate . ' rămâne în service (Km service #' . $savedId . ')', $childBefore, $child, $this->currentUserId());
+                $moved = false;
+                if ($workflow !== null && $childBefore === null && ($fromTractor = $workflow->findByServiceKm($savedId)) !== null) {
+                    $moved = $workflow->moveServiceKmIntervention((int) $fromTractor['id'], $childId, $trailerId, $this->currentUserId(),
+                        'Semiremorca ' . $trailerPlate . ' rămâne în service, capul tractor se întoarce fără ea: intervenția trece pe semiremorcă (Km service #' . $childId . ').');
+                }
+                $interventionId = $child !== null
+                    ? $this->syncServiceKmToMaintenance($child, $childBefore, $childBefore === null && !$moved && $id === 0 ? $linkInterventionId : null)
+                    : 0;
+                // Componentele vin relativ la capul tractor (NULL = el); interventia e acum pe semiremorca.
+                $components = array_map(static function (array $component) use ($vehicleId, $trailerId): array {
+                    $target = $component['vehicle_id'] ?? $vehicleId;
+                    return ['vehicle_id' => (int) $target === $trailerId ? null : (int) $target] + $component;
+                }, $components);
+                $trailerNote = $pickup === null
+                    ? ' Semiremorca ' . $trailerPlate . ' rămâne în service până la ridicare.'
+                    : ' Semiremorca ' . $trailerPlate . ' ridicată din service la ' . date('d.m.Y', (int) strtotime($pickup)) . '.';
+            } else {
+                if ($saved !== null && $trailerStay !== null) {
+                    // Debifat: semiremorca nu mai ramane; interventia ei revine pe intrarea capului tractor.
+                    $childId = (int) $trailerStay['id'];
+                    $back = $workflow !== null ? $workflow->findByServiceKm($childId) : null;
+                    $movedBack = false;
+                    if ($back !== null && $workflow->findByServiceKm($savedId) === null) {
+                        $movedBack = $workflow->moveServiceKmIntervention((int) $back['id'], $savedId, $vehicleId, $this->currentUserId(),
+                            'Semiremorca nu mai rămâne singură în service: intervenția revine pe Km service #' . $savedId . ' al capului tractor.');
+                    }
+                    if ($model->delete($childId)) {
+                        audit_log_write($this->db, 'vehicule_service_km', $childId, 'delete', 'Semiremorca nu mai rămâne în service (Km service #' . $savedId . ')', $trailerStay, null, $this->currentUserId());
+                        if (!$movedBack) {
+                            (new MaintenanceModel($this->db))->detachServiceKm($childId);
+                        }
+                    }
+                }
+                $interventionId = $saved !== null ? $this->syncServiceKmToMaintenance($saved, $previous, $id > 0 ? null : $linkInterventionId) : 0;
+            }
             $requestNote = '';
             if ($interventionId > 0 && $workflow !== null) {
                 try {
@@ -2116,7 +2218,7 @@ class DispecerCurseController
             $etollNote = $this->rematchEtollAfterServiceKmChange(array_unique(array_filter([$vehicleId, (int) ($previous['vehicle_id'] ?? 0)])));
             flash_set($requestNote !== '' && str_contains($requestNote, 'nu au putut') ? 'warning' : 'success',
                 ($id > 0 ? 'Intrarea de service a fost actualizată.' : 'Km service au fost adăugați.')
-                . ($interventionId > 0 ? ' Intervenția asociată: #' . $interventionId . '.' : '') . $requestNote . $etollNote);
+                . $trailerNote . ($interventionId > 0 ? ' Intervenția asociată: #' . $interventionId . '.' : '') . $requestNote . $etollNote);
         } catch (PDOException $exception) {
             error_log('[DispecerCurseController][service_km_store] ' . $exception->getMessage());
             flash_set('danger', 'Km service nu au putut fi salvați.');
@@ -2149,12 +2251,16 @@ class DispecerCurseController
         try {
             new MaintenanceModel($this->db);
             $workflow = new InterventionWorkflowModel($this->db);
-            $trailerId = (int) ($workflow->vehicleContext()[$vehicleId]['trailer']['id'] ?? 0);
+            // trailer_id = semiremorca lasata in service de intrarea modificata (poate nu mai e cuplata).
+            $context = $workflow->vehicleContext();
+            $requestedTrailer = max(0, (int) ($_GET['trailer_id'] ?? 0));
+            $trailerId = $requestedTrailer > 0 && isset($context[$requestedTrailer]) ? $requestedTrailer : (int) ($context[$vehicleId]['trailer']['id'] ?? 0);
             $this->sendJson([
                 'success' => true,
                 'configured' => $workflow->configuredComponentKeys($vehicleId),
                 'configured_trailer' => $trailerId > 0 ? $workflow->configuredComponentKeys($trailerId) : [],
                 'open_interventions' => $workflow->openUnlinkedForVehicle($vehicleId),
+                'open_interventions_trailer' => $trailerId > 0 ? $workflow->openUnlinkedForVehicle($trailerId) : [],
             ]);
         } catch (Throwable $exception) {
             error_log('[DispecerCurseController][service_km_vehicle_info] ' . $exception->getMessage());
@@ -2174,12 +2280,29 @@ class DispecerCurseController
             $serviceKmId = (int) ($_POST['id'] ?? 0);
             $serviceKmModel = new VehicleServiceKmModel($this->db);
             $before = $serviceKmModel->find($serviceKmId);
+            if ($before !== null && !empty($before['parent_service_km_id'])) {
+                flash_set('warning', 'Perioada semiremorcii se scoate din intrarea capului tractor (Km service #' . (int) $before['parent_service_km_id'] . '): debifează „Semiremorca rămâne în service” sau șterge intrarea.');
+                redirect($listUrl);
+            }
+            // Semiremorca lasata in service pleaca odata cu intrarea (CASCADE), cu cheltuielile ei.
+            $trailerStay = $before !== null ? $serviceKmModel->findTrailerStay($serviceKmId) : null;
             // Cheltuielile pleaca prin CASCADE; fisierele incarcate manual le stergem noi.
             $manualDocuments = array_filter(
-                $before !== null ? $serviceKmModel->getExpenses($serviceKmId) : [],
+                array_merge(
+                    $before !== null ? $serviceKmModel->getExpenses($serviceKmId) : [],
+                    $trailerStay !== null ? $serviceKmModel->getExpenses((int) $trailerStay['id']) : []
+                ),
                 static fn (array $expense): bool => $expense['factura_id'] === null && trim((string) ($expense['document_path'] ?? '')) !== ''
             );
             $deleted = $serviceKmModel->delete($serviceKmId);
+            if ($deleted && $trailerStay !== null) {
+                audit_log_write($this->db, 'vehicule_service_km', (int) $trailerStay['id'], 'delete', 'Perioada semiremorcii ștearsă cu Km service #' . $serviceKmId, $trailerStay, null, $this->currentUserId());
+                try {
+                    (new MaintenanceModel($this->db))->detachServiceKm((int) $trailerStay['id']);
+                } catch (Throwable $exception) {
+                    error_log('[DispecerCurseController][service_km_delete][semiremorca] ' . $exception->getMessage());
+                }
+            }
             if ($deleted) {
                 audit_log_write($this->db, 'vehicule_service_km', $serviceKmId, 'delete', 'Km service #' . $serviceKmId . ' șters', $before, null, $this->currentUserId());
                 foreach ($manualDocuments as $expense) {

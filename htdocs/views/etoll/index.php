@@ -31,6 +31,14 @@ $vehicleGroups = build_vehicle_capacity_groups($vehicles, ['id_key' => 'etoll_pl
 $balance = is_array($balance ?? null) ? $balance : null;
 $quietBalance = is_array($quietBalance ?? null) ? $quietBalance : null;
 $canExport = (bool) ($canExport ?? false);
+$canManual = (bool) ($canManual ?? false);
+$manualStats = is_array($manualStats ?? null) ? $manualStats : ['sesiuni' => 0, 'alimentari' => 0, 'inlocuite' => 0];
+$fleetPlates = is_array($fleetPlates ?? null) ? $fleetPlates : [];
+$manualOld = is_array($manualOld ?? null) ? $manualOld : null;
+/** Valoarea unui <input type="datetime-local"> din "2026-11-05 14:28:00". */
+$dtLocal = static fn(?string $value): string => $value !== null && $value !== '' ? date('Y-m-d\TH:i', strtotime($value)) : '';
+/** Suma pentru campurile formularului manual: "96,60" (fara separator de mii). */
+$amountInput = static fn(mixed $value): string => $value === null || $value === '' ? '' : str_replace('.', ',', rtrim(rtrim(number_format((float) $value, 2, '.', ''), '0'), '.'));
 $lastSyncAt = isset($lastSyncAt) ? (string) $lastSyncAt : null;
 $kinds = EtollStatementModel::documentKinds();
 $kindTitles = ['factura' => 'Factura CC-P (Plăți)', 'anexa' => 'Anexa facturii TA_10 (Plăți)', 'desfasurator' => 'Desfășurătorul sesiunii (Servicii)'];
@@ -171,7 +179,8 @@ foreach ($vehicleGroups as $capacityGroup) {
 
 // ---- Randurile tabelului (JSON pentru assets/js/etoll.js) ----
 $checkClass = ['ok' => 'is-ok', 'lipsa' => 'is-warn', 'diferenta' => 'is-danger', 'in_curs' => 'is-info'];
-$tableRow = static function (array $row, bool $open) use ($at, $span, $place, $kinds, $kindTitles, $docUrl, $checkClass, $fmtDate): array {
+$tableRow = static function (array $row, bool $open) use ($at, $span, $place, $kinds, $kindTitles, $docUrl, $checkClass, $fmtDate, $dtLocal, $amountInput): array {
+    $isManual = EtollStatementModel::isManual((string) ($row['tx_id'] ?? ''));
     $documents = [];
     foreach ($kinds as $kind => [$label]) {
         $documents[] = [
@@ -227,6 +236,25 @@ $tableRow = static function (array $row, bool $open) use ($at, $span, $place, $k
         'checkText' => (string) $row['verificare']['text'],
         'checkClass' => $checkClass[$row['verificare']['cod']] ?? 'is-muted',
         'error' => (string) ($row['eroare'] ?? ''),
+        'note' => (string) ($row['observatii'] ?? ''),
+        // Sesiune adaugata manual: valorile formularului de editare (formatul campurilor).
+        'manual' => $isManual ? [
+            'tip' => 'sesiune',
+            'id' => (string) $row['tx_id'],
+            'nr_inmatriculare' => (string) $row['nr_inmatriculare'],
+            'remorci' => (string) ($row['remorci'] ?? ''),
+            'inceput' => $dtLocal($row['inceput'] ?? null),
+            'inchisa_la' => $dtLocal($row['inchisa_la'] ?? null),
+            'origine' => (string) ($row['origine'] ?? ''),
+            'destinatie' => (string) ($row['destinatie'] ?? ''),
+            'km_tarifabil' => $amountInput($row['km_tarifabil'] ?? null),
+            'suma' => $amountInput($row['suma']),
+            'cota_tva' => $amountInput($row['cota_tva'] ?? 21),
+            'fara_tva' => $amountInput($row['fara_tva'] ?? null),
+            'numar_document' => (string) ($row['numar_document'] ?? ''),
+            'observatii' => (string) ($row['observatii'] ?? ''),
+            'fisiere' => array_map(static fn(string $kind): bool => !empty($row[$kind . '_path']), array_combine(array_keys(EtollStatementModel::DOCUMENTS), array_keys(EtollStatementModel::DOCUMENTS))),
+        ] : null,
     ];
 };
 $tableRows = array_merge(
@@ -259,14 +287,21 @@ $periodLabel = $period['tip'] === 'luna'
                 </p>
             </div>
         </div>
-        <?php if ($canExport): ?>
+        <?php if ($canExport || $canManual): ?>
             <div class="etoll-head__actions">
-                <a class="etoll-btn etoll-btn--excel" href="<?= e(build_query_url($query + ['action' => 'export_xlsx'])) ?>">
-                    <i class="bi bi-file-earmark-excel" aria-hidden="true"></i> Export Excel
-                </a>
-                <a class="etoll-btn etoll-btn--primary" href="<?= e(build_query_url($query + ['action' => 'export_zip'])) ?>" title="Excel-ul + <?= e(implode(' + ', array_column($kinds, 1))) ?> + facturile de alimentare">
-                    <i class="bi bi-download" aria-hidden="true"></i> Export ZIP cu documente
-                </a>
+                <?php if ($canManual): ?>
+                    <button type="button" class="etoll-btn etoll-btn--ghost" data-manual-new title="Sesiune sau alimentare pe care sincronizarea eToll nu a adus-o">
+                        <i class="bi bi-plus-lg" aria-hidden="true"></i> Adaugă manual
+                    </button>
+                <?php endif; ?>
+                <?php if ($canExport): ?>
+                    <a class="etoll-btn etoll-btn--excel" href="<?= e(build_query_url($query + ['action' => 'export_xlsx'])) ?>">
+                        <i class="bi bi-file-earmark-excel" aria-hidden="true"></i> Export Excel
+                    </a>
+                    <a class="etoll-btn etoll-btn--primary" href="<?= e(build_query_url($query + ['action' => 'export_zip'])) ?>" title="Excel-ul + <?= e(implode(' + ', array_column($kinds, 1))) ?> + facturile de alimentare">
+                        <i class="bi bi-download" aria-hidden="true"></i> Export ZIP cu documente
+                    </a>
+                <?php endif; ?>
             </div>
         <?php endif; ?>
     </header>
@@ -426,6 +461,12 @@ $periodLabel = $period['tip'] === 'luna'
                 <?php if ($missingParts !== []): ?>
                     <li class="is-muted"><span>Lipsesc: <?= e(implode(', ', $missingParts)) ?> (se descarcă la sincronizările următoare).</span></li>
                 <?php endif; ?>
+                <?php if ($manualStats['sesiuni'] + $manualStats['alimentari'] + $manualStats['inlocuite'] > 0): ?>
+                    <li title="Adăugate manual pentru că sincronizarea eToll nu le-a adus. Când eToll le aduce totuși (același camion, aceeași sumă, ±<?= EtollManualService::MATCH_HOURS ?> h), cele manuale sunt înlocuite automat.">
+                        <span>Adăugate manual: <strong><?= (int) $manualStats['sesiuni'] ?> <?= (int) $manualStats['sesiuni'] === 1 ? 'sesiune' : 'sesiuni' ?>, <?= (int) $manualStats['alimentari'] ?> <?= (int) $manualStats['alimentari'] === 1 ? 'alimentare' : 'alimentări' ?></strong><?php if ($manualStats['inlocuite'] > 0): ?> · <?= (int) $manualStats['inlocuite'] ?> înlocuite de eToll<?php endif; ?></span>
+                        <span class="etoll-badge etoll-badge--manual">manual</span>
+                    </li>
+                <?php endif; ?>
                 <li>
                     <strong>Suma din documente = suma sesiunii</strong>
                     <?php if ((int) $totals['suma_diferita'] === 0): ?>
@@ -563,14 +604,14 @@ $periodLabel = $period['tip'] === 'luna'
             </div>
             <div class="etoll-table-wrap">
                 <table class="etoll-table etoll-table--topups">
-                    <thead><tr><th><button type="button" class="etoll-sort is-static">Data plății <i class="bi bi-arrow-down-up" aria-hidden="true"></i></button></th><th class="t-end">Sumă</th><th class="t-end">Fără TVA</th><th class="t-end">TVA</th><th>Factură</th><th>PDF</th><th>Verificare</th></tr></thead>
+                    <thead><tr><th><button type="button" class="etoll-sort is-static">Data plății <i class="bi bi-arrow-down-up" aria-hidden="true"></i></button></th><th class="t-end">Sumă</th><th class="t-end">Fără TVA</th><th class="t-end">TVA</th><th>Factură</th><th>PDF</th><th>Verificare</th><?php if ($canManual): ?><th class="t-end"><span class="visually-hidden">Acțiuni</span></th><?php endif; ?></tr></thead>
                     <tbody>
                         <?php if ($topups === []): ?>
-                            <tr><td colspan="7" class="etoll-empty">Nicio alimentare în perioadă.</td></tr>
+                            <tr><td colspan="<?= $canManual ? 8 : 7 ?>" class="etoll-empty">Nicio alimentare în perioadă.</td></tr>
                         <?php endif; ?>
-                        <?php foreach ($topups as $row): $invoice = $row['factura']; ?>
+                        <?php foreach ($topups as $row): $invoice = $row['factura']; $topupManual = EtollStatementModel::isManual((string) ($row['tx_id'] ?? '')); ?>
                             <tr>
-                                <td class="t-nowrap"><?= e($at($row['data'])) ?></td>
+                                <td class="t-nowrap"><?= e($at($row['data'])) ?><?php if ($topupManual): ?> <span class="etoll-badge etoll-badge--manual" title="<?= e('Adăugată manual' . (!empty($row['observatii']) ? ': ' . $row['observatii'] : '')) ?>">manual</span><?php endif; ?></td>
                                 <td class="t-end t-nowrap"><?= e($money($row['suma'])) ?></td>
                                 <td class="t-end t-nowrap"><?= e($money($invoice['fara_tva'] ?? null)) ?></td>
                                 <td class="t-end t-nowrap"><?= e($money($invoice['tva'] ?? null)) ?></td>
@@ -581,6 +622,24 @@ $periodLabel = $period['tip'] === 'luna'
                                     <?php elseif ($invoice === null): ?><span class="etoll-badge is-warn">Lipsește factura</span>
                                     <?php else: ?><span class="etoll-badge is-ok">OK</span><?php endif; ?>
                                 </td>
+                                <?php if ($canManual): ?>
+                                    <td class="t-end t-nowrap">
+                                        <?php if ($topupManual): ?>
+                                            <?php $topupEdit = [
+                                                'tip' => 'alimentare',
+                                                'id' => (string) $row['tx_id'],
+                                                'data_plata' => $dtLocal($row['data']),
+                                                'suma_alimentare' => $amountInput($row['suma']),
+                                                'fara_tva_alimentare' => $amountInput($invoice['fara_tva'] ?? null),
+                                                'numar_factura_alimentare' => (string) ($invoice['numar_document'] ?? ''),
+                                                'observatii_alimentare' => (string) ($row['observatii'] ?? ''),
+                                                'fisiere' => ['factura_alimentare' => !empty($invoice['pdf_path'])],
+                                            ]; ?>
+                                            <button type="button" class="etoll-icon-btn" data-manual-edit='<?= e(json_encode($topupEdit, JSON_UNESCAPED_UNICODE | JSON_HEX_APOS | JSON_HEX_QUOT)) ?>' title="Modifică alimentarea manuală" aria-label="Modifică alimentarea manuală"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+                                            <button type="button" class="etoll-icon-btn is-danger" data-manual-delete="<?= e((string) $row['tx_id']) ?>" data-manual-label="<?= e('alimentarea de ' . $money($row['suma']) . ' din ' . $at($row['data'])) ?>" title="Șterge alimentarea manuală" aria-label="Șterge alimentarea manuală"><i class="bi bi-trash" aria-hidden="true"></i></button>
+                                        <?php endif; ?>
+                                    </td>
+                                <?php endif; ?>
                             </tr>
                         <?php endforeach; ?>
                     </tbody>
@@ -589,6 +648,154 @@ $periodLabel = $period['tip'] === 'luna'
         </div>
     </section>
 
+    <?php if ($canManual): ?>
+        <?php $returnQuery = http_build_query(array_diff_key($query, ['page' => true])); ?>
+        <div class="modal fade etoll-manual-modal" id="etollManualModal" tabindex="-1" aria-labelledby="etollManualTitle" aria-hidden="true">
+            <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+                <form class="modal-content" method="post" enctype="multipart/form-data" action="<?= e(build_query_url(['page' => 'etoll', 'action' => 'manual_save'])) ?>" id="etollManualForm" novalidate>
+                    <?= csrf_field() ?>
+                    <input type="hidden" name="return_query" value="<?= e($returnQuery) ?>">
+                    <input type="hidden" name="id" value="" data-manual-id>
+                    <div class="modal-header">
+                        <h5 class="modal-title" id="etollManualTitle" data-manual-title>Adaugă manual în situația eToll</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Închide"></button>
+                    </div>
+                    <div class="modal-body">
+                        <p class="etoll-manual__intro">
+                            Pentru sesiunile sau alimentările pe care sincronizarea eToll nu le-a adus (API indisponibil, perioadă ratată de cron).
+                            Copiază datele din portalul eToll sau din documentul CC-P. Dacă eToll aduce mai târziu aceeași mișcare
+                            (același camion, aceeași sumă, ±<?= EtollManualService::MATCH_HOURS ?> h), înregistrarea manuală e înlocuită automat, fără dubluri.
+                        </p>
+                        <div class="alert alert-danger py-2 small" role="alert" hidden data-manual-error></div>
+
+                        <div class="etoll-seg etoll-manual__type" role="radiogroup" aria-label="Ce adaugi" data-manual-type>
+                            <label><input type="radio" name="tip" value="sesiune" checked><span><i class="bi bi-signpost-split" aria-hidden="true"></i> Sesiune închisă</span></label>
+                            <label><input type="radio" name="tip" value="alimentare"><span><i class="bi bi-fuel-pump" aria-hidden="true"></i> Alimentare portofel</span></label>
+                        </div>
+
+                        <fieldset class="etoll-manual__part" data-manual-part="sesiune">
+                            <legend class="visually-hidden">Sesiune închisă</legend>
+                            <div class="row g-3">
+                                <div class="col-sm-6 col-lg-4">
+                                    <label class="form-label" for="etollManPlate">Nr. auto *</label>
+                                    <input type="text" class="form-control" id="etollManPlate" name="nr_inmatriculare" list="etollManPlates" autocomplete="off" placeholder="ex. B652NET" maxlength="20" data-required="sesiune">
+                                    <datalist id="etollManPlates">
+                                        <?php foreach ($fleetPlates as $fleetPlate): ?><option value="<?= e($fleetPlate['plate']) ?>"><?= e($fleetPlate['label']) ?></option><?php endforeach; ?>
+                                    </datalist>
+                                </div>
+                                <div class="col-sm-6 col-lg-4">
+                                    <label class="form-label" for="etollManTrailer">Remorcă</label>
+                                    <input type="text" class="form-control" id="etollManTrailer" name="remorci" maxlength="100" placeholder="opțional">
+                                </div>
+                                <div class="col-sm-6 col-lg-4">
+                                    <label class="form-label" for="etollManDoc">Nr. document CC-P</label>
+                                    <input type="text" class="form-control" id="etollManDoc" name="numar_document" maxlength="60" placeholder="ex. CC-P 2601777885">
+                                </div>
+                                <div class="col-sm-6">
+                                    <label class="form-label" for="etollManStart">Început</label>
+                                    <input type="datetime-local" class="form-control" id="etollManStart" name="inceput" max="<?= e(date('Y-m-d\TH:i')) ?>">
+                                </div>
+                                <div class="col-sm-6">
+                                    <label class="form-label" for="etollManClosed">Închisă la *</label>
+                                    <input type="datetime-local" class="form-control" id="etollManClosed" name="inchisa_la" max="<?= e(date('Y-m-d\TH:i')) ?>" data-required="sesiune">
+                                    <div class="form-text">Ora închiderii decide cursa pe care ajunge taxa.</div>
+                                </div>
+                                <div class="col-sm-6">
+                                    <label class="form-label" for="etollManFrom">Origine</label>
+                                    <input type="text" class="form-control" id="etollManFrom" name="origine" maxlength="255" placeholder="ex. Ghiorac, Ciumeghiu">
+                                </div>
+                                <div class="col-sm-6">
+                                    <label class="form-label" for="etollManTo">Destinație</label>
+                                    <input type="text" class="form-control" id="etollManTo" name="destinatie" maxlength="255" placeholder="ex. Ghiorac, Ciumeghiu">
+                                </div>
+                                <div class="col-sm-6 col-lg-3">
+                                    <label class="form-label" for="etollManKm">Km tarifabili</label>
+                                    <input type="text" class="form-control" id="etollManKm" name="km_tarifabil" inputmode="decimal" placeholder="opțional">
+                                </div>
+                                <div class="col-sm-6 col-lg-3">
+                                    <label class="form-label" for="etollManAmount">Sumă cu TVA (lei) *</label>
+                                    <input type="text" class="form-control" id="etollManAmount" name="suma" inputmode="decimal" placeholder="ex. 116,88" data-required="sesiune" data-vat-gross>
+                                </div>
+                                <div class="col-sm-6 col-lg-3">
+                                    <label class="form-label" for="etollManRate">Cotă TVA %</label>
+                                    <input type="text" class="form-control" id="etollManRate" name="cota_tva" inputmode="decimal" value="21" data-vat-rate>
+                                </div>
+                                <div class="col-sm-6 col-lg-3">
+                                    <label class="form-label" for="etollManNet">Fără TVA (lei)</label>
+                                    <input type="text" class="form-control" id="etollManNet" name="fara_tva" inputmode="decimal" placeholder="din cotă" data-vat-net>
+                                </div>
+                                <div class="col-12"><div class="etoll-manual__vat" data-vat-preview></div></div>
+                                <?php foreach ($kinds as $kind => [$kindLabel]): ?>
+                                    <div class="col-sm-6">
+                                        <label class="form-label" for="etollManFile_<?= e($kind) ?>"><?= e($kindTitles[$kind] ?? $kindLabel) ?> (PDF)</label>
+                                        <input type="file" class="form-control" id="etollManFile_<?= e($kind) ?>" name="<?= e($kind) ?>" accept="application/pdf,.pdf">
+                                        <div class="form-check mt-1" hidden data-file-existing="<?= e($kind) ?>">
+                                            <input class="form-check-input" type="checkbox" name="sterge_<?= e($kind) ?>" value="1" id="etollManDrop_<?= e($kind) ?>">
+                                            <label class="form-check-label small" for="etollManDrop_<?= e($kind) ?>">Are deja <?= e(mb_strtolower($kindLabel)) ?> încărcată · bifează ca să o scoți</label>
+                                        </div>
+                                    </div>
+                                <?php endforeach; ?>
+                                <div class="col-12">
+                                    <label class="form-label" for="etollManNote">Observații</label>
+                                    <input type="text" class="form-control" id="etollManNote" name="observatii" maxlength="255" placeholder="ex. API eToll căzut 10–14.11, preluat din portal">
+                                </div>
+                            </div>
+                            <p class="etoll-manual__foot">Sesiunea apare și în Facturi (tip Toll), cu PDF-urile încărcate, și se asociază automat la cursă, ca o sesiune adusă din eToll.</p>
+                        </fieldset>
+
+                        <fieldset class="etoll-manual__part" data-manual-part="alimentare" hidden>
+                            <legend class="visually-hidden">Alimentare portofel</legend>
+                            <div class="row g-3">
+                                <div class="col-sm-6">
+                                    <label class="form-label" for="etollManPaid">Data și ora plății *</label>
+                                    <input type="datetime-local" class="form-control" id="etollManPaid" name="data_plata" max="<?= e(date('Y-m-d\TH:i')) ?>" data-required="alimentare">
+                                </div>
+                                <div class="col-sm-6">
+                                    <label class="form-label" for="etollManTopup">Sumă (lei, cu TVA) *</label>
+                                    <input type="text" class="form-control" id="etollManTopup" name="suma_alimentare" inputmode="decimal" placeholder="ex. 2.000,00" data-required="alimentare" data-vat-gross>
+                                </div>
+                                <div class="col-sm-6">
+                                    <label class="form-label" for="etollManTopupNr">Nr. factură alimentare</label>
+                                    <input type="text" class="form-control" id="etollManTopupNr" name="numar_factura_alimentare" maxlength="60" placeholder="opțional">
+                                </div>
+                                <div class="col-sm-3">
+                                    <label class="form-label" for="etollManTopupRate">Cotă TVA %</label>
+                                    <input type="text" class="form-control" id="etollManTopupRate" name="cota_tva_alimentare" inputmode="decimal" value="21" data-vat-rate>
+                                </div>
+                                <div class="col-sm-3">
+                                    <label class="form-label" for="etollManTopupNet">Fără TVA (lei)</label>
+                                    <input type="text" class="form-control" id="etollManTopupNet" name="fara_tva_alimentare" inputmode="decimal" placeholder="din cotă" data-vat-net>
+                                </div>
+                                <div class="col-12"><div class="etoll-manual__vat" data-vat-preview></div></div>
+                                <div class="col-sm-6">
+                                    <label class="form-label" for="etollManTopupFile">Factura alimentării (PDF)</label>
+                                    <input type="file" class="form-control" id="etollManTopupFile" name="factura_alimentare" accept="application/pdf,.pdf">
+                                    <div class="form-check mt-1" hidden data-file-existing="factura_alimentare">
+                                        <input class="form-check-input" type="checkbox" name="sterge_factura_alimentare" value="1" id="etollManDrop_topup">
+                                        <label class="form-check-label small" for="etollManDrop_topup">Are deja factura încărcată · bifează ca să o scoți</label>
+                                    </div>
+                                </div>
+                                <div class="col-sm-6">
+                                    <label class="form-label" for="etollManTopupNote">Observații</label>
+                                    <input type="text" class="form-control" id="etollManTopupNote" name="observatii_alimentare" maxlength="255" placeholder="opțional">
+                                </div>
+                            </div>
+                            <p class="etoll-manual__foot">Alimentarea intră în soldul portofelului. Fără număr și fără PDF apare cu „Lipsește factura”.</p>
+                        </fieldset>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="etoll-btn etoll-btn--ghost" data-bs-dismiss="modal">Renunță</button>
+                        <button type="submit" class="etoll-btn etoll-btn--primary" data-manual-submit><i class="bi bi-check-lg" aria-hidden="true"></i> <span data-manual-submit-label>Adaugă</span></button>
+                    </div>
+                </form>
+            </div>
+        </div>
+        <form method="post" action="<?= e(build_query_url(['page' => 'etoll', 'action' => 'manual_delete'])) ?>" id="etollManualDeleteForm" hidden>
+            <?= csrf_field() ?>
+            <input type="hidden" name="return_query" value="<?= e($returnQuery) ?>">
+            <input type="hidden" name="id" value="">
+        </form>
+    <?php endif; ?>
     <?php if ($canExport): ?>
         <form method="post" action="<?= e(build_query_url(['page' => 'etoll', 'action' => 'export_selected'])) ?>" id="etollSelectedForm" hidden>
             <?= csrf_field() ?>
@@ -606,6 +813,8 @@ $periodLabel = $period['tip'] === 'luna'
         'tvaText' => format_number_ro($t['tva'], 2) . ' lei',
         'sumaText' => format_number_ro($t['suma'], 2) . ' lei',
     ], $tabs), is_array($tableTotals ?? null) ? $tableTotals : ['filtrate' => EtollStatementModel::tabTotals($sessions, $openSessions)]),
+    'canManual' => $canManual,
+    'manualOld' => $manualOld,
     'csvName' => 'Situatie_eToll_' . ($period['tip'] === 'an' ? $period['an'] : ($period['tip'] === 'interval' ? $period['de_la'] . '_' . $period['pana_la'] : $period['luna'])),
 ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP | JSON_INVALID_UTF8_SUBSTITUTE) ?></script>
 <script src="<?= e(url('assets/js/datetime-picker-field.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/datetime-picker-field.js'))) ?>"></script>

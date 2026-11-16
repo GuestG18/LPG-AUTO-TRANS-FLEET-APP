@@ -3092,10 +3092,21 @@ class TireModel extends BaseModel
 
     public function isTireCompatibleWithPosition(array $tire, array $vehicle, array $position): bool
     {
+        return $this->tirePositionIncompatibility($tire, $vehicle, $position) === null;
+    }
+
+    /**
+     * Aceleasi reguli ca isTireCompatibleWithPosition (tip vehicul, formula axelor, tipul axei,
+     * tipul anvelopei, sens de rulare, tabela de compatibilitate), cu motivul refuzului.
+     * Null = compatibila.
+     */
+    public function tirePositionIncompatibility(array $tire, array $vehicle, array $position): ?string
+    {
         $this->ensureLifecycleSchema();
 
         if (!$this->isTireCompatibleWithVehicleType($tire, (string) ($vehicle['tip_vehicul'] ?? ''))) {
-            return false;
+            $vehicleTypeCode = (string) ($vehicle['tip_vehicul'] ?? '');
+            return 'Anvelopa nu este compatibilă cu tipul vehiculului (' . ($this->getTargetVehicleTypeOptions()[$vehicleTypeCode] ?? ($vehicleTypeCode !== '' ? $vehicleTypeCode : '—')) . ').';
         }
 
         $tireType = $this->normalizeTireType((string) ($tire['tire_type'] ?? self::TIRE_TYPE_TRAILER));
@@ -3104,7 +3115,7 @@ class TireModel extends BaseModel
         if ($targetLayouts !== []) {
             $vehicleLayout = $this->normalizeLayoutForType($vehicleType, (string) ($vehicle['formula_axelor'] ?? ''));
             if (!in_array($vehicleLayout, $targetLayouts, true)) {
-                return false;
+                return 'Anvelopa este aprobată doar pentru formula ' . implode(', ', $targetLayouts) . ', vehiculul are ' . ($vehicleLayout !== '' ? $vehicleLayout : '—') . '.';
             }
         }
 
@@ -3122,16 +3133,17 @@ class TireModel extends BaseModel
             $storedAxleType = $this->defaultAxleTypeForTireType($tireType);
         }
 
+        $axleLabels = [self::AXLE_STEERING => 'direcție', self::AXLE_TRACTION => 'tracțiune', self::AXLE_TRAILER => 'remorcă'];
         if (!$this->isTireTypeAllowedForAxleType($storedAxleType, $tireType)) {
-            return false;
+            return 'Tipul anvelopei nu este permis pe tipul de axă din fișa ei.';
         }
 
         if ($storedAxleType !== self::AXLE_UNIVERSAL_BALLOON && $storedAxleType !== $axleType) {
-            return false;
+            return 'Anvelopa este pentru axă de ' . ($axleLabels[$storedAxleType] ?? $storedAxleType) . ', poziția este pe axă de ' . ($axleLabels[$axleType] ?? $axleType) . '.';
         }
 
         if ($tireType === self::TIRE_TYPE_BALLOON_DIRECTIONAL && trim((string) ($tire['rotation_direction'] ?? '')) === '') {
-            return false;
+            return 'Anvelopa direcțională nu are sensul de rulare completat.';
         }
 
         $stmt = $this->db->prepare(
@@ -3148,7 +3160,7 @@ class TireModel extends BaseModel
             ':vehicle_type' => $vehicleType,
         ]);
 
-        return (int) $stmt->fetchColumn() > 0;
+        return (int) $stmt->fetchColumn() > 0 ? null : 'Tipul anvelopei nu este permis pe această axă (regulile de compatibilitate).';
     }
 
     private function getVehicleForTireOperation(int $vehicleId): ?array
@@ -4825,5 +4837,373 @@ class TireModel extends BaseModel
             'vehicle' => ['id' => (int) $vehicle['id'], 'plate' => (string) ($vehicle['nr_inmatriculare'] ?? '')],
             'tires' => $candidates,
         ];
+    }
+
+    /* ------------------------------------------------------------------
+     * Schema din pagina Anvelope: mutarea unei anvelope (drag & drop) si schimbul a doua anvelope.
+     * Scrierea trece prin applyTireMount (aceeasi logica si aceleasi blocari ca la montaj / mutare);
+     * aici se adauga doar verificarea de potrivire (fleetFitmentProblem), refacuta in tranzactie.
+     * ------------------------------------------------------------------ */
+
+    /** Simbolurile de viteza in ordine crescatoare (H sta intre U si V). */
+    private const SPEED_SYMBOLS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'J', 'K', 'L', 'M', 'N', 'P', 'Q', 'R', 'S', 'T', 'U', 'H', 'V', 'W', 'Y'];
+
+    /**
+     * Dimensiunea din fisa anvelopei: 385/65/22.5, 385/65 R22.5, 315/80R22.5 156/150L, 12R22.5.
+     * Indicele de sarcina (roata simpla / roti duble) si simbolul de viteza doar daca sunt scrise.
+     * Null = nu se poate citi.
+     *
+     * @return array{dimension:string,width:string,aspect:string,rim:string,load_single:?int,load_dual:?int,speed:?string}|null
+     */
+    public static function parseTireSize(string $size): ?array
+    {
+        $value = strtoupper(trim(str_replace(',', '.', $size)));
+        $pattern = '~^(\d{2,3}(?:\.\d{1,2})?)\s*(?:/\s*(\d{2,3}(?:\.\d)?))?\s*/?\s*(?:Z?R|-)?\s*(\d{2}(?:\.\d)?)(?:\s*(\d{2,3})(?:\s*/\s*(\d{2,3}))?\s*([A-Z]))?(?:\s|$)~';
+        if (preg_match($pattern, $value, $match) !== 1) {
+            return null;
+        }
+        $rim = (float) $match[3];
+        if ($rim < 10 || $rim > 30) {
+            return null;
+        }
+        $width = str_contains($match[1], '.') ? rtrim(rtrim($match[1], '0'), '.') : $match[1];
+        $aspect = (string) ($match[2] ?? '');
+        $rimText = rtrim(rtrim(number_format($rim, 1, '.', ''), '0'), '.');
+        $speed = isset($match[6]) && $match[6] !== '' && in_array($match[6], self::SPEED_SYMBOLS, true) ? $match[6] : null;
+
+        return [
+            'dimension' => $width . ($aspect !== '' ? '/' . $aspect : '') . ' R' . $rimText,
+            'width' => $width,
+            'aspect' => $aspect,
+            'rim' => $rimText,
+            'load_single' => isset($match[4]) && $match[4] !== '' ? (int) $match[4] : null,
+            'load_dual' => isset($match[5]) && $match[5] !== '' ? (int) $match[5] : null,
+            'speed' => $speed,
+        ];
+    }
+
+    /**
+     * Daca anvelopa (montata acum pe $source) se poate pune pe pozitia $target. Null = da, altfel
+     * motivul, scurt, pentru utilizator. $target / $source vin din getPositionContext (pozitie +
+     * vehicul). Fara date sigure (dimensiunea axei necunoscuta) raspunsul e „nu”, cu motivul.
+     */
+    private function fleetFitmentProblem(array $tire, array $target, ?array $source): ?string
+    {
+        if (in_array((string) ($tire['condition_status'] ?? ''), ['critical', 'missing'], true)) {
+            return 'Anvelopa are starea „Critică” în fișă: se înlocuiește, nu se mută pe altă poziție.';
+        }
+        if ((int) ($target['is_active'] ?? 0) !== 1) {
+            return 'Poziția țintă nu mai este activă în configurația axelor.';
+        }
+
+        $reason = $this->tirePositionIncompatibility($tire, $target, $target);
+        if ($reason !== null) {
+            return $reason;
+        }
+
+        $tireType = $this->normalizeTireType((string) ($tire['tire_type'] ?? self::TIRE_TYPE_TRAILER));
+        $isBalloon = in_array($tireType, [self::TIRE_TYPE_BALLOON, self::TIRE_TYPE_BALLOON_DIRECTIONAL], true);
+        if ($isBalloon && (string) ($target['wheel_kind'] ?? '') === 'dual') {
+            return 'Anvelopa balon (super single) nu se montează pe o poziție cu roți duble.';
+        }
+
+        $sideOf = static fn (?array $position): string => strtoupper(substr((string) ($position['side_code'] ?? ''), 0, 1));
+        $directional = (int) ($tire['directional'] ?? 0) === 1 || $tireType === self::TIRE_TYPE_BALLOON_DIRECTIONAL;
+        if ($directional && $source !== null && $sideOf($source) !== '' && $sideOf($source) !== $sideOf($target)) {
+            return 'Anvelopa are sens de rulare: pe cealaltă parte a vehiculului s-ar roti invers (trebuie întoarsă pe jantă, la vulcanizare).';
+        }
+
+        // Pe aceeasi axa a aceluiasi vehicul jantele sunt aceleasi: dimensiunea nu se schimba.
+        if ($source !== null && (int) $source['vehicle_id'] === (int) $target['vehicle_id'] && (int) $source['axle_no'] === (int) $target['axle_no']) {
+            return null;
+        }
+
+        return $this->fleetSizeProblem($tire, $target);
+    }
+
+    /**
+     * Dimensiunea, indicele de sarcina si viteza fata de axa tinta. Referinta axei = anvelopele
+     * montate acum pe ea (fara cea care se muta), altfel ultima anvelopa montata pe ea (istoric),
+     * altfel anvelopele de pe celelalte axe ale vehiculului de acelasi tip si fel de roti.
+     * Fara referinta, mutarea se refuza: nu se presupune ca anvelopa se potriveste.
+     */
+    private function fleetSizeProblem(array $tire, array $target): ?string
+    {
+        $tireId = (int) ($tire['id'] ?? 0);
+        $vehicleId = (int) ($target['vehicle_id'] ?? 0);
+        $axleNo = (int) ($target['axle_no'] ?? 0);
+        $axleName = 'axa ' . $axleNo . ' a ' . (string) ($target['nr_inmatriculare'] ?? 'vehiculului');
+
+        $own = self::parseTireSize((string) ($tire['tire_size'] ?? ''));
+        if ($own === null) {
+            $size = trim((string) ($tire['tire_size'] ?? ''));
+            return $size === ''
+                ? 'Anvelopa nu are dimensiunea completată în fișă; potrivirea cu ' . $axleName . ' nu se poate verifica.'
+                : 'Dimensiunea anvelopei („' . $size . '”) nu poate fi citită; corecteaz-o în fișă (ex. 385/65 R22.5).';
+        }
+
+        $stmt = $this->db->prepare(
+            'SELECT t.tire_size
+             FROM anvelope_alocari a
+             INNER JOIN vehicule_anvelope_pozitii p ON p.id = a.position_id
+             INNER JOIN anvelope t ON t.id = a.tire_id
+             WHERE p.vehicle_id = :vehicle_id AND p.axle_no = :axle_no AND a.data_end IS NULL AND a.tire_id <> :tire_id'
+        );
+        $stmt->execute([':vehicle_id' => $vehicleId, ':axle_no' => $axleNo, ':tire_id' => $tireId]);
+        $references = $stmt->fetchAll(PDO::FETCH_COLUMN);
+        $origin = 'montate acum pe ' . $axleName;
+        if ($references === []) {
+            $stmt = $this->db->prepare(
+                'SELECT t.tire_size
+                 FROM anvelope_alocari a
+                 INNER JOIN vehicule_anvelope_pozitii p ON p.id = a.position_id
+                 INNER JOIN anvelope t ON t.id = a.tire_id
+                 WHERE p.vehicle_id = :vehicle_id AND p.axle_no = :axle_no AND a.data_end IS NOT NULL
+                 ORDER BY COALESCE(a.demontat_la, a.data_end) DESC, a.id DESC
+                 LIMIT 1'
+            );
+            $stmt->execute([':vehicle_id' => $vehicleId, ':axle_no' => $axleNo]);
+            $references = $stmt->fetchAll(PDO::FETCH_COLUMN);
+            $origin = 'montată anterior pe ' . $axleName;
+        }
+        if ($references === []) {
+            // Celelalte axe ale vehiculului de acelasi tip si cu acelasi fel de roti (ex. axele unei
+            // semiremorci); anvelopa care se muta nu conteaza ca referinta pentru ea insasi.
+            $stmt = $this->db->prepare(
+                'SELECT t.tire_size
+                 FROM anvelope_alocari a
+                 INNER JOIN vehicule_anvelope_pozitii p ON p.id = a.position_id
+                 INNER JOIN anvelope t ON t.id = a.tire_id
+                 WHERE p.vehicle_id = :vehicle_id AND p.axle_no <> :axle_no AND p.is_active = 1
+                   AND p.axle_type = :axle_type AND p.wheel_kind = :wheel_kind
+                   AND a.data_end IS NULL AND a.tire_id <> :tire_id'
+            );
+            $stmt->execute([
+                ':vehicle_id' => $vehicleId,
+                ':axle_no' => $axleNo,
+                ':axle_type' => (string) ($target['axle_type'] ?? ''),
+                ':wheel_kind' => (string) ($target['wheel_kind'] ?? ''),
+                ':tire_id' => $tireId,
+            ]);
+            $references = $stmt->fetchAll(PDO::FETCH_COLUMN);
+            $origin = 'montate pe celelalte axe de același tip ale ' . (string) ($target['nr_inmatriculare'] ?? 'vehiculului');
+        }
+        if ($references === []) {
+            return 'Nu se cunoaște dimensiunea aprobată pentru ' . $axleName . ' (nicio anvelopă montată pe ea acum, în istoric sau pe axele de același tip), deci potrivirea nu se poate verifica. Prima anvelopă pe această axă se montează din „Muta intre axe” / „Montează”.';
+        }
+
+        $dual = (string) ($target['wheel_kind'] ?? '') === 'dual';
+        $loadOf = static fn (array $size): ?int => $dual ? ($size['load_dual'] ?? $size['load_single']) : $size['load_single'];
+        $refLoad = null;
+        $refSpeed = null;
+        foreach ($references as $referenceSize) {
+            $reference = self::parseTireSize((string) $referenceSize);
+            if ($reference === null) {
+                return 'Dimensiunea anvelopei de referință ' . $origin . ' („' . trim((string) $referenceSize) . '”) nu poate fi citită; potrivirea nu se poate verifica.';
+            }
+            if ($reference['width'] !== $own['width'] || $reference['aspect'] !== $own['aspect'] || $reference['rim'] !== $own['rim']) {
+                return 'Dimensiune diferită: anvelopa este ' . $own['dimension'] . ', anvelopele ' . $origin . ' sunt ' . $reference['dimension'] . '.';
+            }
+            $load = $loadOf($reference);
+            if ($load !== null && ($refLoad === null || $load > $refLoad)) {
+                $refLoad = $load;
+            }
+            $speedIndex = $reference['speed'] !== null ? array_search($reference['speed'], self::SPEED_SYMBOLS, true) : false;
+            if ($speedIndex !== false && ($refSpeed === null || $speedIndex > $refSpeed)) {
+                $refSpeed = $speedIndex;
+            }
+        }
+
+        $ownLoad = $loadOf($own);
+        if ($refLoad !== null && $ownLoad === null) {
+            return 'Lipsește indicele de sarcină din dimensiunea anvelopei; pe ' . $axleName . ' se cere minimum ' . $refLoad . '.';
+        }
+        if ($refLoad !== null && $ownLoad < $refLoad) {
+            return 'Indice de sarcină ' . $ownLoad . ' sub cel cerut pe ' . $axleName . ' (' . $refLoad . ').';
+        }
+        if ($refSpeed !== null) {
+            $ownSpeed = $own['speed'] !== null ? array_search($own['speed'], self::SPEED_SYMBOLS, true) : false;
+            if ($ownSpeed === false) {
+                return 'Lipsește simbolul de viteză din dimensiunea anvelopei; pe ' . $axleName . ' se cere minimum ' . self::SPEED_SYMBOLS[$refSpeed] . '.';
+            }
+            if ($ownSpeed < $refSpeed) {
+                return 'Simbol de viteză ' . $own['speed'] . ' sub cel cerut pe ' . $axleName . ' (' . self::SPEED_SYMBOLS[$refSpeed] . ').';
+            }
+        }
+
+        return null;
+    }
+
+    /** Pozitiile active ale vehiculelor din rand, cu anvelopa montata acum (pentru verificari). */
+    private function fleetUnitPositions(array $vehicleIds): array
+    {
+        $vehicleIds = array_values(array_unique(array_filter(array_map('intval', $vehicleIds), static fn (int $id): bool => $id > 0)));
+        if ($vehicleIds === []) {
+            return [];
+        }
+        $placeholders = [];
+        $params = [];
+        foreach ($vehicleIds as $index => $vehicleId) {
+            $placeholders[] = ':vehicle_' . $index;
+            $params[':vehicle_' . $index] = $vehicleId;
+        }
+        $stmt = $this->db->prepare(
+            'SELECT p.*, v.nr_inmatriculare, v.marca, v.model, v.tip_vehicul, v.formula_axelor, v.km_bord, a.tire_id AS occupied_by
+             FROM vehicule_anvelope_pozitii p
+             INNER JOIN vehicule v ON v.id = p.vehicle_id
+             LEFT JOIN anvelope_alocari a ON a.position_id = p.id AND a.data_end IS NULL
+             WHERE p.is_active = 1 AND p.vehicle_id IN (' . implode(', ', $placeholders) . ')
+             ORDER BY p.vehicle_id, p.axle_no, p.position_order, p.id'
+        );
+        $stmt->execute($params);
+        $positions = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $positions[(int) $row['id']] ??= $row;
+        }
+
+        return $positions;
+    }
+
+    /**
+     * Pentru drag & drop: pe care pozitii ale randului (vehicul / ansamblu) se poate muta anvelopa
+     * montata. Doar ajutor vizual; mutarea se verifica din nou la salvare (fleetMoveTire).
+     *
+     * @return array{source:int,targets:array<int,array{ok:bool,reason:?string}>}
+     */
+    public function getFleetMoveTargets(int $tireId, array $vehicleIds): array
+    {
+        $this->ensureLifecycleSchema();
+
+        $tire = $this->getTireById($tireId);
+        $allocation = $tire !== null ? $this->getActiveAllocationForTire($tireId) : null;
+        if ($tire === null || $allocation === null) {
+            throw new RuntimeException('Anvelopa nu mai este montată. Reîncarcă pagina.');
+        }
+        $positions = $this->fleetUnitPositions($vehicleIds);
+        $sourceId = (int) $allocation['position_id'];
+        $source = $positions[$sourceId] ?? null;
+        if ($source === null) {
+            throw new RuntimeException('Anvelopa nu mai este pe acest vehicul. Reîncarcă pagina.');
+        }
+
+        $targets = [];
+        foreach ($positions as $positionId => $position) {
+            if ($positionId === $sourceId) {
+                continue;
+            }
+            if ($position['occupied_by'] !== null) {
+                $targets[$positionId] = ['ok' => false, 'reason' => 'Poziție ocupată. Mutarea nu înlocuiește anvelopa montată; pentru schimb selectează ambele anvelope și apasă „Schimbă pozițiile”.'];
+                continue;
+            }
+            $problem = $this->fleetFitmentProblem($tire, $position, $source);
+            $targets[$positionId] = ['ok' => $problem === null, 'reason' => $problem];
+        }
+
+        return ['source' => $sourceId, 'targets' => $targets];
+    }
+
+    /**
+     * Muta o anvelopa montata pe o pozitie libera din acelasi rand (vehicul sau ansamblu cuplat).
+     * Totul in tranzactia de montaj: blocari, verificarea pozitiei sursa (nimeni n-a mutat-o intre
+     * timp), pozitia tinta libera, potrivirea, apoi applyTireMount (inchide montarea veche, deschide
+     * una noua; km si istoricul anvelopei continua).
+     */
+    public function fleetMoveTire(int $tireId, int $sourcePositionId, int $targetPositionId, array $vehicleIds, string $moment, string $now, ?int $userId): void
+    {
+        $this->ensureLifecycleSchema();
+        if ($tireId <= 0 || $sourcePositionId <= 0 || $targetPositionId <= 0) {
+            throw new RuntimeException('Mutare incompletă: lipsește anvelopa sau poziția.');
+        }
+        if ($sourcePositionId === $targetPositionId) {
+            throw new RuntimeException('Anvelopa este deja pe această poziție.');
+        }
+
+        $this->beginTireMountTransaction();
+        try {
+            $this->lockTireMountRows([$tireId], [$sourcePositionId, $targetPositionId]);
+            $allocation = $this->getActiveAllocationForTire($tireId);
+            if ($allocation === null || (int) $allocation['position_id'] !== $sourcePositionId) {
+                throw new RuntimeException('Anvelopa nu mai este pe poziția din schemă (a fost mutată între timp). Schema s-a reîncărcat.', 409);
+            }
+            $positions = $this->fleetUnitPositions($vehicleIds);
+            $source = $positions[$sourcePositionId] ?? null;
+            $target = $positions[$targetPositionId] ?? null;
+            if ($source === null || $target === null) {
+                throw new RuntimeException('Pozițiile nu aparțin acestui vehicul / ansamblu sau nu mai sunt active.', 409);
+            }
+            if ($this->getActiveAllocationForPosition($targetPositionId) !== null) {
+                throw new RuntimeException('Poziția țintă este ocupată. Mutarea nu înlocuiește o anvelopă montată; pentru schimb selectează ambele anvelope.', 409);
+            }
+            $tire = $this->getTireById($tireId);
+            $problem = $tire !== null ? $this->fleetFitmentProblem($tire, $target, $source) : 'Anvelopa nu mai există.';
+            if ($problem !== null) {
+                throw new RuntimeException($problem);
+            }
+
+            $this->applyTireMount($tireId, (int) $target['vehicle_id'], $targetPositionId, max(0, (int) ($target['km_bord'] ?? 0)), $moment, $now, $userId, false, 'Mutare din schema (drag & drop)', null);
+            $this->db->commit();
+        } catch (Throwable $exception) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            throw $exception;
+        }
+    }
+
+    /**
+     * Schimba intre ele doua anvelope montate din acelasi rand, intr-o singura tranzactie.
+     * Fiecare sens se verifica separat (A pe pozitia lui B si B pe pozitia lui A); daca unul
+     * nu trece, nu se schimba nimic. Scrierea e schimbul existent din applyTireMount.
+     */
+    public function fleetSwapTires(int $tireA, int $positionA, int $tireB, int $positionB, array $vehicleIds, string $moment, string $now, ?int $userId): void
+    {
+        $this->ensureLifecycleSchema();
+        if ($tireA <= 0 || $tireB <= 0 || $positionA <= 0 || $positionB <= 0 || $tireA === $tireB || $positionA === $positionB) {
+            throw new RuntimeException('Schimbul are nevoie de două anvelope montate pe poziții diferite.');
+        }
+
+        $this->beginTireMountTransaction();
+        try {
+            $this->lockTireMountRows([$tireA, $tireB], [$positionA, $positionB]);
+            $allocationA = $this->getActiveAllocationForTire($tireA);
+            $allocationB = $this->getActiveAllocationForTire($tireB);
+            if ($allocationA === null || (int) $allocationA['position_id'] !== $positionA || $allocationB === null || (int) $allocationB['position_id'] !== $positionB) {
+                throw new RuntimeException('Anvelopele nu mai sunt pe pozițiile din schemă (s-au schimbat între timp). Schema s-a reîncărcat.', 409);
+            }
+            $positions = $this->fleetUnitPositions($vehicleIds);
+            $contextA = $positions[$positionA] ?? null;
+            $contextB = $positions[$positionB] ?? null;
+            if ($contextA === null || $contextB === null) {
+                throw new RuntimeException('Pozițiile nu aparțin acestui vehicul / ansamblu sau nu mai sunt active.', 409);
+            }
+            $rowA = $this->getTireById($tireA);
+            $rowB = $this->getTireById($tireB);
+            if ($rowA === null || $rowB === null) {
+                throw new RuntimeException('Una dintre anvelope nu mai există.');
+            }
+
+            $codeA = $this->fleetDisplayCode((string) $contextA['position_code']);
+            $codeB = $this->fleetDisplayCode((string) $contextB['position_code']);
+            $problems = [];
+            $problemA = $this->fleetFitmentProblem($rowA, $contextB, $contextA);
+            if ($problemA !== null) {
+                $problems[] = $codeA . ' → ' . $codeB . ': ' . $problemA;
+            }
+            $problemB = $this->fleetFitmentProblem($rowB, $contextA, $contextB);
+            if ($problemB !== null) {
+                $problems[] = $codeB . ' → ' . $codeA . ': ' . $problemB;
+            }
+            if ($problems !== []) {
+                throw new RuntimeException('Schimbul nu se poate face. ' . implode(' ', $problems));
+            }
+
+            $this->applyTireMount($tireA, (int) $contextB['vehicle_id'], $positionB, max(0, (int) ($contextB['km_bord'] ?? 0)), $moment, $now, $userId, true, 'Schimb pozitii din schema', null);
+            $this->db->commit();
+        } catch (Throwable $exception) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            throw $exception;
+        }
     }
 }

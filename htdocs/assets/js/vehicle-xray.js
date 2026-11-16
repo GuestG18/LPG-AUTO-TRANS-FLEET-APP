@@ -873,7 +873,7 @@
             }
         }
         if (selection && selection.type === 'tire' && this.hooks.tireLink) {
-            cards += '<a class="fx-card is-button" href="' + escapeHtml(this.hooks.tireLink(selection.positionId)) + '"><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i>Deschide în Stoc Anvelope</a>';
+            cards += '<a class="fx-card is-button" href="' + escapeHtml(this.hooks.tireLink(selection.positionId)) + '"><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i>Deschide în Anvelope</a>';
         }
         this.footer.innerHTML = '<div class="fx-foot-left">' + cards + '</div><span class="fx-foot-sep" aria-hidden="true"></span>'
             + '<span class="fx-card fx-card-vehicle"><i class="bi bi-truck" aria-hidden="true"></i><strong>Vehicul:</strong>&nbsp;' + escapeHtml(vehicleInfo(owner)) + '</span>'

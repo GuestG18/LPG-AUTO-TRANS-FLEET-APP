@@ -54,6 +54,7 @@ return [
         'v2_doc'                => 'view',
         'v2_config'             => 'view',
         'v2_history_export'     => 'export',
+        'v2_km_at'              => 'edit',
         'v2_workorder_save'     => 'edit',
         'v2_workorder_finalize' => 'edit',
         'v2_workorder_cancel'   => 'edit',

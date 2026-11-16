@@ -31,7 +31,7 @@ return [
         'repairs'       => ['label' => 'Reparații & facturi', 'group' => 'operare'],
         'auto_catalog'  => ['label' => 'Auto catalog (config componente)', 'group' => 'configurare'],
         'parts_stock'   => ['label' => 'Stoc piese', 'group' => 'stoc'],
-        'tire_stock'    => ['label' => 'Stoc anvelope & config axe', 'group' => 'stoc'],
+        'tire_stock'    => ['label' => 'Anvelope & config axe', 'group' => 'stoc'],
         // Stoc Piese → tab Consumabile (fluide tehnice, recipiente, transferuri, completari).
         'consumabile_view'    => ['label' => 'Consumabile & fluide (vizualizare)', 'group' => 'stoc'],
         'consumabile_operate' => ['label' => 'Consumabile: operațiuni stoc (intrări, transferuri, completări)', 'group' => 'stoc'],
@@ -85,6 +85,8 @@ return [
         'tire_km_sas_sync'           => 'tire_stock',
         'edit_tire_mount'            => 'tire_stock',
         'tire_position_candidates'   => 'tire_stock',
+        'tire_fleet_targets'         => 'tire_stock',
+        'tire_fleet_move'            => 'tire_stock',
         'tire_fleet_component'       => 'view',
         'tire_fleet_component_inspector' => 'view',
         'component_mount'            => 'components_manage',

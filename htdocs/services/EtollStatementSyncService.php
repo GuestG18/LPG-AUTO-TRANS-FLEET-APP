@@ -4,6 +4,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/EtollApiClient.php';
 require_once __DIR__ . '/InvoiceTripMatcher.php';
 require_once __DIR__ . '/../models/EtollStatementModel.php';
+require_once __DIR__ . '/EtollManualService.php';
 
 /**
  * Sincronizarea situatiei eToll (scripts/sync_etoll_situatie.php, cron). Doar citeste din eToll.
@@ -43,6 +44,10 @@ class EtollStatementSyncService
         $stats = ['tranzactii' => 0, 'facturi_alimentare' => 0, 'documente' => 0, 'erori' => 0, 'sold' => null, 'cereri' => 0];
 
         $stats['tranzactii'] = $this->syncTransactions($days);
+        // Inregistrarile manuale pe care eToll le-a adus acum ies din calcule (fara dubluri).
+        foreach (EtollManualService::reconcile($this->db) as $line) {
+            ($this->log)($line);
+        }
         [$stats['facturi_alimentare'], $errors] = $this->syncTopupInvoices($days);
         $stats['erori'] += $errors;
         [$stats['documente'], $errors] = $this->syncSessionDocuments();
@@ -195,6 +200,8 @@ class EtollStatementSyncService
             LEFT JOIN etoll_documente d ON d.session_id = t.session_id
             LEFT JOIN etoll_sesiuni s ON s.session_id = t.session_id
             WHERE t.tip = 'sesiune' AND t.in_curs = 0 AND t.session_id IS NOT NULL
+              -- Sesiunile adaugate manual nu exista in eToll: documentele lor le incarca operatorul.
+              AND t.tx_id NOT LIKE 'manual-%'
               AND (d.session_id IS NULL OR d.inceput IS NULL OR d.factura_path IS NULL OR d.anexa_path IS NULL OR d.desfasurator_path IS NULL
                    OR (d.fara_tva IS NULL AND s.invoice_id IS NOT NULL))
               AND (d.incercari IS NULL OR d.incercari < :max)
@@ -391,6 +398,7 @@ class EtollStatementSyncService
                 COALESCE(SUM(CASE WHEN tip = 'sesiune' AND in_curs = 1 THEN suma END), 0) consum_in_curs,
                 COALESCE(SUM(tip = 'sesiune' AND in_curs = 1), 0) sesiuni_in_curs
             FROM etoll_tranzactii
+            WHERE inlocuita_de IS NULL
         ")->fetch(PDO::FETCH_ASSOC);
         $this->db->prepare('
             INSERT INTO etoll_sold (verificat_la, sold_etoll, alimentari, consum_inchis, consum_in_curs, sesiuni_in_curs)

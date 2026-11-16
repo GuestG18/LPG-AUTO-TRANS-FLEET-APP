@@ -564,7 +564,7 @@
         return `<tr class="${isSelected ? 'is-selected' : ''}" data-id="${esc(row.id)}">
             <td class="t-center"><input type="checkbox" class="form-check-input" aria-label="Selectează sesiunea ${esc(row.plate)} ${esc(row.closed)}" data-row-check ${isSelected ? 'checked' : ''}></td>
             <td class="t-nowrap">${esc(row.closed)}</td>
-            <td class="t-nowrap t-trunc"><strong>${esc(row.plate)}</strong>${row.trailer ? ` <span class="etoll-muted" title="Remorcă">+ ${esc(row.trailer)}</span>` : ''}</td>
+            <td class="t-nowrap t-trunc"><strong>${esc(row.plate)}</strong>${row.manual ? ` <span class="etoll-badge etoll-badge--manual" title="${esc(`Adăugată manual${row.note ? `: ${row.note}` : ''}`)}">manual</span>` : ''}${row.trailer ? ` <span class="etoll-muted" title="Remorcă">+ ${esc(row.trailer)}</span>` : ''}</td>
             <td class="t-trunc">${ben}</td>
             <td class="t-nowrap t-trunc"${row.spanTitle ? ` title="${esc(row.spanTitle)}"` : ''}>${esc(row.span)}${row.spanDays > 0 ? ` <sup class="etoll-plusday" aria-label="a doua zi">+${row.spanDays}</sup>` : ''}</td>
             <td class="t-trunc" title="${esc(row.routeFull)}">${esc(row.route)}</td>
@@ -574,7 +574,10 @@
             <td class="t-end t-nowrap">${row.open ? '<span class="etoll-muted" title="Consumul de până acum">' : ''}${esc(row.grossText)}${row.open ? '</span>' : ''}</td>
             <td class="t-nowrap">${esc(row.doc || '—')}</td>
             <td class="t-nowrap etoll-docs">${docCell(row)}</td>
-            <td><span class="etoll-badge ${esc(row.checkClass)}" title="${esc(row.error || row.checkText)}">${esc(row.checkText)}</span></td>
+            <td class="etoll-check-cell"><span class="etoll-badge ${esc(row.checkClass)}" title="${esc(row.error || row.checkText)}">${esc(row.checkText)}</span>${row.manual && data.canManual ? `<span class="etoll-row-actions">
+                <button type="button" class="etoll-icon-btn" data-manual-row="${esc(row.id)}" title="Modifică sesiunea manuală" aria-label="Modifică sesiunea manuală ${esc(row.plate)}"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+                <button type="button" class="etoll-icon-btn is-danger" data-manual-delete="${esc(row.id)}" data-manual-label="${esc(`sesiunea ${row.plate} de ${row.grossText}, închisă la ${row.closed}`)}" title="Șterge sesiunea manuală" aria-label="Șterge sesiunea manuală ${esc(row.plate)}"><i class="bi bi-trash" aria-hidden="true"></i></button>
+            </span>` : ''}</td>
         </tr>`;
     };
 
@@ -840,6 +843,143 @@
     });
 
     render();
+
+    // ---------------------------------------------------------------------
+    // Inregistrari manuale (sesiuni / alimentari lipsa din eToll): formularul din modal
+    // ---------------------------------------------------------------------
+    const manualModal = document.getElementById('etollManualModal');
+    const manualForm = document.getElementById('etollManualForm');
+    if (manualModal && manualForm) {
+        document.body.appendChild(manualModal); // in afara containerelor paginii (z-index / overflow)
+        const typeInputs = [...manualForm.querySelectorAll('[data-manual-type] input[name="tip"]')];
+        const errorBox = manualForm.querySelector('[data-manual-error]');
+        const parseAmount = (value) => {
+            let text = String(value || '').replace(/[\s ]|lei/gi, '');
+            if (text === '') return null;
+            if (text.includes(',')) text = text.replace(/\./g, '').replace(',', '.');
+            const number = Number(text);
+            return Number.isFinite(number) ? number : NaN;
+        };
+        const fmt = (value) => value.toLocaleString('ro-RO', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        const currentType = () => typeInputs.find((input) => input.checked)?.value || 'sesiune';
+        // Previzualizarea TVA: din cota (implicit 21%) sau din valoarea fara TVA scrisa.
+        const refreshVat = () => {
+            const part = manualForm.querySelector(`[data-manual-part="${currentType()}"]`);
+            const preview = part?.querySelector('[data-vat-preview]');
+            if (!preview) return;
+            const gross = parseAmount(part.querySelector('[data-vat-gross]').value);
+            const rate = parseAmount(part.querySelector('[data-vat-rate]').value);
+            const netTyped = parseAmount(part.querySelector('[data-vat-net]').value);
+            if (gross === null || Number.isNaN(gross) || gross <= 0) {
+                preview.textContent = '';
+                preview.classList.remove('is-warn');
+                return;
+            }
+            const safeRate = rate === null || Number.isNaN(rate) ? 21 : rate;
+            const net = netTyped !== null && !Number.isNaN(netTyped) ? netTyped : Math.round((gross / (1 + safeRate / 100)) * 100) / 100;
+            const warn = net > gross + 0.005 || net <= 0;
+            preview.classList.toggle('is-warn', warn);
+            preview.textContent = warn ? 'Valoarea fără TVA trebuie să fie pozitivă și cel mult egală cu suma cu TVA.'
+                : `Fără TVA ${fmt(net)} lei · TVA ${fmt(Math.round((gross - net) * 100) / 100)} lei · cu TVA ${fmt(gross)} lei`;
+        };
+        const showType = () => {
+            const type = currentType();
+            manualForm.querySelectorAll('[data-manual-part]').forEach((part) => {
+                const active = part.dataset.manualPart === type;
+                part.hidden = !active;
+                part.disabled = !active; // campurile celuilalt tip nu se trimit
+            });
+            refreshVat();
+        };
+        const fill = (values) => {
+            manualForm.reset();
+            manualForm.querySelector('[data-manual-id]').value = values?.id || '';
+            const type = values?.tip === 'alimentare' ? 'alimentare' : 'sesiune';
+            typeInputs.forEach((input) => {
+                input.checked = input.value === type;
+                // La editare tipul nu se schimba.
+                input.disabled = Boolean(values?.id) && input.value !== type;
+            });
+            Object.entries(values || {}).forEach(([name, value]) => {
+                if (['tip', 'id', 'fisiere', 'eroare', 'return_query'].includes(name)) return;
+                const field = manualForm.querySelector(`[name="${CSS.escape(name)}"]`);
+                if (field && !['file', 'checkbox', 'radio', 'hidden'].includes(field.type)) {
+                    field.value = value ?? '';
+                }
+            });
+            manualForm.querySelectorAll('[data-file-existing]').forEach((box) => {
+                box.hidden = !values?.fisiere?.[box.dataset.fileExisting];
+            });
+            manualForm.querySelectorAll('.is-invalid').forEach((field) => field.classList.remove('is-invalid'));
+            const editing = Boolean(values?.id);
+            manualForm.querySelector('[data-manual-title]').textContent = editing
+                ? (type === 'alimentare' ? 'Modifică alimentarea adăugată manual' : 'Modifică sesiunea adăugată manual')
+                : 'Adaugă manual în situația eToll';
+            manualForm.querySelector('[data-manual-submit-label]').textContent = editing ? 'Salvează' : 'Adaugă';
+            errorBox.hidden = !values?.eroare;
+            errorBox.textContent = values?.eroare || '';
+            showType();
+        };
+        const open = (values) => {
+            fill(values);
+            // bootstrap se incarca in subsol, dupa acest script: se cere abia la deschidere.
+            window.bootstrap?.Modal.getOrCreateInstance(manualModal).show();
+        };
+        typeInputs.forEach((input) => input.addEventListener('change', showType));
+        manualForm.addEventListener('input', (event) => {
+            if (event.target.matches('[data-vat-gross], [data-vat-rate], [data-vat-net]')) refreshVat();
+            if (event.target.classList.contains('is-invalid') && event.target.value.trim() !== '') event.target.classList.remove('is-invalid');
+        });
+        manualModal.addEventListener('shown.bs.modal', () => {
+            manualForm.querySelector(`[data-manual-part="${currentType()}"] input:not([type="hidden"])`)?.focus();
+        });
+        manualForm.addEventListener('submit', (event) => {
+            // Campurile obligatorii ale tipului ales (celelalte sunt dezactivate).
+            const missing = [...manualForm.querySelectorAll(`[data-required="${currentType()}"]`)].filter((field) => field.value.trim() === '');
+            manualForm.querySelectorAll('[data-required]').forEach((field) => field.classList.toggle('is-invalid', missing.includes(field)));
+            if (missing.length > 0) {
+                event.preventDefault();
+                event.stopPropagation(); // garda anti-dublu-submit din app.js ignora preventDefault
+                errorBox.hidden = false;
+                errorBox.textContent = 'Completează câmpurile marcate cu *.';
+                missing[0].focus();
+                return;
+            }
+            typeInputs.forEach((input) => { input.disabled = false; });
+        });
+
+        page.querySelector('[data-manual-new]')?.addEventListener('click', () => open(null));
+        document.addEventListener('click', (event) => {
+            const target = event.target instanceof Element ? event.target : null;
+            const rowButton = target?.closest('[data-manual-row]');
+            if (rowButton) {
+                open(rowsById.get(rowButton.dataset.manualRow)?.manual || null);
+                return;
+            }
+            const editButton = target?.closest('[data-manual-edit]');
+            if (editButton) {
+                try { open(JSON.parse(editButton.dataset.manualEdit)); } catch (error) { /* date invalide */ }
+                return;
+            }
+            const deleteButton = target?.closest('[data-manual-delete]');
+            if (deleteButton) {
+                const label = deleteButton.dataset.manualLabel || 'înregistrarea manuală';
+                const withInvoice = !deleteButton.closest('#etollTopups');
+                if (!window.confirm(`Ștergi ${label}?\n\nSe șterge din situația eToll${withInvoice ? ' și factura ei din Facturi (de pe cursă)' : ''}, cu PDF-urile încărcate.`)) {
+                    return;
+                }
+                const form = document.getElementById('etollManualDeleteForm');
+                form.querySelector('[name="id"]').value = deleteButton.dataset.manualDelete;
+                HTMLFormElement.prototype.submit.call(form);
+            }
+        });
+
+        // Formular respins la salvare: se redeschide cu valorile introduse si eroarea.
+        if (data.manualOld) {
+            const reopen = () => open(data.manualOld);
+            if (document.readyState === 'complete') reopen(); else window.addEventListener('load', reopen, { once: true });
+        }
+    }
 
     // ---------------------------------------------------------------------
     // Alimentarile: pliere (continutul ramane in pagina)

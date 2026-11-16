@@ -28,9 +28,20 @@ $serviceKmTime = static fn (?string $value): string => $value ? substr($value, 0
 $serviceKmContext = is_array($serviceKmContext ?? null) ? $serviceKmContext : [];
 $serviceKmInterventionUrl = static fn (int $id): string => build_query_url(['page' => 'mentenanta', 'action' => 'interventions', 'intervention_id' => $id]);
 // Lucrarile interventiei -> randurile formularului (cele atinse de coordonator raman blocate).
-$serviceKmComponents = static function (?array $intervention): array {
+// $relative: interventia e pe semiremorca lasata in service, dar formularul e al capului tractor -
+// vehicle_id NULL (= semiremorca) si vehicle_id = capul tractor se rescriu relativ la capul tractor.
+$serviceKmComponents = static function (?array $intervention, ?array $relative = null): array {
     $rows = [];
     foreach ((array) ($intervention['items'] ?? []) as $item) {
+        if ($relative !== null) {
+            if (($item['vehicle_id'] ?? null) === null) {
+                $item['vehicle_id'] = $relative['trailer_id'];
+                $item['vehicul_componenta'] = $relative['trailer_plate'];
+            } elseif ((int) $item['vehicle_id'] === $relative['own_id']) {
+                $item['vehicle_id'] = null;
+                $item['vehicul_componenta'] = '';
+            }
+        }
         $rows[] = [
             'item_id' => (int) $item['id'],
             'key' => (string) ($item['component_key'] ?? ''),
@@ -47,6 +58,44 @@ $serviceKmComponents = static function (?array $intervention): array {
         ];
     }
     return $rows;
+};
+// Intrarile dupa id: randul semiremorcii ramase in service deschide formularul capului tractor.
+$serviceKmById = [];
+foreach ($serviceKmEntries as $serviceKmRow) {
+    $serviceKmById[(int) $serviceKmRow['id']] = $serviceKmRow;
+}
+// Valorile formularului pentru o intrare (butonul Modifica / Intoarcere / Ridicare).
+$serviceKmEntryJson = static function (array $entry) use ($serviceKmTime, $serviceKmComponents): string {
+    $trailerStay = !empty($entry['semi_service_km_id']);
+    $intervention = $trailerStay ? ($entry['interventie_semiremorca'] ?? null) : ($entry['interventie'] ?? null);
+    return (string) json_encode([
+        'id' => (string) $entry['id'],
+        'vehicle_id' => (string) $entry['vehicle_id'],
+        'driver_id' => (string) ($entry['driver_id'] ?? ''),
+        'data_plecare' => (string) $entry['data_plecare'],
+        'ora_plecare' => $serviceKmTime($entry['ora_plecare'] ?? null),
+        'data_intoarcere' => (string) ($entry['data_intoarcere'] ?? ''),
+        'ora_intoarcere' => $serviceKmTime($entry['ora_intoarcere'] ?? null),
+        'km' => (string) (float) $entry['km'],
+        'service_nume' => (string) ($entry['service_nume'] ?? ''),
+        'motiv' => (string) ($entry['motiv'] ?? ''),
+        'observatii' => (string) ($entry['observatii'] ?? ''),
+        'prioritate' => (string) ($entry['prioritate'] ?? 'normala'),
+        'semiremorca_ramane' => $trailerStay ? '1' : '',
+        'semiremorca_id' => $trailerStay ? (string) $entry['semi_vehicle_id'] : '',
+        'data_ridicare' => $trailerStay ? (string) ($entry['semi_data_intoarcere'] ?? '') : '',
+        'ora_ridicare' => $trailerStay ? $serviceKmTime($entry['semi_ora_intoarcere'] ?? null) : '',
+        'interventie' => !empty($intervention) ? [
+            'id' => (int) $intervention['id'],
+            'status_key' => (string) $intervention['status_key'],
+            'status_label' => (string) $intervention['status_label'],
+        ] : null,
+        'components' => $serviceKmComponents($intervention, $trailerStay ? [
+            'own_id' => (int) $entry['vehicle_id'],
+            'trailer_id' => (int) $entry['semi_vehicle_id'],
+            'trailer_plate' => (string) ($entry['semi_nr_inmatriculare'] ?? ''),
+        ] : null),
+    ], JSON_UNESCAPED_UNICODE);
 };
 ?>
 <link rel="stylesheet" href="<?= e(url('assets/css/interventii-v2.css?v=' . (string) @filemtime(BASE_PATH . '/assets/css/interventii-v2.css'))) ?>">
@@ -167,6 +216,39 @@ $serviceKmComponents = static function (?array $intervention): array {
                                         <input type="hidden" name="ora_intoarcere" value="<?= e($serviceKmValue('ora_intoarcere')) ?>" data-dtp-time data-service-km-field="ora_intoarcere">
                                     </div>
                                     <?php if (isset($serviceKmErrors['data_intoarcere'])): ?><div class="invalid-feedback d-block"><?= e((string) $serviceKmErrors['data_intoarcere']) ?></div><?php else: ?><div class="form-text">Goală = vehiculul este încă în service.</div><?php endif; ?>
+                                </div>
+                                <?php /* Ansamblu: semiremorca poate ramane in service, capul tractor se intoarce fara ea
+                                         (perioada ei = rand propriu in vehicule_service_km; km-service-v2.js arata blocul). */ ?>
+                                <div class="col-12" data-ksv2-stay hidden>
+                                    <div class="ksv2-stay">
+                                        <div class="form-check form-switch">
+                                            <input class="form-check-input" type="checkbox" role="switch" id="service_km_trailer_stays" name="semiremorca_ramane" value="1" <?= $serviceKmValue('semiremorca_ramane') !== '' ? 'checked' : '' ?> data-ksv2-stay-check>
+                                            <label class="form-check-label fw-semibold" for="service_km_trailer_stays" data-ksv2-stay-label>Semiremorca rămâne în service</label>
+                                        </div>
+                                        <div class="form-text mt-0" data-ksv2-stay-help>Capul tractor o lasă la service și se întoarce fără ea.</div>
+                                        <input type="hidden" name="semiremorca_id" value="<?= e($serviceKmValue('semiremorca_id')) ?>" data-ksv2-stay-trailer>
+                                        <?php if (isset($serviceKmErrors['semiremorca_ramane'])): ?><div class="invalid-feedback d-block"><?= e((string) $serviceKmErrors['semiremorca_ramane']) ?></div><?php endif; ?>
+                                        <div class="row g-3 mt-0" data-ksv2-stay-pickup hidden>
+                                            <div class="col-sm-6">
+                                                <label class="form-label" for="service_km_pickup">Data ridicării semiremorcii</label>
+                                                <div class="dispatcher-datetime-field" data-datetime-picker<?= isset($serviceKmErrors['data_ridicare']) ? ' data-dtp-server-error' : '' ?>>
+                                                    <div class="input-group dispatcher-datetime-input-group">
+                                                        <input type="text" class="form-control<?= isset($serviceKmErrors['data_ridicare']) ? ' is-invalid' : '' ?>" id="service_km_pickup" placeholder="dd/mm/yyyy HH:mm" inputmode="numeric" autocomplete="off" maxlength="16" aria-label="Data și ora ridicării semiremorcii din service" data-dtp-display>
+                                                        <button type="button" class="btn btn-outline-secondary" aria-label="Deschide calendarul pentru ridicarea semiremorcii" aria-expanded="false" data-dtp-toggle>
+                                                            <i class="bi bi-calendar3" aria-hidden="true"></i>
+                                                        </button>
+                                                    </div>
+                                                    <div class="dispatcher-datetime-popover" hidden data-dtp-popover></div>
+                                                    <input type="hidden" name="data_ridicare" value="<?= e($serviceKmValue('data_ridicare')) ?>" data-dtp-date data-service-km-field="data_ridicare">
+                                                    <input type="hidden" name="ora_ridicare" value="<?= e($serviceKmValue('ora_ridicare')) ?>" data-dtp-time data-service-km-field="ora_ridicare">
+                                                </div>
+                                                <?php if (isset($serviceKmErrors['data_ridicare'])): ?><div class="invalid-feedback d-block"><?= e((string) $serviceKmErrors['data_ridicare']) ?></div><?php else: ?><div class="form-text">Goală = semiremorca este încă în service.</div><?php endif; ?>
+                                            </div>
+                                            <div class="col-sm-6 d-flex align-items-end">
+                                                <div class="form-text mb-2"><i class="bi bi-info-circle" aria-hidden="true"></i> „Data întoarcerii” de mai sus e întoarcerea capului tractor. Intervenția din Mentenanță se face pe semiremorcă.</div>
+                                            </div>
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
                             <div class="text-danger small mt-2" hidden data-service-km-overlap></div>
@@ -313,27 +395,15 @@ $serviceKmComponents = static function (?array $intervention): array {
                 <tbody>
                     <?php foreach ($serviceKmEntries as $entry): ?>
                         <?php
-                        $entryJson = json_encode([
-                            'id' => (string) $entry['id'],
-                            'vehicle_id' => (string) $entry['vehicle_id'],
-                            'driver_id' => (string) ($entry['driver_id'] ?? ''),
-                            'data_plecare' => (string) $entry['data_plecare'],
-                            'ora_plecare' => $serviceKmTime($entry['ora_plecare'] ?? null),
-                            'data_intoarcere' => (string) ($entry['data_intoarcere'] ?? ''),
-                            'ora_intoarcere' => $serviceKmTime($entry['ora_intoarcere'] ?? null),
-                            'km' => (string) (float) $entry['km'],
-                            'service_nume' => (string) ($entry['service_nume'] ?? ''),
-                            'motiv' => (string) ($entry['motiv'] ?? ''),
-                            'observatii' => (string) ($entry['observatii'] ?? ''),
-                            'prioritate' => (string) ($entry['prioritate'] ?? 'normala'),
-                            'interventie' => !empty($entry['interventie']) ? [
-                                'id' => (int) $entry['interventie']['id'],
-                                'status_key' => (string) $entry['interventie']['status_key'],
-                                'status_label' => (string) $entry['interventie']['status_label'],
-                            ] : null,
-                            'components' => $serviceKmComponents($entry['interventie'] ?? null),
-                        ], JSON_UNESCAPED_UNICODE);
+                        // Randul semiremorcii ramase in service se modifica din intrarea capului tractor.
+                        $parentEntry = !empty($entry['parent_service_km_id']) ? ($serviceKmById[(int) $entry['parent_service_km_id']] ?? null) : null;
+                        $isTrailerStay = !empty($entry['parent_service_km_id']);
+                        $hasTrailerStay = !empty($entry['semi_service_km_id']);
+                        $entryJson = $isTrailerStay ? ($parentEntry !== null ? $serviceKmEntryJson($parentEntry) : '') : $serviceKmEntryJson($entry);
                         $entryIntervention = is_array($entry['interventie'] ?? null) ? $entry['interventie'] : null;
+                        if ($hasTrailerStay && $entryIntervention === null && is_array($entry['interventie_semiremorca'] ?? null)) {
+                            $entryIntervention = $entry['interventie_semiremorca'];
+                        }
                         ?>
                         <tr class="service-km-row<?= !empty($entry['in_service']) ? ' table-warning' : '' ?>" data-service-km-view="<?= e((string) $entry['id']) ?>" title="Clic pentru fișa Km service #<?= e((string) $entry['id']) ?> (cheltuieli, alimentări, intervenție)">
                             <td>
@@ -343,7 +413,18 @@ $serviceKmComponents = static function (?array $intervention): array {
                                     <span class="badge text-bg-success">Revenit</span>
                                 <?php endif; ?>
                             </td>
-                            <td class="fw-semibold text-nowrap"><?= e((string) $entry['nr_inmatriculare']) ?></td>
+                            <td class="text-nowrap">
+                                <span class="fw-semibold"><?= e((string) $entry['nr_inmatriculare']) ?></span>
+                                <?php if ($isTrailerStay): ?>
+                                    <div class="text-muted small"><i class="bi bi-link-45deg" aria-hidden="true"></i> semiremorcă lăsată de <?= e((string) ($entry['parent_nr_inmatriculare'] ?? '')) ?></div>
+                                <?php elseif ($hasTrailerStay): ?>
+                                    <div class="small <?= empty($entry['semi_data_intoarcere']) ? 'text-warning-emphasis' : 'text-muted' ?>">
+                                        <i class="bi bi-arrow-return-right" aria-hidden="true"></i>
+                                        <?= e((string) ($entry['semi_nr_inmatriculare'] ?? '')) ?>
+                                        <?= empty($entry['semi_data_intoarcere']) ? 'rămasă în service' : 'ridicată ' . e($serviceKmDate($entry['semi_data_intoarcere'])) ?>
+                                    </div>
+                                <?php endif; ?>
+                            </td>
                             <td><?= e((string) ($entry['sofer_nume'] ?? '—')) ?></td>
                             <td class="text-nowrap"><?= e(trim($serviceKmDate($entry['data_plecare']) . ' ' . $serviceKmTime($entry['ora_plecare'] ?? null))) ?></td>
                             <td class="text-nowrap">
@@ -353,7 +434,13 @@ $serviceKmComponents = static function (?array $intervention): array {
                                 <?= e((string) ($entry['zile_service'] ?? '')) ?>
                                 <?php if (!empty($entry['in_service'])): ?><span class="text-muted small">(până azi)</span><?php endif; ?>
                             </td>
-                            <td class="text-end text-nowrap"><?= e(format_number_ro((float) $entry['km'], 0)) ?> km</td>
+                            <td class="text-end text-nowrap">
+                                <?php if ($isTrailerStay): ?>
+                                    <span class="text-muted" title="Semiremorca nu rulează singură: km-ii sunt pe intrarea capului tractor">—</span>
+                                <?php else: ?>
+                                    <?= e(format_number_ro((float) $entry['km'], 0)) ?> km
+                                <?php endif; ?>
+                            </td>
                             <td class="text-end text-nowrap">
                                 <?php if (!empty($entry['alimentari'])): ?>
                                     <a href="<?= e(build_query_url(['page' => 'carburanti', 'date_from' => date('Y-m-d', (int) strtotime($entry['data_plecare'] . ' -1 day')), 'date_to' => date('Y-m-d', (int) strtotime(($entry['data_intoarcere'] ?? date('Y-m-d')) . ' +1 day')), 'vehicle' => (string) $entry['nr_inmatriculare']])) ?>" title="<?= e(format_number_ro((float) $entry['alimentari']['valoare'], 2)) ?> lei · deschide în Carburanți">
@@ -392,12 +479,21 @@ $serviceKmComponents = static function (?array $intervention): array {
                                 <?php if ($entryIntervention !== null): ?>
                                     <a class="fw-semibold" href="<?= e($serviceKmInterventionUrl((int) $entryIntervention['id'])) ?>" title="Deschide intervenția în Mentenanță → Intervenții">#<?= (int) $entryIntervention['id'] ?></a>
                                     <span class="iv2-badge st-<?= e((string) $entryIntervention['status_key']) ?>"><?= e((string) $entryIntervention['status_label']) ?></span>
+                                    <?php if ($hasTrailerStay && empty($entry['interventie'])): ?><div class="text-muted small">pe <?= e((string) ($entry['semi_nr_inmatriculare'] ?? 'semiremorcă')) ?></div><?php endif; ?>
                                 <?php else: ?>
                                     <span class="text-muted">—</span>
                                 <?php endif; ?>
                             </td>
                             <?php if ($serviceKmCanManage): ?>
                                 <td class="text-end text-nowrap">
+                                    <?php if ($isTrailerStay): ?>
+                                        <?php if ($entryJson !== ''): ?>
+                                            <button type="button" class="btn btn-sm btn-outline-primary" data-service-km-edit="<?= e($entryJson) ?>" data-service-km-pickup="<?= !empty($entry['in_service']) ? '1' : '' ?>" title="<?= !empty($entry['in_service']) ? 'Completează ridicarea semiremorcii din service' : 'Modifică (din intrarea capului tractor)' ?>">
+                                                <i class="bi <?= !empty($entry['in_service']) ? 'bi-box-arrow-in-left' : 'bi-pencil' ?>" aria-hidden="true"></i>
+                                                <?= !empty($entry['in_service']) ? 'Ridicare' : '' ?>
+                                            </button>
+                                        <?php endif; ?>
+                                    <?php else: ?>
                                     <button type="button" class="btn btn-sm btn-outline-primary" data-service-km-edit="<?= e((string) $entryJson) ?>" data-service-km-return="<?= !empty($entry['in_service']) ? '1' : '' ?>" title="<?= !empty($entry['in_service']) ? 'Completează întoarcerea din service' : 'Modifică' ?>">
                                         <i class="bi <?= !empty($entry['in_service']) ? 'bi-box-arrow-in-left' : 'bi-pencil' ?>" aria-hidden="true"></i>
                                         <?= !empty($entry['in_service']) ? 'Întoarcere' : '' ?>
@@ -405,8 +501,9 @@ $serviceKmComponents = static function (?array $intervention): array {
                                     <form method="post" action="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'service_km_delete'])) ?>" class="d-inline" data-service-km-delete-form>
                                         <?= csrf_field() ?>
                                         <input type="hidden" name="id" value="<?= e((string) $entry['id']) ?>">
-                                        <button type="submit" class="btn btn-sm btn-outline-danger" title="Șterge"><i class="bi bi-trash" aria-hidden="true"></i></button>
+                                        <button type="submit" class="btn btn-sm btn-outline-danger" title="Șterge<?= $hasTrailerStay ? ' (și perioada semiremorcii ' . e((string) ($entry['semi_nr_inmatriculare'] ?? '')) . ')' : '' ?>"><i class="bi bi-trash" aria-hidden="true"></i></button>
                                     </form>
+                                    <?php endif; ?>
                                 </td>
                             <?php endif; ?>
                         </tr>
@@ -566,9 +663,15 @@ $serviceKmComponents = static function (?array $intervention): array {
             if (btn.getAttribute('data-service-km-return') === '1' && !values.data_intoarcere) {
                 values.data_intoarcere = todayIso();
             }
+            // "Ridicare" pe randul semiremorcii ramase in service: formularul capului tractor, cu ridicarea azi.
+            var pickup = btn.getAttribute('data-service-km-pickup') === '1';
+            if (pickup && !values.data_ridicare) {
+                values.data_ridicare = todayIso();
+            }
             fill(values);
             openForm();
-            var focusTarget = btn.getAttribute('data-service-km-return') === '1' ? field('km') : field('vehicle_id');
+            var focusTarget = pickup ? form.querySelector('#service_km_pickup')
+                : (btn.getAttribute('data-service-km-return') === '1' ? field('km') : field('vehicle_id'));
             if (focusTarget) { focusTarget.focus(); }
         });
     });
@@ -576,7 +679,7 @@ $serviceKmComponents = static function (?array $intervention): array {
     form.querySelector('[data-service-km-reset]').addEventListener('click', function () {
         form.reset();
         // form.reset() nu reface campurile ascunse, deci data plecarii revine explicit la azi.
-        fill({ id: '', vehicle_id: '', driver_id: '', data_plecare: todayIso(), data_intoarcere: '', ora_plecare: '', ora_intoarcere: '', km: '', service_nume: '', motiv: '', observatii: '', prioritate: 'normala', interventie: null, components: [] });
+        fill({ id: '', vehicle_id: '', driver_id: '', data_plecare: todayIso(), data_intoarcere: '', ora_plecare: '', ora_intoarcere: '', km: '', service_nume: '', motiv: '', observatii: '', prioritate: 'normala', semiremorca_ramane: '', semiremorca_id: '', data_ridicare: '', ora_ridicare: '', interventie: null, components: [] });
         form.querySelectorAll('.is-invalid').forEach(function (el) { el.classList.remove('is-invalid'); });
     });
 
@@ -672,7 +775,7 @@ $serviceKmComponents = static function (?array $intervention): array {
     function prefillFrom(source) {
         var vehicleId = String(source.vehicle_id || '');
         if (!vehicleId) { return false; }
-        var prefill = { id: '', vehicle_id: vehicleId, driver_id: driverMap[vehicleId] ? String(driverMap[vehicleId]) : '', km: '', service_nume: '', motiv: '', observatii: '', prioritate: 'normala', interventie: null, components: [] };
+        var prefill = { id: '', vehicle_id: vehicleId, driver_id: driverMap[vehicleId] ? String(driverMap[vehicleId]) : '', km: '', service_nume: '', motiv: '', observatii: '', prioritate: 'normala', semiremorca_ramane: '', semiremorca_id: '', data_ridicare: '', ora_ridicare: '', interventie: null, components: [] };
         ['data_plecare', 'ora_plecare', 'data_intoarcere', 'ora_intoarcere'].forEach(function (name) {
             prefill[name] = /^[\d:-]+$/.test(source[name] || '') ? source[name] : '';
         });

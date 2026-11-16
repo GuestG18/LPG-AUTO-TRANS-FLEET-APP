@@ -307,4 +307,5 @@ $pageJson = json_encode([
 <div class="rv2-toast" id="rv2Toast" aria-live="polite"></div>
 
 <script type="application/json" id="rv2Data"><?= $pageJson ?: '{}' ?></script>
+<script src="<?= e($asset('assets/js/datetime-picker-field.js')) ?>"></script>
 <script src="<?= e($asset('assets/js/revizii-v2.js')) ?>"></script>
