@@ -236,6 +236,24 @@ class DriverEquipmentModel extends BaseModel
                   AND (sm.status = 'inactiv' OR COALESCE(sm.employment_status, 'active') = 'terminated')
             ")->fetchColumn();
 
+        // De returnat: articole returnabile încă active care trebuie aduse înapoi —
+        // fie sunt marcate pentru înlocuire (bucata veche revine), fie deținătorul
+        // nu mai este activ. O alocare se numără o singură dată.
+        $replaceList = $this->inList(self::REPLACEMENT_STATUSES);
+        $toReturn = $this->prepared("
+            SELECT COUNT(*)
+            FROM echipamente_alocari a
+            INNER JOIN echipamente_catalog c ON c.id = a.catalog_id
+            LEFT JOIN soferi s ON s.id = a.driver_id
+            LEFT JOIN staff_members sm ON sm.id = a.staff_id
+            WHERE a.status IN ($activeIn) AND a.detinator_tip = :tip AND c.returnabil = 1
+              AND (
+                  a.status IN ($replaceList)
+                  OR COALESCE(s.status, sm.status) = 'inactiv'
+                  OR COALESCE(s.employment_status, sm.employment_status, 'active') = 'terminated'
+              )
+        ", ['tip' => $ownerType])->fetchColumn();
+
         // Stocul se ține pe articol + gestiune + mărime și este COMUN celor
         // două pagini, deci nu se filtrează după tipul de deținător.
         $stock = $this->db->query("
@@ -253,6 +271,7 @@ class DriverEquipmentModel extends BaseModel
             'valoare_active' => (float) $value,
             'de_inlocuit' => (int) $toReplace,
             'nereturnate' => (int) $notReturned,
+            'de_returnat' => (int) $toReturn,
             'in_stoc' => (int) ($stock[0] ?? 0),
             'articole_in_stoc' => (int) ($stock[1] ?? 0),
         ];
@@ -2523,5 +2542,313 @@ class DriverEquipmentModel extends BaseModel
         }
 
         return $initials !== '' ? $initials : '?';
+    }
+
+    // ------------------------------------------------------------------
+    // Catalog — vederea pe siluetă
+    // ------------------------------------------------------------------
+
+    /**
+     * Zonele de pe siluetă, în procente din pânza imaginilor generate de
+     * scripts/generate_equipment_silhouettes.php (viewBox 360 × 860).
+     * „dispozitiv” diferă: la șofer e stația de pe piept, la TESA tableta din mână.
+     */
+    public const SILHOUETTE_ANCHORS = [
+        'sofer' => [
+            'cap' => [50.0, 4.7], 'trunchi' => [44.0, 35.0], 'maini' => [25.6, 54.7],
+            'picioare' => [57.0, 72.7], 'talpi' => [42.5, 94.8], 'dispozitiv' => [58.9, 23.7],
+            'legitimatie' => [38.6, 30.0], 'alte' => [50.0, 50.0],
+        ],
+        'tesa' => [
+            'cap' => [50.0, 6.5], 'trunchi' => [44.0, 35.0], 'maini' => [25.6, 54.7],
+            'picioare' => [57.0, 72.7], 'talpi' => [42.5, 94.8], 'dispozitiv' => [74.5, 50.6],
+            'legitimatie' => [36.7, 29.7], 'alte' => [50.0, 50.0],
+        ],
+    ];
+
+    /**
+     * Zona + iconița unei categorii. Categoriile sunt text liber, deci potrivirea
+     * se face pe cuvinte-cheie; ce nu se recunoaște merge la „alte”.
+     */
+    private const CATEGORY_VISUALS = [
+        ['/protec|ppe|casc|ochelar|antifon/', 'cap', 'bi-shield-check'],
+        ['/pantal|salopet/', 'picioare', 'bi-person-standing'],
+        ['/incalt|bocanc|pantof|ghet|sandal/', 'talpi', 'bi-person-walking'],
+        ['/imbrac|tricou|geac|camas|vest|uniform|haina|hanorac/', 'trunchi', 'bi-person-vcard'],
+        ['/accesor|manus|scul|unelt/', 'maini', 'bi-tools'],
+        ['/comunic|electron|telefon|tablet|radio|sim|laptop|\bit\b/', 'dispozitiv', 'bi-phone'],
+        ['/card|document|legitim|acces|ecuson|cheie/', 'legitimatie', 'bi-person-badge'],
+    ];
+
+    /** Ordinea casetelor în jurul siluetei, pe zone (prima liberă câștigă). */
+    private const SLOT_PREFERENCES = [
+        'cap' => ['L1', 'R1', 'L2', 'R2'],
+        'dispozitiv' => ['R1', 'R2', 'L1', 'L2'],
+        'trunchi' => ['L2', 'R2', 'L1', 'R1'],
+        'legitimatie' => ['R2', 'L2', 'R1', 'L1'],
+        'maini' => ['L3', 'L2', 'R3', 'R2'],
+        'picioare' => ['R3', 'R4', 'L3', 'L4'],
+        'talpi' => ['L4', 'R4', 'L3', 'R3'],
+        'alte' => ['R4', 'L4', 'R3', 'L3'],
+    ];
+
+    /**
+     * Pregătește pagina de catalog pe siluetă din datele deja încărcate
+     * (getCatalog + getCatalogBreakdown) — fără interogări în plus.
+     *
+     * Valoarea de stoc folosește aceeași regulă ca pagina Stoc: disponibil ×
+     * costul liniei de stoc. Bucățile alocate sunt numărate separat și NU intră
+     * în valoarea stocului.
+     *
+     * @param array<int, array<string, mixed>> $catalogItems
+     * @param array<int, array<string, mixed>> $breakdown
+     */
+    public function buildCatalogOverview(array $catalogItems, array $breakdown): array
+    {
+        $categories = [];
+        $items = [];
+
+        foreach ($catalogItems as $item) {
+            $id = (int) $item['id'];
+            $lines = $breakdown[$id]['stoc'] ?? [];
+            $sizes = [];
+            $stockQty = 0;
+            $reserved = 0;
+            $value = 0.0;
+            $worst = null;
+            $hasPricedLine = false;
+            foreach ($lines as $line) {
+                $qty = (int) $line['disponibil'];
+                $stockQty += $qty;
+                $reserved += (int) $line['rezervat'];
+                $value += $qty * (float) $line['cost_unitar'];
+                $hasPricedLine = $hasPricedLine || (float) $line['cost_unitar'] > 0;
+                $label = (string) $line['marime'] !== '' ? (string) $line['marime'] : 'Unică';
+                $sizes[$label] = ($sizes[$label] ?? 0) + $qty;
+                $rank = ['epuizat' => 3, 'scazut' => 2, 'in_stoc' => 1][(string) $line['status']['key']] ?? 0;
+                if ($worst === null || $rank > $worst['rank']) {
+                    $worst = ['rank' => $rank] + $line['status'];
+                }
+            }
+            if ($stockQty > 0 && $worst !== null && $worst['key'] === 'epuizat') {
+                // O mărime epuizată nu face tot articolul „epuizat” dacă alte mărimi au stoc.
+                $worst = ['rank' => 2, 'label' => 'Stoc parțial', 'tone' => 'warning', 'key' => 'partial'];
+            }
+            $assigned = (int) ($breakdown[$id]['total_alocat'] ?? 0);
+            $price = (float) $item['cost_implicit'];
+            $status = (int) $item['activ'] !== 1
+                ? ['label' => 'Inactiv', 'tone' => 'muted', 'key' => 'inactiv']
+                : ($worst ?? ['label' => 'Fără stoc', 'tone' => 'muted', 'key' => 'fara_stoc']);
+
+            $name = trim((string) $item['categorie']) !== '' ? trim((string) $item['categorie']) : 'Fără categorie';
+            $visual = $this->categoryVisual($name);
+            $key = $visual['slug'];
+            $destination = (string) ($item['destinatie'] ?? 'ambele');
+
+            $items[$id] = [
+                'id' => $id,
+                'categorie' => $key,
+                'destinatie' => $destination,
+                'stoc' => $stockQty,
+                'rezervat' => $reserved,
+                'alocat' => $assigned,
+                'valoare' => $value,
+                // Preț lipsă ≠ preț zero: îl marcăm ca nesetat, nu ca 0 lei.
+                'pret' => $price > 0 || $hasPricedLine ? $price : null,
+                'marimi' => $sizes,
+                'status' => $status,
+            ];
+
+            if (!isset($categories[$key])) {
+                $categories[$key] = [
+                    'key' => $key,
+                    'name' => $name,
+                    'anchor' => $visual['anchor'],
+                    'icon' => $visual['icon'],
+                    'roles' => [],
+                ];
+            }
+            foreach (['sofer', 'tesa'] as $role) {
+                if ($destination !== 'ambele' && $destination !== $role) {
+                    continue;
+                }
+                $stats = $categories[$key]['roles'][$role] ?? ['articole' => 0, 'stoc' => 0, 'alocat' => 0, 'valoare' => 0.0];
+                $stats['articole']++;
+                $stats['stoc'] += $stockQty;
+                $stats['alocat'] += $assigned;
+                $stats['valoare'] += $value;
+                $categories[$key]['roles'][$role] = $stats;
+            }
+            $all = $categories[$key]['total'] ?? ['articole' => 0, 'stoc' => 0, 'alocat' => 0, 'valoare' => 0.0];
+            $all['articole']++;
+            $all['stoc'] += $stockQty;
+            $all['alocat'] += $assigned;
+            $all['valoare'] += $value;
+            $categories[$key]['total'] = $all;
+        }
+
+        uasort($categories, static fn(array $a, array $b): int => strcoll($a['name'], $b['name']));
+
+        $stages = [];
+        foreach (['sofer', 'tesa'] as $role) {
+            $taken = [];
+            $cards = [];
+            $overflow = [];
+            foreach ($categories as $key => $category) {
+                if (!isset($category['roles'][$role])) {
+                    continue;
+                }
+                $slot = null;
+                foreach (array_merge(self::SLOT_PREFERENCES[$category['anchor']] ?? [], ['L1', 'R1', 'L2', 'R2', 'L3', 'R3', 'L4', 'R4']) as $candidate) {
+                    if (!isset($taken[$candidate])) {
+                        $slot = $candidate;
+                        break;
+                    }
+                }
+                if ($slot === null) {
+                    $overflow[] = $key;
+                    continue;
+                }
+                $taken[$slot] = true;
+                $anchor = self::SILHOUETTE_ANCHORS[$role][$category['anchor']] ?? self::SILHOUETTE_ANCHORS[$role]['alte'];
+                $cards[] = ['key' => $key, 'slot' => $slot, 'anchor' => $anchor];
+            }
+            $stages[$role] = ['cards' => $cards, 'overflow' => $overflow];
+        }
+
+        $totals = ['articole' => 0, 'stoc' => 0, 'alocat' => 0, 'valoare' => 0.0];
+        foreach ($items as $row) {
+            $totals['articole']++;
+            $totals['stoc'] += $row['stoc'];
+            $totals['alocat'] += $row['alocat'];
+            $totals['valoare'] += $row['valoare'];
+        }
+
+        return ['categories' => $categories, 'items' => $items, 'stages' => $stages, 'totals' => $totals];
+    }
+
+    /** @return array{slug: string, anchor: string, icon: string} */
+    public function categoryVisual(string $name): array
+    {
+        $plain = mb_strtolower($name);
+        $plain = strtr($plain, ['ă' => 'a', 'â' => 'a', 'î' => 'i', 'ș' => 's', 'ş' => 's', 'ț' => 't', 'ţ' => 't']);
+        $slug = trim((string) preg_replace('/[^a-z0-9]+/', '-', $plain), '-');
+
+        foreach (self::CATEGORY_VISUALS as [$pattern, $anchor, $icon]) {
+            if (preg_match($pattern, $plain)) {
+                return ['slug' => $slug !== '' ? $slug : 'categorie', 'anchor' => $anchor, 'icon' => $icon];
+            }
+        }
+
+        return ['slug' => $slug !== '' ? $slug : 'categorie', 'anchor' => 'alte', 'icon' => 'bi-box-seam'];
+    }
+
+    // ------------------------------------------------------------------
+    // Cardul „Valoare echipamente alocate” (Echipamente șoferi / TESA)
+    // ------------------------------------------------------------------
+
+    /**
+     * Cele trei niveluri ale cardului (total -> pe persoană -> pe articole),
+     * construite din rândurile deja încărcate de getOwnerRows() — fără interogări
+     * în plus și în aceeași perioadă/filtre ca tabelul de sub card.
+     *
+     * Valoarea unei linii = cantitate × cost_unitar al ALOCĂRII (prețul de la
+     * predare), nu prețul curent din catalog. Doar alocările active intră în
+     * total; cele returnate / înlocuite nu. Un cost 0 este marcat „preț lipsă”,
+     * nu tratat ca valoare confirmată.
+     *
+     * @param array<int, array<string, mixed>> $ownerRows
+     */
+    public function buildValueOverview(array $ownerRows): array
+    {
+        $owners = [];
+        $allCatalog = [];
+        $totals = ['valoare' => 0.0, 'bucati' => 0, 'persoane' => 0, 'pret_lipsa' => 0];
+
+        foreach ($ownerRows as $row) {
+            $items = array_merge(
+                $row['echipamente_fizice'] ?? [],
+                $row['comunicatii'] ?? [],
+                $row['alte_active'] ?? []
+            );
+            $lines = [];
+            $categories = [];
+            $catalogIds = [];
+            $valoare = 0.0;
+            $bucati = 0;
+            $missing = 0;
+
+            foreach ($items as $item) {
+                if (empty($item['activa'])) {
+                    continue;
+                }
+                $qty = (int) $item['cantitate'];
+                $unit = (float) $item['cost_unitar'];
+                $lineValue = $qty * $unit;
+                $name = trim((string) $item['categorie']) !== '' ? trim((string) $item['categorie']) : 'Fără categorie';
+                $visual = $this->categoryVisual($name);
+                $key = $visual['slug'];
+
+                $lines[] = [
+                    'id' => (int) $item['id'],
+                    'denumire' => (string) $item['denumire'],
+                    'categorie' => $name,
+                    'cat' => $key,
+                    'grupa' => self::GROUPS[(string) $item['grupa']] ?? '',
+                    'cantitate' => $qty,
+                    'marime' => (string) ($item['marime'] ?? ''),
+                    'pret' => $unit > 0 ? $unit : null,
+                    'valoare' => $lineValue,
+                    'status' => self::STATUSES[(string) $item['status']] ?? (string) $item['status'],
+                    'de_inlocuit' => in_array((string) $item['status'], self::REPLACEMENT_STATUSES, true),
+                ];
+
+                if (!isset($categories[$key])) {
+                    $categories[$key] = ['key' => $key, 'name' => $name, 'icon' => $visual['icon'], 'anchor' => $visual['anchor'], 'valoare' => 0.0, 'bucati' => 0];
+                }
+                $categories[$key]['valoare'] += $lineValue;
+                $categories[$key]['bucati'] += $qty;
+
+                $catalogIds[(int) $item['catalog_id']] = true;
+                $allCatalog[(int) $item['catalog_id']] = true;
+                $valoare += $lineValue;
+                $bucati += $qty;
+                $missing += $unit > 0 ? 0 : 1;
+            }
+
+            foreach ($categories as &$category) {
+                $category['procent'] = $valoare > 0 ? round($category['valoare'] / $valoare * 100, 1) : 0.0;
+            }
+            unset($category);
+            uasort($categories, static fn(array $a, array $b): int => $b['valoare'] <=> $a['valoare'] ?: strcoll($a['name'], $b['name']));
+            usort($lines, static fn(array $a, array $b): int => strcoll($a['categorie'], $b['categorie']) ?: $b['valoare'] <=> $a['valoare']);
+
+            $meta = (string) $row['detinator_tip'] === self::OWNER_STAFF
+                ? implode(' · ', array_filter([(string) ($row['functie'] ?? ''), (string) ($row['departament'] ?? '')]))
+                : (string) ($row['vehicul'] ?? '');
+
+            $owners[] = [
+                'id' => (int) $row['id'],
+                'nume' => (string) $row['nume'],
+                'initiale' => (string) $row['initiale'],
+                'meta' => $meta,
+                'valoare' => $valoare,
+                'articole' => count($catalogIds),
+                'bucati' => $bucati,
+                'pret_lipsa' => $missing,
+                'categorii' => array_values($categories),
+                'linii' => $lines,
+            ];
+
+            $totals['valoare'] += $valoare;
+            $totals['bucati'] += $bucati;
+            $totals['persoane'] += $bucati > 0 ? 1 : 0;
+            $totals['pret_lipsa'] += $missing;
+        }
+
+        usort($owners, static fn(array $a, array $b): int => $b['valoare'] <=> $a['valoare'] ?: strcoll($a['nume'], $b['nume']));
+        $totals['articole'] = count($allCatalog);
+
+        return ['owners' => $owners, 'totals' => $totals];
     }
 }

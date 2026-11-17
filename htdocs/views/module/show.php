@@ -11,19 +11,20 @@ $vehicleCouplingContext = $vehicleCouplingContext ?? null;
 $vehicleTireContext = $vehicleTireContext ?? null;
 ?>
 
+<?php if ($moduleKey === 'vehicule'): ?>
+    <?php // Fișa vehiculului: prezentare + Informații vehicul (carusel, cuplare) + Documente. ?>
+    <?php require __DIR__ . '/_vehicle_detail.php'; ?>
+<?php else: ?>
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h2 class="h4 mb-0">Detalii <?= e($module['singular']) ?></h2>
     <div class="d-flex gap-2">
-        <?php if ($moduleKey === 'vehicule'): ?>
-            <a class="btn btn-primary" href="<?= e(build_query_url(['page' => 'stare_tehnica', 'vehicle_id' => (int) $record['id']])) ?>">Stare tehnic&#259;</a>
-            <a class="btn btn-outline-primary" href="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'axis_config', 'vehicle_id' => (int) $record['id']])) ?>">Configura&#539;ie Axe</a>
-        <?php endif; ?>
         <a class="btn btn-outline-primary" href="<?= e(build_query_url(['page' => $routePage, 'action' => 'edit', 'id' => (int) $record['id']])) ?>">Editează</a>
         <a class="btn btn-outline-secondary" href="<?= e($backUrl) ?>">Înapoi</a>
     </div>
 </div>
+<?php endif; ?>
 
-<?php if (in_array($moduleKey, ['vehicule', 'soferi'], true) && is_array($statusContext)): ?>
+<?php if ($moduleKey === 'soferi' && is_array($statusContext)): ?>
     <?php
     $statusValue = (string) ($statusContext['status'] ?? 'inactiv');
     $isStatusActive = $statusValue === 'activ';
@@ -396,65 +397,6 @@ $vehicleTireContext = $vehicleTireContext ?? null;
                 </div>
             <?php endif; ?>
         </div>
-    <?php else: ?>
-        <div class="entity-status-panel <?= $isStatusActive ? 'is-active' : 'is-inactive' ?> mb-3">
-            <div class="entity-status-header">
-                <div>
-                    <div class="entity-status-kicker">Status calculat automat</div>
-                    <div class="entity-status-title">
-                        <?= $isStatusActive ? 'Activ' : 'Inactiv' ?>
-                        <?php if (!$isStatusActive && $statusIssueChecks !== []): ?>
-                            <span><?= e((string) count($statusIssueChecks)) ?> <?= count($statusIssueChecks) === 1 ? 'problema' : 'probleme' ?></span>
-                        <?php endif; ?>
-                    </div>
-                </div>
-                <span class="entity-status-badge <?= $isStatusActive ? 'is-active' : 'is-inactive' ?>">
-                    <?= $isStatusActive ? 'ACTIV' : 'INACTIV' ?>
-                </span>
-            </div>
-
-            <p class="entity-status-copy">
-                Statusul nu mai este setat manual. El se actualizeaza automat in functie de documentele obligatorii si de valabilitatea lor.
-            </p>
-
-            <?php if (!$isStatusActive && $statusIssueChecks !== []): ?>
-                <div class="entity-status-problem-callout">
-                    <div class="entity-status-problem-title">
-                        <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
-                        <span>De ce este <?= e($statusEntityLabel) ?> inactiv</span>
-                    </div>
-                    <div class="entity-status-problem-pills">
-                        <?php foreach ($statusIssueChecks as $issueCheck): ?>
-                            <?php $issueMeta = $statusCheckMeta($issueCheck); ?>
-                            <span class="<?= e((string) $issueMeta['class']) ?>">
-                                <i class="bi <?= e((string) $issueMeta['icon']) ?>" aria-hidden="true"></i>
-                                <?= e((string) ($issueCheck['label'] ?? '-')) ?>
-                            </span>
-                        <?php endforeach; ?>
-                    </div>
-                </div>
-            <?php endif; ?>
-
-            <?php if ($orderedStatusChecks !== []): ?>
-                <div class="entity-status-check-list">
-                    <?php foreach ($orderedStatusChecks as $check): ?>
-                        <?php $checkMeta = $statusCheckMeta($check); ?>
-                        <div class="entity-status-check <?= e((string) $checkMeta['class']) ?>">
-                            <div class="entity-status-check-icon" aria-hidden="true">
-                                <i class="bi <?= e((string) $checkMeta['icon']) ?>"></i>
-                            </div>
-                            <div class="entity-status-check-body">
-                                <div class="entity-status-check-heading">
-                                    <strong><?= e((string) ($check['label'] ?? '-')) ?></strong>
-                                    <span><?= e((string) $checkMeta['label']) ?></span>
-                                </div>
-                                <p><?= e((string) ($check['message'] ?? '')) ?></p>
-                            </div>
-                        </div>
-                    <?php endforeach; ?>
-                </div>
-            <?php endif; ?>
-        </div>
     <?php endif; ?>
 <?php endif; ?>
 
@@ -598,6 +540,7 @@ $vehicleTireContext = $vehicleTireContext ?? null;
     </script>
 <?php endif; ?>
 
+<?php if ($moduleKey !== 'vehicule'): ?>
 <div class="card border-0 shadow-sm">
     <div class="card-body p-0">
         <div class="table-responsive">
@@ -619,6 +562,7 @@ $vehicleTireContext = $vehicleTireContext ?? null;
         </div>
     </div>
 </div>
+<?php endif; ?>
 
 <?php if ($moduleKey === 'documente' && $documentCustomFieldRows !== []): ?>
     <?php $documentCustomFieldTypeLabels = ['text' => 'Text', 'number' => 'Numeric', 'date' => 'Data', 'checkbox' => 'Checkbox']; ?>
@@ -1819,233 +1763,6 @@ $vehicleTireContext = $vehicleTireContext ?? null;
         </div>
     </div>
     <?php endif; ?>
-
-    <div class="card border-0 shadow-sm mt-4">
-        <div class="card-header bg-white d-flex flex-wrap justify-content-between align-items-center gap-2">
-            <div>
-                <h3 class="h6 mb-1">Cuplaj tractor - semiremorca</h3>
-                <p class="text-muted small mb-0">Pentru cap tractor si semiremorca poti muta alocarea direct din aceasta pagina.</p>
-            </div>
-            <span class="badge text-bg-light border">Tip vehicul: <?= e(vehicle_type_label($vehicleType)) ?></span>
-        </div>
-        <div class="card-body">
-            <?php if (in_array($vehicleTypeNormalized, ['autovehicul', 'camion'], true)): ?>
-                <div class="alert alert-light border mb-0">
-                    Acest vehicul este de tip <strong><?= e(vehicle_type_label($vehicleType)) ?></strong>. Cuplajul este disponibil doar pentru <strong>Cap tractor</strong> si <strong>Semi-remorca</strong>.
-                </div>
-            <?php elseif ($vehicleTypeNormalized === 'cap_tractor'): ?>
-                <div class="mb-3">
-                    <div class="small text-muted">Semiremorca curenta</div>
-                    <div class="fw-semibold">
-                        <?= $activeCoupling ? e((string) ($activeCoupling['semiremorca_nr'] ?? '-')) : 'Nicio semiremorca cuplata' ?>
-                    </div>
-                </div>
-
-                <form method="post" action="<?= e(build_query_url(['page' => 'vehicule', 'action' => 'cupleaza'])) ?>" class="row g-2 align-items-end">
-                    <?= csrf_field() ?>
-                    <input type="hidden" name="tractor_id" value="<?= e((string) ((int) $record['id'])) ?>">
-                    <input type="hidden" name="redirect_vehicle_id" value="<?= e((string) ((int) $record['id'])) ?>">
-
-                    <div class="col-12 col-md-8">
-                        <label class="form-label mb-1" for="semiremorca_id">Selecteaza semiremorca</label>
-                        <select class="form-select" id="semiremorca_id" name="semiremorca_id" <?= $hasTrailerOptions ? 'required' : 'disabled' ?>>
-                            <?php if ($hasTrailerOptions): ?>
-                                <option value="">-- Selecteaza --</option>
-                            <?php else: ?>
-                                <option value="">Nu exista semiremorci active si necuplate.</option>
-                            <?php endif; ?>
-                            <?php foreach ($trailerOptions as $optionId => $optionLabel): ?>
-                                <option value="<?= e((string) $optionId) ?>" <?= $activeCoupling && (int) ($activeCoupling['semiremorca_id'] ?? 0) === (int) $optionId ? 'selected' : '' ?>>
-                                    <?= e((string) $optionLabel) ?>
-                                </option>
-                            <?php endforeach; ?>
-                        </select>
-                    </div>
-                    <div class="col-12 col-md-4 d-flex gap-2">
-                        <button type="submit" class="btn btn-primary" <?= $hasTrailerOptions ? '' : 'disabled' ?>>Salveaza cuplaj</button>
-                    </div>
-                </form>
-
-                <?php if ($activeCoupling): ?>
-                    <form method="post" action="<?= e(build_query_url(['page' => 'vehicule', 'action' => 'decupleaza'])) ?>" class="mt-3">
-                        <?= csrf_field() ?>
-                        <input type="hidden" name="tractor_id" value="<?= e((string) ((int) $record['id'])) ?>">
-                        <input type="hidden" name="redirect_vehicle_id" value="<?= e((string) ((int) $record['id'])) ?>">
-                        <button type="submit" class="btn btn-outline-danger btn-sm" data-confirm="Sigur doresti sa decuplezi semiremorca de pe acest tractor?">
-                            Decupleaza semiremorca
-                        </button>
-                    </form>
-                <?php endif; ?>
-            <?php elseif (is_trailer_vehicle_type($vehicleType)): ?>
-                <div class="mb-3">
-                    <div class="small text-muted">Tractor curent</div>
-                    <div class="fw-semibold">
-                        <?= $activeCoupling ? e((string) ($activeCoupling['tractor_nr'] ?? '-')) : 'Niciun tractor cuplat' ?>
-                    </div>
-                </div>
-
-                <form method="post" action="<?= e(build_query_url(['page' => 'vehicule', 'action' => 'cupleaza'])) ?>" class="row g-2 align-items-end">
-                    <?= csrf_field() ?>
-                    <input type="hidden" name="semiremorca_id" value="<?= e((string) ((int) $record['id'])) ?>">
-                    <input type="hidden" name="redirect_vehicle_id" value="<?= e((string) ((int) $record['id'])) ?>">
-
-                    <div class="col-12 col-md-8">
-                        <label class="form-label mb-1" for="tractor_id">Selecteaza cap tractor</label>
-                        <select class="form-select" id="tractor_id" name="tractor_id" <?= $hasTractorOptions ? 'required' : 'disabled' ?>>
-                            <option value="">-- Selecteaza --</option>
-                            <?php foreach ($tractorOptions as $optionId => $optionLabel): ?>
-                                <option value="<?= e((string) $optionId) ?>" <?= $activeCoupling && (int) ($activeCoupling['tractor_id'] ?? 0) === (int) $optionId ? 'selected' : '' ?>>
-                                    <?= e((string) $optionLabel) ?>
-                                </option>
-                            <?php endforeach; ?>
-                        </select>
-                    </div>
-                    <div class="col-12 col-md-4 d-flex gap-2">
-                        <button type="submit" class="btn btn-primary" <?= $hasTractorOptions ? '' : 'disabled' ?>>Muta pe tractor</button>
-                    </div>
-                </form>
-
-                <?php if ($activeCoupling): ?>
-                    <form method="post" action="<?= e(build_query_url(['page' => 'vehicule', 'action' => 'decupleaza'])) ?>" class="mt-3">
-                        <?= csrf_field() ?>
-                        <input type="hidden" name="semiremorca_id" value="<?= e((string) ((int) $record['id'])) ?>">
-                        <input type="hidden" name="redirect_vehicle_id" value="<?= e((string) ((int) $record['id'])) ?>">
-                        <button type="submit" class="btn btn-outline-danger btn-sm" data-confirm="Sigur doresti sa decuplezi aceasta semiremorca?">
-                            Decupleaza de pe tractor
-                        </button>
-                    </form>
-                <?php endif; ?>
-            <?php endif; ?>
-
-            <?php if ($couplingHistory !== []): ?>
-                <div class="table-responsive mt-4">
-                    <table class="table table-sm align-middle mb-0">
-                        <thead>
-                            <tr>
-                                <th>Cap tractor</th>
-                                <th>Semiremorca</th>
-                                <th>Start</th>
-                                <th>Sfarsit</th>
-                                <th>Status</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <?php foreach ($couplingHistory as $history): ?>
-                                <tr>
-                                    <td><?= e((string) ($history['tractor_nr'] ?? '-')) ?></td>
-                                    <td><?= e((string) ($history['semiremorca_nr'] ?? '-')) ?></td>
-                                    <td><?= e(format_datetime_ro((string) ($history['data_start'] ?? ''))) ?></td>
-                                    <td><?= e(format_datetime_ro((string) ($history['data_end'] ?? ''))) ?></td>
-                                    <td><?= !empty($history['activ']) ? '<span class="badge text-bg-success">Activ</span>' : '<span class="badge text-bg-secondary">Incheiat</span>' ?></td>
-                                </tr>
-                            <?php endforeach; ?>
-                        </tbody>
-                    </table>
-                </div>
-            <?php endif; ?>
-        </div>
-    </div>
-
-    <div class="card border-0 shadow-sm mt-4">
-        <div class="card-header bg-white d-flex flex-wrap justify-content-between align-items-center gap-2">
-            <div>
-                <h3 class="h6 mb-1">Documente asociate vehiculului</h3>
-                <p class="text-muted small mb-0">Vezi toate documentele atașate acestui vehicul și intră direct în previzualizare.</p>
-            </div>
-            <a class="btn btn-sm btn-primary" href="<?= e(build_query_url(['page' => 'documente', 'action' => 'create', 'vehicle_id' => (int) $record['id']])) ?>">Adaugă document</a>
-        </div>
-        <div class="card-body p-0">
-            <?php if ($vehicleDocuments === []): ?>
-                <div class="p-3 text-muted">Nu există documente asociate acestui vehicul.</div>
-            <?php else: ?>
-                <div class="table-responsive">
-                    <table class="table table-hover align-middle mb-0">
-                        <thead>
-                        <tr>
-                            <th>Tip document</th>
-                            <th>Serie / număr</th>
-                            <th>Fișier</th>
-                            <th>Expirare</th>
-                            <th class="text-end pe-3">Acțiuni</th>
-                        </tr>
-                        </thead>
-                        <tbody>
-                        <?php foreach ($vehicleDocuments as $document): ?>
-                            <?php
-                            $customFieldRows = is_array($document['custom_field_display_rows'] ?? null) ? $document['custom_field_display_rows'] : [];
-                            $vehicleDocumentExpiryDate = trim((string) ($document['data_expirare'] ?? ''));
-                            $vehicleDocumentExpiryLabel = '';
-                            if ($vehicleDocumentExpiryDate === '' && $customFieldRows !== []) {
-                                $customDateRows = array_values(array_filter($customFieldRows, static function (array $customFieldRow): bool {
-                                    return strtolower(trim((string) ($customFieldRow['type'] ?? 'text'))) === 'date'
-                                        && trim((string) ($customFieldRow['value'] ?? '')) !== '';
-                                }));
-                                usort($customDateRows, static function (array $a, array $b): int {
-                                    return strcmp((string) ($a['value'] ?? ''), (string) ($b['value'] ?? ''));
-                                });
-
-                                if ($customDateRows !== []) {
-                                    $vehicleDocumentExpiryDate = (string) ($customDateRows[0]['value'] ?? '');
-                                    $vehicleDocumentExpiryLabel = (string) ($customDateRows[0]['label'] ?? '');
-                                }
-                            }
-                            ?>
-                            <tr>
-                                <td>
-                                    <div class="fw-semibold"><?= e((string) ($document['tip_document'] ?? '-')) ?></div>
-                                    <?php if ($customFieldRows !== []): ?>
-                                        <div class="d-flex flex-column gap-1 mt-1">
-                                            <?php foreach ($customFieldRows as $customFieldRow): ?>
-                                                <?php
-                                                $fieldType = strtolower(trim((string) ($customFieldRow['type'] ?? 'text')));
-                                                $fieldLabel = trim((string) ($customFieldRow['label'] ?? ''));
-                                                $fieldValue = trim((string) ($customFieldRow['value'] ?? ''));
-
-                                                if ($fieldType === 'checkbox') {
-                                                    $displayValue = $fieldValue === '1' ? 'Da' : 'Nu';
-                                                } elseif ($fieldType === 'date') {
-                                                    $displayValue = $fieldValue !== '' ? format_date_ro($fieldValue) : '';
-                                                } else {
-                                                    $displayValue = $fieldValue;
-                                                }
-                                                ?>
-                                                <?php if ($fieldType === 'checkbox' && $fieldValue === '1'): ?>
-                                                    <span class="badge text-bg-light border align-self-start"><?= e($fieldLabel) ?></span>
-                                                <?php elseif ($displayValue !== ''): ?>
-                                                    <div class="small">
-                                                        <span class="text-muted"><?= e($fieldLabel) ?>:</span>
-                                                        <span class="fw-semibold"><?= e($displayValue) ?></span>
-                                                    </div>
-                                                <?php endif; ?>
-                                            <?php endforeach; ?>
-                                        </div>
-                                    <?php endif; ?>
-                                </td>
-                                <td><?= e((string) (($document['numar_document'] ?? '') !== '' ? $document['numar_document'] : '-')) ?></td>
-                                <td><?= document_file_link_html((string) ($document['fisier_original'] ?? ''), (string) ($document['fisier_stocat'] ?? '')) ?></td>
-                                <td>
-                                    <?= expiry_badge_html($vehicleDocumentExpiryDate) ?>
-                                    <?php if ($vehicleDocumentExpiryLabel !== ''): ?>
-                                        <div class="small text-muted mt-1"><?= e($vehicleDocumentExpiryLabel) ?></div>
-                                    <?php endif; ?>
-                                </td>
-                                <td class="text-end pe-3">
-                                    <div class="d-inline-flex gap-1">
-                                        <?php if (!empty($document['fisier_stocat'])): ?>
-                                            <a class="btn btn-sm btn-outline-dark" href="<?= e(build_query_url(['page' => 'documente', 'action' => 'preview', 'id' => (int) $document['id']])) ?>">Vezi în aplicație</a>
-                                        <?php endif; ?>
-                                        <a class="btn btn-sm btn-outline-secondary" href="<?= e(build_query_url(['page' => 'documente', 'action' => 'show', 'id' => (int) $document['id']])) ?>">Detalii</a>
-                                        <a class="btn btn-sm btn-outline-primary" href="<?= e(build_query_url(['page' => 'documente', 'action' => 'edit', 'id' => (int) $document['id']])) ?>">Editează</a>
-                                    </div>
-                                </td>
-                            </tr>
-                        <?php endforeach; ?>
-                        </tbody>
-                    </table>
-                </div>
-            <?php endif; ?>
-        </div>
-    </div>
 <?php endif; ?>
 
 <?php if ($moduleKey === 'soferi'): ?>

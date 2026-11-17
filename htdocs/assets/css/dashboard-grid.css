@@ -874,3 +874,32 @@ body:has(.dash-drawer.showing) .fleet-approval-drawer-toggle { visibility: hidde
     .dash-cf-field.is-wide { grid-column: auto; }
 }
 .dash-dd-option.is-dropped small { margin-left: auto; color: #b45309; font-size: 11.5px; }
+
+/* ------------------------------------------------------------------ filtrele secțiunii în bara de sus (mod „Pagini”) */
+.dash-card-filters[hidden] { display: none !important; }
+.dash-section-filters[hidden] { display: none; }
+.dashboard-filter-panel.is-section-active .dashboard-filter-form { display: none; }
+.dash-section-filters { display: flex; flex-direction: column; gap: 6px; }
+.dash-section-title {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: #0b2a6b;
+    font-size: 12.5px;
+    font-weight: 800;
+}
+.dash-section-filters .dash-card-filters {
+    padding: 0;
+    border: 0;
+    background: transparent;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 170px), 1fr));
+}
+.dash-section-loading { margin: 0; color: #52678b; font-size: 13px; }
+.dash-section-loading[hidden] { display: none; }
+@keyframes dash-section-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+.dashboard-filter-panel.is-switching .dashboard-filter-form,
+.dashboard-filter-panel.is-switching .dash-section-filters { animation: dash-section-in .22s ease both; }
+@media (prefers-reduced-motion: reduce) {
+    .dashboard-filter-panel.is-switching .dashboard-filter-form,
+    .dashboard-filter-panel.is-switching .dash-section-filters { animation: none; }
+}

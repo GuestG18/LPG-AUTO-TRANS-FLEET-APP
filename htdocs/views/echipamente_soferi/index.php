@@ -142,79 +142,9 @@ $statusBadge = static function (array $status): string {
     </header>
 
     <!-- -------------------------------------------------------------- KPI -->
-    <section class="des-kpi-grid" aria-label="Indicatori echipamente">
-        <article class="des-kpi">
-            <div class="des-kpi-main">
-                <span class="des-kpi-icon"><i class="bi bi-people" aria-hidden="true"></i></span>
-                <span class="des-kpi-value">
-                    <?= e((string) ($kpis['soferi_echipati'] ?? 0)) ?> <small>/ <?= e((string) ($kpis['soferi_activi'] ?? 0)) ?></small>
-                </span>
-                <span class="des-kpi-label">Șoferi echipați</span>
-                <span class="des-kpi-note">din șoferii activi</span>
-            </div>
-            <div class="des-ring" style="background: conic-gradient(#16a34a <?= e((string) ($equippedPercent * 3.6)) ?>deg, #e8edf5 0deg); border-radius: 50%;">
-                <span style="background: #fff; border-radius: 50%; inset: 7px;"><?= e((string) $equippedPercent) ?>%</span>
-            </div>
-        </article>
+    <?php // Cardul „Valoare echipamente alocate” (total -> pe persoană -> detaliu) + carduri de stare. ?>
+    <?php include __DIR__ . '/_value_morph.php'; ?>
 
-        <article class="des-kpi">
-            <div class="des-kpi-main">
-                <span class="des-kpi-icon is-violet"><i class="bi bi-box-seam" aria-hidden="true"></i></span>
-                <span class="des-kpi-value"><?= e(format_number_ro((int) ($kpis['obiecte_active'] ?? 0), 0)) ?></span>
-                <span class="des-kpi-label">Obiecte active</span>
-                <span class="des-kpi-note">în prezent la șoferi</span>
-            </div>
-        </article>
-
-        <article class="des-kpi">
-            <div class="des-kpi-main">
-                <span class="des-kpi-icon is-teal"><i class="bi bi-sim" aria-hidden="true"></i></span>
-                <span class="des-kpi-value"><?= e((string) ($kpis['sim_active'] ?? 0)) ?></span>
-                <span class="des-kpi-label">SIM-uri active</span>
-                <span class="des-kpi-note">pentru contact dispecerat</span>
-            </div>
-        </article>
-
-        <article class="des-kpi">
-            <div class="des-kpi-main">
-                <span class="des-kpi-icon"><i class="bi bi-coin" aria-hidden="true"></i></span>
-                <span class="des-kpi-value"><?= e($moneyShort($kpis['valoare_active'] ?? 0)) ?></span>
-                <span class="des-kpi-label">Valoare active</span>
-                <span class="des-kpi-note">echipamente și comunicații</span>
-            </div>
-        </article>
-
-        <article class="des-kpi">
-            <div class="des-kpi-main">
-                <span class="des-kpi-icon is-amber"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i></span>
-                <span class="des-kpi-value"><?= e((string) ($kpis['de_inlocuit'] ?? 0)) ?></span>
-                <span class="des-kpi-label">De înlocuit</span>
-                <span class="des-kpi-note">marcate de utilizatori</span>
-            </div>
-        </article>
-
-        <article class="des-kpi">
-            <div class="des-kpi-main">
-                <span class="des-kpi-icon is-red"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i></span>
-                <span class="des-kpi-value"><?= e((string) ($kpis['nereturnate'] ?? 0)) ?></span>
-                <span class="des-kpi-label">Nereturnate</span>
-                <span class="des-kpi-note">de la foști angajați</span>
-            </div>
-        </article>
-
-        <?php // Inventarul are ecran propriu; aici rămâne doar rezumatul, ca scurtătură. ?>
-        <a class="des-kpi" href="<?= e(build_query_url(['page' => 'echipamente_soferi', 'action' => 'stoc'])) ?>">
-            <div class="des-kpi-main">
-                <span class="des-kpi-icon is-green"><i class="bi bi-archive" aria-hidden="true"></i></span>
-                <span class="des-kpi-value"><?= e((string) ($kpis['in_stoc'] ?? 0)) ?></span>
-                <span class="des-kpi-label">În stoc</span>
-                <span class="des-kpi-note"><?= e((string) ($kpis['articole_in_stoc'] ?? 0)) ?> articole disponibile</span>
-                <span class="des-kpi-link">Vezi stocul <i class="bi bi-arrow-right" aria-hidden="true"></i></span>
-            </div>
-        </a>
-    </section>
-
-    <!-- ----------------------------------------------------------- Filtre -->
     <form class="des-filters" id="desFiltersForm" method="get" action="<?= e(url('index.php')) ?>" data-des-filters>
         <input type="hidden" name="page" value="echipamente_soferi">
 
@@ -414,7 +344,9 @@ $statusBadge = static function (array $status): string {
                         <td class="des-col-num">
                             <span class="des-pill <?= (int) $driver['nr_comunicatii'] > 0 ? 'is-green' : 'is-muted' ?>"><?= e((string) $driver['nr_comunicatii']) ?></span>
                         </td>
-                        <td class="des-col-money"><?= e($money($driver['valoare_totala'])) ?></td>
+                        <td class="des-col-money">
+                            <button class="dcv-value-btn" type="button" data-dcv-open-owner="<?= e((string) $driver['id']) ?>" title="Vezi echipamentele pe siluetă"><?= e($money($driver['valoare_totala'])) ?></button>
+                        </td>
                         <td class="des-col-num">
                             <span class="des-pill <?= (int) $driver['de_returnat'] > 0 ? 'is-red' : 'is-muted' ?>"><?= e((string) $driver['de_returnat']) ?></span>
                         </td>

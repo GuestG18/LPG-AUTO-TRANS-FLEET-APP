@@ -652,6 +652,8 @@ final class DashboardWidgetRegistry
                 'time_label' => self::TIME_LABELS[$widget['time']] ?? '',
                 'filters' => array_values($widget['filters']),
                 'render' => $widget['render'],
+                // Cardurile cu filtrele paginii-sursă formează o secțiune proprie în modul „Pagini”.
+                'has_filters' => !empty($widget['filter_fields']),
                 'config_keys' => array_keys((array) ($widget['config'] ?? [])),
             ];
         }

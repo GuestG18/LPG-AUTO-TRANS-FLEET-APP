@@ -232,3 +232,10 @@ Rămase: Revizii V2 (după commit-ul modificărilor în lucru), Centru Kilometra
 - Fără filtre proprii (nu au filtre în pagina-sursă sau sunt carduri native ale panoului): Status vehicule / șoferi, Cost total operațional, Activitate vs. cheltuieli, Stoc piese, Alerte consumabile; Dispecer (Km pierduți, GPS live) au deja filtrele lor în panourile proprii.
 - Verificat: fiecare card cu filtre = pagina-sursă pe aceleași filtre (Cheltuieli, Facturi, eToll, Centralizator, Carburanți, Intervenții, Documente).
 - Corectat în `ExpenseModel::getSummary` (2026-11-16): sumele benzii KPI ignorau filtrul de categorie (doar carburantul îl respecta), deci „Administrativă” arăta documentele operaționale la total. Acum sumele respectă categoria aleasă; numărătorile taburilor rămân fără filtru. Verificat pe iulie 2026: Administrativă = 581,07 lei, Operațională = 497.809,00 lei, Toate = 498.390,07 lei (pagină = card).
+
+## 12. Secțiuni cu filtre proprii în bara de sus (mod „Pagini”) — 2026-11-17
+
+- Secțiuni fixe (decizia utilizatorului: o secțiune per card cu filtre proprii): fiecare card cu `filter_fields` e o pagină proprie a caruselului; cardurile fără filtre proprii, consecutive, se împart pe pagini după înălțime, ca înainte (secțiuni comune, cu filtrele panoului).
+- Bara de sus arată doar filtrele secțiunii active: formularul panoului în secțiunile comune, formularul cardului (mutat din card de `placeFilters()` în `[data-dash-section-filters]`) în secțiunea lui. Fără îmbinare de filtre, fără stare nouă: starea rămâne în config-ul cardului (layout), deci se păstrează la navigare și la reîncărcare. Același handler, aceleași cereri.
+- Modul „Toate” nu are secțiuni: formularele revin în carduri (marcaj `data-dash-cf-slot`).
+- Verificat (desktop + telefon): secțiunile comune → filtrele panoului; secțiunile-card → filtrele cardului, niciun formular rămas în card; schimbare filtru din bară → cardul se reîncarcă (Distribuție = 82 curse, ca în pagină); valoarea rămâne la revenire; comutare Toate/Pagini corectă; fără depășire orizontală, fără erori JS.

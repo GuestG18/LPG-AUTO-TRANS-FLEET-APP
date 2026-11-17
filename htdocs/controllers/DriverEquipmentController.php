@@ -70,6 +70,13 @@ class DriverEquipmentController
             ? $this->model->getSearchResults($filters, (int) ($_GET['p'] ?? 1), self::SEARCH_PER_PAGE)
             : null;
 
+        // Rândurile pe deținător alimentează și tabelul, și cardul „Valoare
+        // echipamente alocate” (aceleași filtre = aceleași totaluri). În modul de
+        // căutare pe obiecte tabelul nu are rânduri, dar cardul rămâne pe deținători.
+        $ownerRows = $itemSearch
+            ? $this->model->getOwnerRows($ownerType, array_merge($filters, ['q' => '']))
+            : $this->model->getOwnerRows($ownerType, $filters);
+
         // Catalogul și stocul sunt comune; formularul de predare arată doar
         // destinatarii paginii curente și articolele potrivite lor.
         $data = [
@@ -78,7 +85,9 @@ class DriverEquipmentController
             'ownerType' => $ownerType,
             'filters' => $filters,
             'kpis' => $this->model->getKpis($ownerType),
-            'driverRows' => $itemSearch ? [] : $this->model->getOwnerRows($ownerType, $filters),
+            'driverRows' => $itemSearch ? [] : $ownerRows,
+            'valueOverview' => $this->model->buildValueOverview($ownerRows),
+            'valueRows' => $ownerRows,
             'searchResults' => $searchResults,
             'searchView' => $searchView,
             'stockMap' => $this->model->getStockAvailabilityMap(),
@@ -104,14 +113,38 @@ class DriverEquipmentController
         $search = trim((string) ($_GET['q'] ?? ''));
         $catalogItems = $this->model->getCatalog(false, $search);
 
+        // „Filtre” din antet: stare articol, destinație, stoc — aplicate pe rândurile reale.
+        $catalogFilters = [
+            'stare' => in_array($_GET['stare'] ?? '', ['activ', 'inactiv'], true) ? (string) $_GET['stare'] : '',
+            'destinatie' => in_array($_GET['destinatie'] ?? '', ['sofer', 'tesa'], true) ? (string) $_GET['destinatie'] : '',
+            'stoc' => in_array($_GET['stoc'] ?? '', ['cu', 'fara'], true) ? (string) $_GET['stoc'] : '',
+        ];
+        $catalogItems = array_values(array_filter($catalogItems, static function (array $item) use ($catalogFilters): bool {
+            if ($catalogFilters['stare'] !== '' && ((int) $item['activ'] === 1) !== ($catalogFilters['stare'] === 'activ')) {
+                return false;
+            }
+            $destination = (string) ($item['destinatie'] ?? 'ambele');
+            if ($catalogFilters['destinatie'] !== '' && $destination !== 'ambele' && $destination !== $catalogFilters['destinatie']) {
+                return false;
+            }
+            if ($catalogFilters['stoc'] !== '' && (((int) $item['stoc_total']) > 0) !== ($catalogFilters['stoc'] === 'cu')) {
+                return false;
+            }
+
+            return true;
+        }));
+
         // Catalogul definește tipul, dar coloana „Stoc” cere un răspuns concret:
         // care sunt bucățile și unde se află (gestiune, mărime, la ce șofer).
+        $catalogBreakdown = $this->model->getCatalogBreakdown(array_column($catalogItems, 'id'));
+
         render('echipamente_soferi/catalog.php', [
             'pageTitle' => 'Catalog echipamente șoferi',
             'currentPage' => 'echipamente_soferi',
-            'filters' => ['q' => $search],
+            'filters' => ['q' => $search] + $catalogFilters,
             'catalogItems' => $catalogItems,
-            'catalogBreakdown' => $this->model->getCatalogBreakdown(array_column($catalogItems, 'id')),
+            'catalogBreakdown' => $catalogBreakdown,
+            'catalogOverview' => $this->model->buildCatalogOverview($catalogItems, $catalogBreakdown),
             'categories' => $this->model->getCategories(),
             'locations' => $this->model->getLocations(),
         ]);

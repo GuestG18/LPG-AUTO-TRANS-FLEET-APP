@@ -204,6 +204,7 @@
                 body.innerHTML = data.html;
                 body.removeAttribute('aria-busy');
                 body.classList.remove('is-refreshing');
+                carousel.placeFilters();
                 carousel.schedule();
 
                 body.classList.add('is-loaded');
@@ -313,7 +314,8 @@
     }
     function applyCardFilters(form, config) {
         var id = form.getAttribute('data-widget');
-        var body = form.closest('[data-dash-lazy]');
+        // Corpul cardului (formularul poate sta în card sau, în modul „Pagini”, în bara de sus).
+        var body = grid.querySelector('[data-dash-lazy="' + cssEscape(id) + '"]');
         var next = layout.map(cloneItem);
         next.forEach(function (item) {
             if (item.id !== id) { return; }
@@ -336,7 +338,7 @@
         form.querySelector('[name="date_to"]').value = to || '';
     }
 
-    grid.addEventListener('change', function (event) {
+    document.addEventListener('change', function (event) {
         var form = event.target.closest('[data-dash-card-filters]');
         if (!form) { return; }
         var t = event.target;
@@ -355,7 +357,7 @@
         applyCardFilters(form, readCardFilters(form));
     });
 
-    grid.addEventListener('click', function (event) {
+    document.addEventListener('click', function (event) {
         var form = event.target.closest('[data-dash-card-filters]');
         if (!form) { return; }
         // Câmpul „lună” (ex. luna de facturare): ‹ = luna anterioară, › = următoarea, dacă există în listă.
@@ -428,7 +430,7 @@
         var now = ddChecked(dd).join(',');
         if (apply && form && before !== now) { applyCardFilters(form, readCardFilters(form)); }
     }
-    grid.addEventListener('click', function (event) {
+    document.addEventListener('click', function (event) {
         var toggle = event.target.closest('[data-dash-dd-toggle]');
         if (toggle) {
             var dd = toggle.closest('[data-dash-dd]');
@@ -513,19 +515,50 @@
          * disponibilă; un rând mai înalt decât ecranul are pagina lui. Toate cardurile se arată doar
          * pe durata măsurării, în același pas de execuție (browserul nu desenează între timp).
          */
+        function hasOwnFilters(el) {
+            var w = byId[el.getAttribute('data-dash-widget')];
+            return !!(w && w.has_filters);
+        }
+        /**
+         * Secțiunile caruselului: fiecare card cu filtrele paginii-sursă este o secțiune fixă (pagina lui,
+         * cu filtrele lui în bara de sus); cardurile fără filtre proprii, consecutive, se împart pe pagini
+         * cât încap pe ecran (secțiuni comune, cu filtrele panoului).
+         */
         function measure() {
             var all = widgets();
             all.forEach(function (el) { el.classList.remove('is-offpage'); });
-            var rows = [];
-            var known = null;
+            var out = [];
+            var run = [];
+            var flush = function () {
+                if (run.length) { packRun(run).forEach(function (pg) { out.push(pg); }); }
+                run = [];
+            };
             all.forEach(function (el) {
-                // Cardurile lazy deja încărcate: se reține înălțimea lor reală (estimarea de la următoarea deschidere).
-                var lazy = el.querySelector('[data-dash-lazy].is-loaded');
-                if (lazy && lazy.offsetHeight > 0) {
-                    known = known || readHeights();
-                    var lid = lazy.getAttribute('data-dash-lazy');
-                    if (Math.abs((known[lid] || 0) - lazy.offsetHeight) > 8) { known[lid] = lazy.offsetHeight; rememberHeight(lid, lazy.offsetHeight); }
+                rememberLoadedHeight(el);
+                if (hasOwnFilters(el)) {
+                    flush();
+                    out.push([el]);
+                } else {
+                    run.push(el);
                 }
+            });
+            flush();
+            return out;
+        }
+        var knownHeights = null;
+        function rememberLoadedHeight(el) {
+            // Cardurile lazy deja încărcate: se reține înălțimea lor reală (estimarea de la următoarea deschidere).
+            var lazy = el.querySelector('[data-dash-lazy].is-loaded');
+            if (lazy && lazy.offsetHeight > 0) {
+                knownHeights = knownHeights || readHeights();
+                var lid = lazy.getAttribute('data-dash-lazy');
+                if (Math.abs((knownHeights[lid] || 0) - lazy.offsetHeight) > 8) { knownHeights[lid] = lazy.offsetHeight; rememberHeight(lid, lazy.offsetHeight); }
+            }
+        }
+        /** Rândurile (cardurile cu același top) unei secțiuni comune, adunate pe pagini cât încap. */
+        function packRun(list) {
+            var rows = [];
+            list.forEach(function (el) {
                 var top = el.offsetTop;
                 var bottom = top + el.offsetHeight;
                 var row = rows.length ? rows[rows.length - 1] : null;
@@ -552,9 +585,64 @@
             return out.map(function (pg) { return pg.items; });
         }
 
+        // ------------------------------------------------------------ filtrele secțiunii în bara de sus
+        var sectionBox = document.querySelector('[data-dash-section-filters]');
+        var sectionForms = sectionBox ? sectionBox.querySelector('[data-dash-section-forms]') : null;
+        var sectionTitle = sectionBox ? sectionBox.querySelector('[data-dash-section-title]') : null;
+        var sectionLoading = sectionBox ? sectionBox.querySelector('[data-dash-section-loading]') : null;
+        var filterPanel = document.querySelector('.dashboard-filter-panel');
+        var activeSection = null; // id-ul cardului secțiunii active, null = secțiune comună (filtrele panoului)
+
+        /**
+         * Mută formularele de filtre ale cardurilor: în modul „Pagini” în bara de sus (doar cel al secțiunii
+         * active e vizibil), în modul „Toate” înapoi în carduri. Un card reîncărcat aduce un formular nou,
+         * care îl înlocuiește pe cel vechi. Starea rămâne în config-ul cardului, deci nu se pierde nimic.
+         */
+        function placeFilters() {
+            if (!sectionBox || !sectionForms) { return; }
+            var toTop = view === 'carousel';
+            // formulare proaspete din carduri
+            grid.querySelectorAll('[data-dash-card-filters]').forEach(function (form) {
+                var id = form.getAttribute('data-widget');
+                if (!toTop) { return; }
+                var old = sectionForms.querySelector('[data-dash-card-filters][data-widget="' + cssEscape(id) + '"]');
+                if (old && old !== form) { old.remove(); }
+                if (!form.previousElementSibling || !form.previousElementSibling.hasAttribute('data-dash-cf-slot')) {
+                    var slot = document.createElement('span');
+                    slot.hidden = true;
+                    slot.setAttribute('data-dash-cf-slot', id);
+                    form.parentNode.insertBefore(slot, form);
+                }
+                sectionForms.appendChild(form);
+            });
+            if (!toTop) {
+                // înapoi în card, în locul marcat
+                Array.prototype.slice.call(sectionForms.querySelectorAll('[data-dash-card-filters]')).forEach(function (form) {
+                    var slot = grid.querySelector('[data-dash-cf-slot="' + cssEscape(form.getAttribute('data-widget')) + '"]');
+                    if (slot) { slot.parentNode.insertBefore(form, slot.nextSibling); form.hidden = false; } else { form.remove(); }
+                });
+                sectionBox.hidden = true;
+                if (filterPanel) { filterPanel.classList.remove('is-section-active'); }
+                return;
+            }
+            sectionForms.querySelectorAll('[data-dash-card-filters]').forEach(function (form) {
+                form.hidden = form.getAttribute('data-widget') !== activeSection;
+            });
+            var active = activeSection ? sectionForms.querySelector('[data-dash-card-filters][data-widget="' + cssEscape(activeSection) + '"]') : null;
+            sectionBox.hidden = !activeSection;
+            if (filterPanel) { filterPanel.classList.toggle('is-section-active', !!activeSection); }
+            if (activeSection) {
+                var w = byId[activeSection];
+                if (sectionTitle) { sectionTitle.textContent = 'Filtre · ' + (w ? w.title : ''); }
+                if (sectionLoading) { sectionLoading.hidden = !!active; }
+            }
+        }
+
         function render(direction) {
             var all = widgets();
             if (view !== 'carousel' || pages.length === 0) {
+                activeSection = null;
+                placeFilters();
                 all.forEach(function (el) { el.classList.remove('is-offpage'); });
                 if (pager) { pager.hidden = true; }
                 arrows.forEach(function (a) { a.hidden = true; });
@@ -573,6 +661,15 @@
                 }
             });
             anchorId = visible.length ? visible[0].getAttribute('data-dash-widget') : null;
+            // Secțiunea activă: pagina unui card cu filtre proprii -> filtrele lui în bara de sus.
+            var sectionId = visible.length === 1 && hasOwnFilters(visible[0]) ? visible[0].getAttribute('data-dash-widget') : null;
+            if (sectionId !== activeSection && filterPanel) {
+                filterPanel.classList.remove('is-switching');
+                void filterPanel.offsetWidth;
+                filterPanel.classList.add('is-switching');
+            }
+            activeSection = sectionId;
+            placeFilters();
             var multi = pages.length > 1;
             if (stage) { stage.classList.add('is-carousel'); }
             if (pager) { pager.hidden = !multi; }
@@ -703,7 +800,7 @@
         }
         document.addEventListener('dashboard:refreshed', schedule);
 
-        return { repack: repack, schedule: schedule, setView: setView };
+        return { repack: repack, schedule: schedule, setView: setView, placeFilters: placeFilters };
     })();
 
     // ------------------------------------------------------------------ meniuri plutitoare

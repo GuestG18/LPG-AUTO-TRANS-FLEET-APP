@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 860" width="360" height="860" role="img" aria-label="TESA — ținută de birou">
+<!-- Generat de scripts/generate_equipment_silhouettes.php — nu edita manual. -->
+<defs>
+  <radialGradient id="skin" cx="38%" cy="30%" r="80%">
+    <stop offset="0" stop-color="#3d6596"/><stop offset=".55" stop-color="#1c3558"/><stop offset="1" stop-color="#0b1a30"/>
+  </radialGradient>
+  <linearGradient id="skinV" x1="0" x2="1">
+    <stop offset="0" stop-color="#132a48"/><stop offset=".5" stop-color="#2a4b78"/><stop offset="1" stop-color="#0f223d"/>
+  </linearGradient>
+  <linearGradient id="navy" x1="0" x2="1">
+    <stop offset="0" stop-color="#16213a"/><stop offset=".45" stop-color="#26365c"/><stop offset="1" stop-color="#121b30"/>
+  </linearGradient>
+  <linearGradient id="navyDark" x1="0" x2="1">
+    <stop offset="0" stop-color="#0f172a"/><stop offset=".5" stop-color="#1c2846"/><stop offset="1" stop-color="#0c1324"/>
+  </linearGradient>
+  <linearGradient id="orange" x1="0" x2="1" y1="0" y2="1">
+    <stop offset="0" stop-color="#fb923c"/><stop offset="1" stop-color="#ea580c"/>
+  </linearGradient>
+  <linearGradient id="reflect" x1="0" x2="1">
+    <stop offset="0" stop-color="#c8d400"/><stop offset=".5" stop-color="#f1ff3a"/><stop offset="1" stop-color="#b9c400"/>
+  </linearGradient>
+  <linearGradient id="helmet" x1="0" x2="1" y1="0" y2="1">
+    <stop offset="0" stop-color="#fde047"/><stop offset=".55" stop-color="#facc15"/><stop offset="1" stop-color="#ca8a04"/>
+  </linearGradient>
+  <linearGradient id="boot" x1="0" x2="1">
+    <stop offset="0" stop-color="#0b0f19"/><stop offset=".5" stop-color="#262c3a"/><stop offset="1" stop-color="#0b0f19"/>
+  </linearGradient>
+  <linearGradient id="glove" x1="0" x2="1">
+    <stop offset="0" stop-color="#0d111b"/><stop offset=".5" stop-color="#2a3142"/><stop offset="1" stop-color="#0d111b"/>
+  </linearGradient>
+  <linearGradient id="blazer" x1="0" x2="1">
+    <stop offset="0" stop-color="#1b2740"/><stop offset=".45" stop-color="#2f4166"/><stop offset="1" stop-color="#18223a"/>
+  </linearGradient>
+  <linearGradient id="shirt" x1="0" x2="1">
+    <stop offset="0" stop-color="#b8cfee"/><stop offset=".5" stop-color="#e3eefc"/><stop offset="1" stop-color="#b1c8e8"/>
+  </linearGradient>
+  <linearGradient id="blouse" x1="0" x2="1">
+    <stop offset="0" stop-color="#dfe5ee"/><stop offset=".5" stop-color="#ffffff"/><stop offset="1" stop-color="#d6dde8"/>
+  </linearGradient>
+  <linearGradient id="trouser" x1="0" x2="1">
+    <stop offset="0" stop-color="#151b28"/><stop offset=".5" stop-color="#2b3446"/><stop offset="1" stop-color="#131925"/>
+  </linearGradient>
+  <linearGradient id="hair" x1="0" x2="0" y1="0" y2="1">
+    <stop offset="0" stop-color="#3a3f4b"/><stop offset="1" stop-color="#1c2029"/>
+  </linearGradient>
+  <linearGradient id="screen" x1="0" x2="1" y1="0" y2="1">
+    <stop offset="0" stop-color="#60a5fa"/><stop offset="1" stop-color="#1d4ed8"/>
+  </linearGradient>
+</defs><path d="M126,428 L180,428 L177,492 L169,792 L138,792 L130,620 Q124,520 126,428 Z" fill="url(#trouser)"/><path d="M234,428 L180,428 L183,492 L191,792 L222,792 L230,620 Q236,520 234,428 Z" fill="url(#trouser)"/><path d="M177,492 L169,792 L163,792 L171,500 Z" fill="#000" fill-opacity=".22"/><path d="M183,492 L191,792 L197,792 L189,500 Z" fill="#000" fill-opacity=".22"/><path d="M151,440 L155,788" stroke="#475569" stroke-opacity=".6" stroke-width="1"/><path d="M209,440 L205,788" stroke="#475569" stroke-opacity=".6" stroke-width="1"/><path d="M138,790 L169,790 L170,816 Q171,828 158,830 L114,831 Q108,818 126,806 Z" fill="url(#boot)"/><path d="M222,790 L191,790 L190,816 Q189,828 202,830 L246,831 Q252,818 234,806 Z" fill="url(#boot)"/><path d="M114,826 L171,826 L171,833 L112,833 Z" fill="#05070c"/><path d="M246,826 L189,826 L189,833 L248,833 Z" fill="#05070c"/><path d="M128,810 Q142,800 166,806" stroke="#64748b" stroke-width="1.2" fill="none"/><path d="M232,810 Q218,800 194,806" stroke="#64748b" stroke-width="1.2" fill="none"/><path d="M114,152 Q90,162 88,212 L80,314 L74,440 L99,440 L111,314 L125,226 Z" fill="url(#blazer)"/><path d="M246,152 Q270,162 272,212 L280,314 L286,440 L261,440 L249,314 L235,226 Z" fill="url(#blazer)"/><path d="M125,226 L111,314 L99,440 L93,440 L105,314 L119,232 Z" fill="#000" fill-opacity=".18"/><path d="M235,226 L249,314 L261,440 L267,440 L255,314 L241,232 Z" fill="#000" fill-opacity=".18"/><path d="M75,428 L100,428 L99,440 L74,440 Z" fill="url(#shirt)"/><path d="M285,428 L260,428 L261,440 L286,440 Z" fill="url(#shirt)"/><path d="M73.5,436 L99.5,436 Q102.5,462 101.5,478 Q99.5,500 86.5,503 Q72.5,501 71.5,480 Q70.5,460 73.5,436 Z" fill="url(#skinV)" stroke="#8fd0ff" stroke-opacity=".5"/><path d="M286.5,436 L260.5,436 Q257.5,462 258.5,478 Q260.5,500 273.5,503 Q287.5,501 288.5,480 Q289.5,460 286.5,436 Z" fill="url(#skinV)" stroke="#8fd0ff" stroke-opacity=".5"/><path d="M98.5,446 Q108.5,452 106.5,470 Q103.5,476 99.5,470 Z" fill="url(#skinV)"/><path d="M261.5,446 Q251.5,452 253.5,470 Q256.5,476 260.5,470 Z" fill="url(#skinV)"/><clipPath id="torsoClip"><path d="M163,136 Q118,138 110,158 Q114,194 116,222 L126,352 Q126,404 124,452 L236,452 Q234,404 234,352 L244,222 Q246,194 250,158 Q242,138 197,136 Z"/></clipPath><path d="M163,136 Q118,138 110,158 Q114,194 116,222 L126,352 Q126,404 124,452 L236,452 Q234,404 234,352 L244,222 Q246,194 250,158 Q242,138 197,136 Z" fill="url(#blazer)"/><g clip-path="url(#torsoClip)"><path d="M158,134 L202,134 L194,330 L180,346 L166,330 Z" fill="url(#shirt)"/><path d="M164,134 L180,152 L174,160 L160,140 Z" fill="#f1f6fd"/><path d="M196,134 L180,152 L186,160 L200,140 Z" fill="#f1f6fd"/><path d="M174,152 L186,152 L184,164 L190,300 L180,316 L170,300 L176,164 Z" fill="#1e3a8a"/><path d="M174,200 L188,186 M172,240 L189,226 M171,280 L190,266" stroke="#3b5bdb" stroke-width="2"/><path d="M156,132 L166,150 L150,178 L164,196 L178,344 L170,348 L146,200 L140,170 Z" fill="#22314f" stroke="#40557f" stroke-width="1"/><path d="M204,132 L194,150 L210,178 L196,196 L182,344 L190,348 L214,200 L220,170 Z" fill="#22314f" stroke="#40557f" stroke-width="1"/><path d="M120,380 L166,376 L166,382 L120,386 Z" fill="#121b30"/><path d="M240,380 L194,376 L194,382 L240,386 Z" fill="#121b30"/></g><circle cx="182" cy="372" r="3.5" fill="#0f172a" stroke="#64748b"/><circle cx="182" cy="404" r="3.5" fill="#0f172a" stroke="#64748b"/><path d="M162,140 Q152,200 140,236 M194,142 Q176,200 152,236" stroke="#2563eb" stroke-width="3.5" fill="none"/><rect x="130" y="234" width="32" height="42" rx="4" fill="#f8fafc" stroke="#94a3b8"/><rect x="130" y="234" width="32" height="11" rx="3" fill="#2563eb"/><circle cx="146" cy="256" r="5" fill="#94a3b8"/><rect x="136" y="265" width="20" height="3" rx="1.5" fill="#cbd5e1"/><g transform="rotate(-8 273.5 452)"><rect x="243.5" y="404" width="46" height="62" rx="5" fill="#0b0f19" stroke="#475569"/><rect x="247.5" y="409" width="38" height="52" rx="2" fill="url(#screen)"/><path d="M253.5,446 L263.5,436 L271.5,442 L281.5,426" stroke="#e0f2fe" stroke-width="2" fill="none"/></g><rect x="167" y="112" width="26" height="34" rx="9" fill="url(#skinV)"/><ellipse cx="180" cy="80" rx="33" ry="41" fill="url(#skin)" stroke="#8fd0ff" stroke-opacity=".55" stroke-width="1.2"/><ellipse cx="180" cy="80" rx="14.85" ry="41" fill="none" stroke="#7cc4ff" stroke-opacity=".38" stroke-width="1"/><path d="M149,72 Q180,84 211,72" fill="none" stroke="#7cc4ff" stroke-opacity=".38" stroke-width="1"/><path d="M152,96 Q180,108 208,96" fill="none" stroke="#7cc4ff" stroke-opacity=".38" stroke-width="1"/><ellipse cx="170" cy="60" rx="10" ry="14" fill="#9fd4ff" fill-opacity=".12"/><path d="M146,74 Q144,36 180,34 Q216,36 214,74 Q210,54 186,52 Q154,52 146,74 Z" fill="url(#hair)"/></svg>

@@ -1,0 +1,139 @@
+{
+    "_info": "Punctele de pe corp (procente x, y din imagine) pentru ilustrațiile decupate din machetă. Imaginile SVG generate nu au nevoie de intrări aici.",
+    "sofer-m": {
+        "cap": [
+            50,
+            3
+        ],
+        "trunchi": [
+            32,
+            38
+        ],
+        "maini": [
+            12,
+            53
+        ],
+        "picioare": [
+            71,
+            70
+        ],
+        "talpi": [
+            25,
+            94
+        ],
+        "dispozitiv": [
+            26,
+            23
+        ],
+        "legitimatie": [
+            48,
+            32
+        ],
+        "alte": [
+            48,
+            48
+        ]
+    },
+    "tesa-f": {
+        "cap": [
+            50,
+            4
+        ],
+        "trunchi": [
+            25,
+            32
+        ],
+        "maini": [
+            16,
+            52
+        ],
+        "picioare": [
+            62,
+            67
+        ],
+        "talpi": [
+            29,
+            95
+        ],
+        "dispozitiv": [
+            69,
+            41
+        ],
+        "legitimatie": [
+            49,
+            31
+        ],
+        "alte": [
+            48,
+            40
+        ]
+    },
+    "sofer-f": {
+        "cap": [
+            50,
+            3
+        ],
+        "trunchi": [
+            35,
+            40
+        ],
+        "maini": [
+            17,
+            52
+        ],
+        "picioare": [
+            69,
+            69
+        ],
+        "talpi": [
+            35,
+            94
+        ],
+        "dispozitiv": [
+            28,
+            23
+        ],
+        "legitimatie": [
+            50,
+            31
+        ],
+        "alte": [
+            50,
+            47
+        ]
+    },
+    "tesa-m": {
+        "cap": [
+            50,
+            3
+        ],
+        "trunchi": [
+            25,
+            32
+        ],
+        "maini": [
+            16,
+            51
+        ],
+        "picioare": [
+            64,
+            66
+        ],
+        "talpi": [
+            29,
+            95
+        ],
+        "dispozitiv": [
+            69,
+            41
+        ],
+        "legitimatie": [
+            47,
+            31
+        ],
+        "alte": [
+            48,
+            42
+        ]
+    }
+}

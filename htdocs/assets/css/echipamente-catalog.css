@@ -1,0 +1,1161 @@
+/* ==========================================================================
+   Catalog echipamente — vedere pe siluetă + spațiu de lucru pe categorie.
+   Prefix: .dcx- (catalog explorer). Se încarcă după echipamente-soferi.css și
+   folosește variabilele .des-page de acolo.
+   ========================================================================== */
+
+.dcx-header-title {
+    align-items: center;
+    display: flex;
+    gap: .9rem;
+}
+
+.dcx-header-ico {
+    align-items: center;
+    background: linear-gradient(145deg, #eef4ff, #dbe7ff);
+    border-radius: 16px;
+    box-shadow: inset 0 0 0 1px rgba(37, 99, 235, .12);
+    color: var(--des-blue);
+    display: inline-flex;
+    flex: 0 0 auto;
+    font-size: 1.45rem;
+    height: 52px;
+    justify-content: center;
+    width: 52px;
+}
+
+.dcx {
+    --dcx-navy: #13203b;
+    --dcx-navy-2: #1c2c4f;
+    --dcx-glow: 96, 165, 250;
+    --dcx-ease: cubic-bezier(.22, .8, .24, 1);
+
+    align-items: start;
+    display: grid;
+    gap: 1.25rem;
+    grid-template-columns: 228px minmax(0, 1fr);
+}
+
+/* -------------------------------------------------------------- Navigare -- */
+
+.dcx-nav {
+    background: #fff;
+    border: 1px solid var(--des-border);
+    border-radius: 18px;
+    box-shadow: var(--des-shadow);
+    display: flex;
+    flex-direction: column;
+    gap: .9rem;
+    padding: .75rem;
+    position: sticky;
+    top: 1rem;
+}
+
+.dcx-nav-views {
+    display: grid;
+    gap: .35rem;
+}
+
+.dcx-nav-view,
+.dcx-nav-cat {
+    align-items: center;
+    background: transparent;
+    border: 0;
+    border-radius: 12px;
+    color: #1e293b;
+    display: flex;
+    font-size: .9rem;
+    font-weight: 600;
+    gap: .65rem;
+    padding: .62rem .75rem;
+    text-align: left;
+    transition: background-color .18s ease, color .18s ease, box-shadow .18s ease;
+    width: 100%;
+}
+
+.dcx-nav-view i {
+    color: var(--des-faint);
+    font-size: 1.05rem;
+}
+
+.dcx-nav-view:hover,
+.dcx-nav-cat:hover {
+    background: #f1f5fb;
+}
+
+.dcx-nav-view.is-active {
+    background: linear-gradient(135deg, #2563eb, #1d4ed8);
+    box-shadow: 0 10px 22px -12px rgba(37, 99, 235, .9);
+    color: #fff;
+}
+
+.dcx-nav-view.is-active i {
+    color: #fff;
+}
+
+.dcx-nav-list {
+    border-top: 1px solid var(--des-border-soft);
+    display: grid;
+    gap: .15rem;
+    padding-top: .75rem;
+}
+
+.dcx-nav-cat {
+    font-weight: 600;
+    padding: .45rem .55rem;
+}
+
+.dcx-nav-cat.is-active {
+    background: var(--des-blue-soft);
+    box-shadow: inset 3px 0 0 var(--des-blue);
+    color: var(--des-blue);
+}
+
+.dcx-nav-ico {
+    align-items: center;
+    background: #f1f5fb;
+    border-radius: 10px;
+    color: #475569;
+    display: inline-flex;
+    flex: 0 0 auto;
+    height: 34px;
+    justify-content: center;
+    width: 34px;
+}
+
+.dcx-nav-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.dcx-nav-count {
+    background: #f1f5f9;
+    border-radius: 999px;
+    color: #475569;
+    font-size: .75rem;
+    font-variant-numeric: tabular-nums;
+    font-weight: 700;
+    min-width: 1.9rem;
+    padding: .15rem .5rem;
+    text-align: center;
+}
+
+.dcx-nav-totals {
+    border-top: 1px solid var(--des-border-soft);
+    display: grid;
+    gap: .35rem;
+    margin: 0;
+    padding: .75rem .55rem .2rem;
+}
+
+.dcx-nav-totals div {
+    display: flex;
+    justify-content: space-between;
+    gap: .5rem;
+}
+
+.dcx-nav-totals dt {
+    color: var(--des-muted);
+    font-size: .78rem;
+    font-weight: 500;
+}
+
+.dcx-nav-totals dd {
+    font-size: .8rem;
+    font-variant-numeric: tabular-nums;
+    font-weight: 700;
+    margin: 0;
+}
+
+/* ------------------------------------------------- Miniaturi de categorie -- */
+
+/* Silueta mărită pe zona categoriei (cască, piept, bocanci...). */
+.dcx-thumb {
+    background-color: #0f1d36;
+    background-image: var(--dcx-img-sofer);
+    background-position: var(--dcx-px, 50%) var(--dcx-py, 50%);
+    background-repeat: no-repeat;
+    background-size: var(--dcx-zoom, 300%) auto;
+    border-radius: 12px;
+    box-shadow: inset 0 0 0 1px rgba(var(--dcx-glow), .25);
+    display: inline-block;
+    flex: 0 0 auto;
+    height: 46px;
+    transition: background-image .3s ease;
+    width: 46px;
+}
+
+.dcx-thumb[data-role="tesa"] {
+    background-image: var(--dcx-img-tesa);
+}
+
+.dcx-thumb.is-icon {
+    align-items: center;
+    background-image: none;
+    color: #93c5fd;
+    display: inline-flex;
+    font-size: 1.2rem;
+    justify-content: center;
+}
+
+.dcx-nav-cat .dcx-thumb {
+    border-radius: 10px;
+    height: 34px;
+    width: 34px;
+}
+
+/* ------------------------------------------------------- Vedere siluetă -- */
+
+.dcx-main {
+    container-type: inline-size;
+    min-width: 0;
+}
+
+.dcx-stages {
+    display: grid;
+    gap: 1.5rem;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.dcx-stage {
+    background:
+        radial-gradient(42% 46% at 50% 54%, rgba(59, 130, 246, .2), rgba(59, 130, 246, .05) 60%, transparent 75%),
+        linear-gradient(180deg, #fbfdff 0%, #f0f5fd 100%);
+    border: 1px solid #d9e5f6;
+    border-radius: 24px;
+    box-shadow: 0 1px 0 #fff inset, 0 24px 48px -32px rgba(30, 64, 175, .45), 0 2px 6px -2px rgba(15, 23, 42, .06);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    padding: .9rem .9rem .9rem;
+    position: relative;
+}
+
+.dcx-stage-head {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: .6rem;
+    padding: .1rem .2rem .35rem;
+    position: relative;
+    z-index: 5;
+}
+
+.dcx-stage-ico {
+    align-items: center;
+    background: linear-gradient(145deg, #eef4ff, #dbe7ff);
+    border-radius: 50%;
+    box-shadow: inset 0 0 0 1px rgba(37, 99, 235, .14);
+    color: var(--des-blue);
+    display: inline-flex;
+    flex: 0 0 auto;
+    font-size: 1.25rem;
+    height: 44px;
+    justify-content: center;
+    width: 44px;
+}
+
+.dcx-stage-head h2 {
+    font-size: 1.32rem;
+    font-weight: 800;
+    letter-spacing: -.015em;
+    margin: 0 .1rem;
+}
+
+.dcx-stage-head .dcx-seg {
+    margin-right: auto;
+}
+
+.dcx-stat {
+    align-items: center;
+    background: #fff;
+    border: 1px solid #e2eaf6;
+    border-radius: 12px;
+    box-shadow: 0 6px 14px -12px rgba(15, 23, 42, .5);
+    color: #1e293b;
+    display: inline-flex;
+    font-size: .88rem;
+    font-weight: 600;
+    gap: .45rem;
+    padding: .5rem .85rem;
+    white-space: nowrap;
+}
+
+.dcx-stat i {
+    color: var(--des-blue);
+}
+
+.dcx-stat.is-money {
+    color: var(--des-blue);
+    font-size: 1.02rem;
+    font-variant-numeric: tabular-nums;
+    font-weight: 800;
+}
+
+/* Comutator segmentat (Masculin / Feminin, Toate / Șofer / TESA). */
+.dcx-seg {
+    background: #fff;
+    border: 1px solid var(--des-border);
+    border-radius: 999px;
+    display: inline-flex;
+    flex: 0 0 auto;
+    gap: 2px;
+    padding: 3px;
+}
+
+.dcx-seg button {
+    align-items: center;
+    background: transparent;
+    border: 0;
+    border-radius: 999px;
+    color: #475569;
+    display: inline-flex;
+    font-size: .76rem;
+    font-weight: 700;
+    gap: .3rem;
+    padding: .32rem .75rem;
+    transition: background-color .18s ease, color .18s ease, box-shadow .18s ease;
+}
+
+.dcx-seg button:hover {
+    color: #0f172a;
+}
+
+.dcx-seg button.is-active {
+    background: var(--dcx-navy);
+    box-shadow: 0 4px 10px -6px rgba(15, 23, 42, .8);
+    color: #fff;
+}
+
+/* M/F compact în antet: doar simbolul, eticheta rămâne în title/aria. */
+.dcx-seg.is-head button {
+    font-size: .9rem;
+    padding: .3rem .55rem;
+}
+
+.dcx-seg.is-head button span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+}
+
+.dcx-stage-body {
+    flex: 1 1 auto;
+    height: 548px;
+    position: relative;
+}
+
+.dcx-links {
+    height: 100%;
+    inset: 0;
+    overflow: visible;
+    pointer-events: none;
+    position: absolute;
+    width: 100%;
+    z-index: 3;
+}
+
+.dcx-link {
+    fill: none;
+    filter: drop-shadow(0 0 3px rgba(var(--dcx-glow), .85));
+    stroke: #60a5fa;
+    stroke-linecap: round;
+    stroke-width: 1.6;
+    transition: stroke .2s ease, stroke-width .2s ease;
+}
+
+.dcx-link.is-hot {
+    filter: drop-shadow(0 0 5px rgba(37, 99, 235, .95));
+    stroke: #2563eb;
+    stroke-width: 2.4;
+}
+
+.dcx-figure {
+    aspect-ratio: 360 / 860;
+    bottom: 26px;
+    left: 50%;
+    position: absolute;
+    top: 0;
+    transform: translateX(-50%);
+    z-index: 2;
+}
+
+.dcx-figure-img {
+    filter: drop-shadow(0 18px 18px rgba(15, 23, 42, .28));
+    height: 100%;
+    inset: 0;
+    object-fit: contain;
+    object-position: center bottom;
+    opacity: 0;
+    position: absolute;
+    transform: scale(.985);
+    transition: opacity .35s ease, transform .35s var(--dcx-ease);
+    user-select: none;
+    width: 100%;
+    z-index: 1;
+}
+
+.dcx-figure-img.is-active {
+    opacity: 1;
+    transform: none;
+}
+
+/* Platforma holografică de sub picioare (inele concentrice). */
+.dcx-platform {
+    border-radius: 50%;
+    bottom: -22px;
+    height: 46px;
+    left: 50%;
+    position: absolute;
+    transform: translateX(-50%);
+    width: 150%;
+    z-index: 0;
+    background:
+        radial-gradient(closest-side, rgba(147, 197, 253, .55), rgba(59, 130, 246, .22) 55%, transparent 72%);
+    box-shadow:
+        0 0 0 2px rgba(96, 165, 250, .8),
+        0 0 18px 4px rgba(59, 130, 246, .45);
+}
+
+.dcx-platform::before,
+.dcx-platform::after {
+    border: 2px solid rgba(96, 165, 250, .75);
+    border-radius: 50%;
+    box-shadow: 0 0 12px 2px rgba(59, 130, 246, .45);
+    content: "";
+    inset: 9px 14%;
+    position: absolute;
+}
+
+.dcx-platform::after {
+    border-color: rgba(191, 219, 254, .9);
+    inset: 17px 30%;
+}
+
+.dcx-dot {
+    background: #fff;
+    border: 0;
+    border-radius: 50%;
+    box-shadow: 0 0 0 3px #3b82f6, 0 0 12px 5px rgba(var(--dcx-glow), .85);
+    height: 11px;
+    padding: 0;
+    position: absolute;
+    transform: translate(-50%, -50%);
+    transition: transform .2s var(--dcx-ease), box-shadow .2s ease, left .35s var(--dcx-ease), top .35s var(--dcx-ease);
+    width: 11px;
+    z-index: 4;
+}
+
+.dcx-dot::after {
+    border: 2px solid rgba(var(--dcx-glow), 0);
+    border-radius: 50%;
+    content: "";
+    inset: -14px;
+    position: absolute;
+    transition: border-color .25s ease, inset .25s var(--dcx-ease);
+}
+
+.dcx-dot.is-hot {
+    box-shadow: 0 0 0 4px #2563eb, 0 0 22px 8px rgba(var(--dcx-glow), .95);
+    transform: translate(-50%, -50%) scale(1.25);
+}
+
+.dcx-dot.is-hot::after {
+    border-color: rgba(var(--dcx-glow), .65);
+    inset: -20px;
+}
+
+/* Casetele de categorie din jurul siluetei: albe, compacte, cu imagine. */
+.dcx-card {
+    align-items: center;
+    background: #fff;
+    border: 1px solid #e1e9f5;
+    border-radius: 16px;
+    box-shadow: 0 14px 28px -20px rgba(15, 23, 42, .55), 0 2px 4px -2px rgba(15, 23, 42, .06);
+    color: #0f172a;
+    display: flex;
+    gap: .6rem;
+    min-height: 92px;
+    padding: .6rem .75rem .6rem .55rem;
+    position: absolute;
+    text-align: left;
+    transition: transform .22s var(--dcx-ease), box-shadow .22s ease, border-color .22s ease;
+    width: min(212px, calc(50% - 70px));
+    z-index: 5;
+}
+
+.dcx-card[data-slot^="L"] { left: 0; }
+.dcx-card[data-slot^="R"] { right: 0; }
+.dcx-card[data-slot="L1"] { top: 1%; }
+.dcx-card[data-slot="L2"] { top: 22%; }
+.dcx-card[data-slot="L3"] { top: 43%; }
+.dcx-card[data-slot="L4"] { top: 66%; }
+.dcx-card[data-slot="R1"] { top: 6%; }
+.dcx-card[data-slot="R2"] { top: 27%; }
+.dcx-card[data-slot="R3"] { top: 48%; }
+.dcx-card[data-slot="R4"] { top: 70%; }
+
+.dcx-card .dcx-thumb {
+    background-color: transparent;
+    border-radius: 12px;
+    box-shadow: none;
+    height: 60px;
+    width: 60px;
+}
+
+.dcx-card .dcx-thumb.is-icon {
+    background: #eef4ff;
+    color: var(--des-blue);
+}
+
+.dcx-card-text {
+    display: grid;
+    flex: 1 1 auto;
+    gap: .2rem;
+    line-height: 1.2;
+    min-width: 0;
+}
+
+.dcx-card-text strong {
+    font-size: .9rem;
+    font-weight: 800;
+    letter-spacing: -.015em;
+    overflow-wrap: anywhere;
+}
+
+.dcx-card-text span {
+    color: #475569;
+    font-size: .84rem;
+}
+
+.dcx-card-text b {
+    font-size: .92rem;
+    font-variant-numeric: tabular-nums;
+    font-weight: 800;
+}
+
+.dcx-card-go {
+    color: #94a3b8;
+    font-size: .8rem;
+}
+
+.dcx-card:hover,
+.dcx-card:focus-visible,
+.dcx-card.is-hot {
+    border-color: #93c5fd;
+    box-shadow: 0 0 0 3px rgba(var(--dcx-glow), .22), 0 18px 34px -18px rgba(37, 99, 235, .7);
+    outline: none;
+    transform: translateY(-2px);
+}
+
+.dcx-card.is-active {
+    border-color: var(--des-blue);
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, .25), 0 18px 34px -18px rgba(37, 99, 235, .75);
+}
+
+.dcx-stage-empty {
+    background: rgba(255, 255, 255, .9);
+    border: 1px dashed #cbd5e1;
+    border-radius: 14px;
+    color: var(--des-muted);
+    font-size: .85rem;
+    left: 50%;
+    margin: 0;
+    max-width: 260px;
+    padding: .75rem 1rem;
+    position: absolute;
+    text-align: center;
+    top: 46%;
+    transform: translateX(-50%);
+    z-index: 5;
+}
+
+.dcx-overflow {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    font-size: .8rem;
+    gap: .4rem;
+    margin-top: .6rem;
+    position: relative;
+    z-index: 3;
+}
+
+.dcx-overflow > span {
+    color: var(--des-muted);
+}
+
+.dcx-chip {
+    background: #fff;
+    border: 1px solid #d6e2f5;
+    border-radius: 999px;
+    color: #1e293b;
+    font-size: .76rem;
+    font-weight: 700;
+    padding: .3rem .7rem;
+}
+
+/* Sumarul de la baza siluetei. */
+.dcx-stage-foot {
+    align-items: center;
+    background: #fff;
+    border: 1px solid #e1e9f5;
+    border-radius: 16px;
+    box-shadow: 0 14px 28px -22px rgba(15, 23, 42, .6);
+    color: #0f172a;
+    display: flex;
+    gap: .85rem;
+    margin-top: .9rem;
+    padding: .85rem 1.1rem;
+    position: relative;
+    text-align: left;
+    transition: border-color .2s ease, box-shadow .2s ease, transform .2s var(--dcx-ease);
+    width: 100%;
+    z-index: 5;
+}
+
+.dcx-stage-foot:hover,
+.dcx-stage-foot:focus-visible {
+    border-color: #93c5fd;
+    box-shadow: 0 0 0 3px rgba(var(--dcx-glow), .2), 0 16px 30px -20px rgba(37, 99, 235, .7);
+    outline: none;
+}
+
+.dcx-foot-person,
+.dcx-foot-ico {
+    color: var(--des-blue);
+    font-size: 1.35rem;
+}
+
+.dcx-foot-label {
+    display: grid;
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.dcx-foot-label strong {
+    font-size: 1.05rem;
+    font-weight: 800;
+}
+
+.dcx-foot-label small {
+    color: var(--des-muted);
+    font-size: .76rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.dcx-stage-foot b {
+    font-size: 1.2rem;
+    font-variant-numeric: tabular-nums;
+    font-weight: 800;
+    white-space: nowrap;
+}
+
+.dcx-foot-go {
+    color: #1e293b;
+    transition: transform .2s var(--dcx-ease);
+}
+
+.dcx-stage-foot:hover .dcx-foot-go {
+    transform: translateX(3px);
+}
+
+/* Antet: căutare + Filtre */
+.dcx-header-form {
+    align-items: center;
+    display: flex;
+    gap: .5rem;
+}
+
+.dcx-header-form .des-search {
+    width: 340px;
+}
+
+.dcx-filters {
+    position: relative;
+}
+
+.dcx-filters > summary {
+    cursor: pointer;
+    list-style: none;
+}
+
+.dcx-filters > summary::-webkit-details-marker {
+    display: none;
+}
+
+.dcx-filter-count {
+    background: var(--des-blue);
+    border-radius: 999px;
+    color: #fff;
+    font-size: .7rem;
+    line-height: 1;
+    padding: .2rem .42rem;
+}
+
+.dcx-filters-pop {
+    background: #fff;
+    border: 1px solid var(--des-border);
+    border-radius: 14px;
+    box-shadow: 0 24px 48px -24px rgba(15, 23, 42, .45);
+    display: grid;
+    gap: .3rem;
+    padding: .85rem;
+    position: absolute;
+    right: 0;
+    top: calc(100% + .4rem);
+    width: 240px;
+    z-index: 30;
+}
+
+.dcx-filters-pop .form-label {
+    color: var(--des-muted);
+    font-size: .74rem;
+    font-weight: 700;
+    margin: .35rem 0 0;
+}
+
+.dcx-filters-reset {
+    align-items: center;
+    color: var(--des-blue);
+    display: inline-flex;
+    font-size: .8rem;
+    font-weight: 600;
+    gap: .35rem;
+    margin-top: .5rem;
+    text-decoration: none;
+}
+
+/* ----------------------------------------------------- Vedere categorii -- */
+
+.dcx-grid {
+    display: grid;
+    gap: .9rem;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+}
+
+.dcx-card.is-grid {
+    position: relative;
+    width: auto;
+}
+
+.dcx-grid > .dcx-stage-empty {
+    position: static;
+    transform: none;
+}
+
+/* ------------------------------------------------- Spațiul de lucru -- */
+
+.dcx-ws {
+    background: #fff;
+    border: 1px solid var(--des-border);
+    border-radius: 22px;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, .04), 0 24px 48px -30px rgba(15, 23, 42, .45);
+    display: flex;
+    flex-direction: column;
+    max-height: max(560px, calc(100vh - 150px));
+    outline: none;
+    overflow: hidden;
+    transform-origin: top left;
+}
+
+.dcx-ws[hidden] {
+    display: none;
+}
+
+.dcx-ws-head {
+    align-items: center;
+    border-bottom: 1px solid var(--des-border-soft);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    padding: 1.1rem 1.25rem;
+}
+
+.dcx-ws-thumb .dcx-thumb {
+    border-radius: 16px;
+    height: 64px;
+    width: 64px;
+}
+
+.dcx-ws-title {
+    flex: 1 1 220px;
+    min-width: 0;
+}
+
+.dcx-ws-title h2 {
+    font-size: 1.45rem;
+    font-weight: 700;
+    letter-spacing: -.01em;
+    margin: 0;
+}
+
+.dcx-ws-title p {
+    color: var(--des-muted);
+    font-size: .86rem;
+    margin: .15rem 0 0;
+}
+
+.dcx-seg.is-small button {
+    padding: .3rem .7rem;
+}
+
+.dcx-ws-close {
+    align-items: center;
+    background: #f8fafc;
+    border: 1px solid var(--des-border);
+    border-radius: 50%;
+    color: #334155;
+    display: inline-flex;
+    height: 40px;
+    justify-content: center;
+    transition: background-color .15s ease, transform .2s var(--dcx-ease);
+    width: 40px;
+}
+
+.dcx-ws-close:hover {
+    background: #eef2f7;
+    transform: rotate(90deg);
+}
+
+.dcx-kpis {
+    display: grid;
+    gap: .75rem;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    padding: 1rem 1.25rem;
+}
+
+.dcx-kpi {
+    align-items: center;
+    background: #fff;
+    border: 1px solid var(--des-border);
+    border-radius: 14px;
+    box-shadow: 0 6px 16px -14px rgba(15, 23, 42, .6);
+    column-gap: .75rem;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    padding: .75rem .9rem;
+}
+
+.dcx-kpi i {
+    color: var(--des-blue);
+    font-size: 1.5rem;
+    grid-row: span 2;
+}
+
+.dcx-kpi strong {
+    font-size: 1.25rem;
+    font-variant-numeric: tabular-nums;
+    font-weight: 800;
+    line-height: 1.1;
+}
+
+.dcx-kpi span {
+    color: var(--des-muted);
+    font-size: .78rem;
+}
+
+.dcx-kpi.is-money i { color: #d97706; }
+.dcx-kpi.is-money strong { color: var(--des-blue); }
+
+.dcx-ws-scroll {
+    flex: 1 1 auto;
+    min-height: 160px;
+    overflow: auto;
+    overscroll-behavior: contain;
+    scroll-behavior: smooth;
+    scrollbar-color: #c7d2e3 transparent;
+    scrollbar-width: thin;
+}
+
+.dcx-ws-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+.dcx-ws-scroll::-webkit-scrollbar-thumb { background: #c7d2e3; border-radius: 99px; }
+.dcx-ws-scroll::-webkit-scrollbar-track { background: transparent; }
+
+.dcx-table {
+    border-collapse: separate;
+    border-spacing: 0;
+    font-size: .875rem;
+    min-width: 820px;
+    width: 100%;
+}
+
+.dcx-table thead th {
+    background: #f8fafc;
+    border-bottom: 1px solid var(--des-border);
+    color: var(--des-muted);
+    font-size: .76rem;
+    font-weight: 700;
+    padding: .7rem .9rem;
+    position: sticky;
+    top: 0;
+    white-space: nowrap;
+    z-index: 2;
+}
+
+.dcx-table td {
+    border-bottom: 1px solid var(--des-border-soft);
+    padding: .7rem .9rem;
+    vertical-align: middle;
+}
+
+.dcx-table .is-num {
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    white-space: nowrap;
+}
+
+.dcx-table .is-actions {
+    text-align: right;
+    white-space: nowrap;
+    width: 1%;
+}
+
+.dcx-table .is-actions .dropdown {
+    display: inline-block;
+}
+
+.dcx-row {
+    cursor: pointer;
+    transition: background-color .15s ease;
+}
+
+.dcx-row:hover,
+.dcx-row.is-open {
+    background: #f6f9ff;
+}
+
+.dcx-row[hidden],
+.dcx-row-detail[hidden] {
+    display: none;
+}
+
+.dcx-row-detail > td {
+    background: #fbfcfe;
+    padding: 0 .5rem .75rem;
+}
+
+.dcx-item {
+    align-items: center;
+    display: flex;
+    gap: .75rem;
+}
+
+.dcx-item strong {
+    display: block;
+    font-weight: 700;
+}
+
+.dcx-item span {
+    color: var(--des-faint);
+    font-size: .75rem;
+}
+
+.dcx-sizes {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .3rem;
+}
+
+.dcx-size {
+    align-items: baseline;
+    background: #f1f5f9;
+    border-radius: 7px;
+    color: #0f172a;
+    display: inline-flex;
+    font-size: .74rem;
+    font-weight: 700;
+    gap: .25rem;
+    padding: .16rem .45rem;
+}
+
+.dcx-size small {
+    color: var(--des-muted);
+    font-size: .68rem;
+    font-weight: 600;
+}
+
+.dcx-size.is-empty {
+    color: var(--des-faint);
+    text-decoration: line-through;
+}
+
+.dcx-missing {
+    color: var(--des-amber);
+    font-size: .78rem;
+    font-style: italic;
+}
+
+.dcx-row-toggle {
+    align-items: center;
+    background: transparent;
+    border: 0;
+    border-radius: 8px;
+    color: var(--des-muted);
+    display: inline-flex;
+    height: 30px;
+    justify-content: center;
+    transition: background-color .15s ease, transform .2s var(--dcx-ease);
+    width: 30px;
+}
+
+.dcx-row-toggle:hover {
+    background: #eef2f7;
+}
+
+.dcx-row.is-open .dcx-row-toggle {
+    transform: rotate(180deg);
+}
+
+.dcx-ws-empty td {
+    color: var(--des-muted);
+    padding: 2rem;
+    text-align: center;
+}
+
+.dcx-ws-foot {
+    align-items: center;
+    border-top: 1px solid var(--des-border-soft);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    justify-content: space-between;
+    padding: .9rem 1.25rem;
+}
+
+.dcx-ws-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .5rem;
+}
+
+.dcx-ws-total {
+    align-items: flex-end;
+    display: flex;
+    flex-direction: column;
+}
+
+.dcx-ws-total span {
+    color: var(--des-muted);
+    font-size: .78rem;
+}
+
+.dcx-ws-total strong {
+    font-size: 1.35rem;
+    font-variant-numeric: tabular-nums;
+    font-weight: 800;
+}
+
+/* Conținutul intră după ce s-a terminat morfarea casetei. */
+.dcx-ws.is-morphing > * {
+    opacity: 0;
+}
+
+.dcx-ws > * {
+    transition: opacity .22s ease;
+}
+
+/* ----------------------------------------------------------- Responsive -- */
+
+/* Ecran mai îngust: siluetele una sub alta. */
+@container (max-width: 1100px) {
+    .dcx-stages {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
+
+@container (max-width: 560px) {
+    .dcx-stage-body {
+        display: grid;
+        gap: .6rem;
+        height: auto;
+    }
+
+    .dcx-links {
+        display: none;
+    }
+
+    .dcx-figure {
+        height: 360px;
+        left: auto;
+        margin: 0 auto .75rem;
+        position: relative;
+        transform: none;
+    }
+
+    .dcx-card {
+        position: relative;
+        inset: auto !important;
+        width: 100%;
+    }
+
+    .dcx-kpis {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 991.98px) {
+    .dcx {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .dcx-nav {
+        position: static;
+    }
+
+    .dcx-nav-views {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .dcx-nav-view {
+        font-size: .8rem;
+        justify-content: center;
+        padding: .55rem .4rem;
+    }
+
+    .dcx-nav-list {
+        display: flex;
+        gap: .35rem;
+        overflow-x: auto;
+        padding-bottom: .25rem;
+    }
+
+    .dcx-nav-cat {
+        flex: 0 0 auto;
+        width: auto;
+    }
+
+    .dcx-nav-totals {
+        display: none;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .dcx *,
+    .dcx *::after {
+        transition-duration: 0s !important;
+    }
+}
+
+/* Imagini furnizate pentru casete (assets/img/echipamente/categorii/{slug}.png|webp). */
+.dcx-thumb.is-photo {
+    background: none;
+    box-shadow: none;
+}
+
+.dcx-thumb.is-photo img {
+    height: 100%;
+    object-fit: contain;
+    width: 100%;
+}
+
+.dcx-nav-cat .dcx-thumb {
+    background-color: #f1f5fb;
+}

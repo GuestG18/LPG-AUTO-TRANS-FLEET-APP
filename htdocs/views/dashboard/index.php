@@ -423,6 +423,18 @@ $driverReasonUrl = static function (string $reasonKey) use ($selectedVehicleSear
             </div>
             </div>
         </form>
+        <?php
+        /*
+         * Modul „Pagini”: fiecare card cu filtrele paginii-sursă e o secțiune proprie, iar filtrele lui
+         * se mută aici (assets/js/dashboard-grid.js) și se văd doar cât e activă secțiunea lui.
+         * Secțiunile comune folosesc formularul de mai sus. Starea filtrelor rămâne în config-ul cardului.
+         */
+        ?>
+        <div class="dash-section-filters" data-dash-section-filters hidden>
+            <div class="dash-section-title"><i class="bi bi-funnel" aria-hidden="true"></i> <span data-dash-section-title></span></div>
+            <div class="dash-section-forms" data-dash-section-forms></div>
+            <p class="dash-section-loading" data-dash-section-loading hidden><span class="spinner-border spinner-border-sm" aria-hidden="true"></span> Se încarcă filtrele…</p>
+        </div>
     </section>
 
     <div class="dashboard-approval-layout<?= $showDashboardApprovalPanel ? ' has-approval-panel' : '' ?>">
