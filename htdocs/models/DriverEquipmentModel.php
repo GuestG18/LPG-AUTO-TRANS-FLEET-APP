@@ -1544,70 +1544,88 @@ class DriverEquipmentModel extends BaseModel
     public function returnItem(int $allocationId, string $outcome = 'stoc', string $notes = ''): void
     {
         $allocation = $this->requireAllocation($allocationId);
-
-        $condition = match ($outcome) {
-            'deteriorat' => 'deteriorata',
-            'pierdut' => 'pierduta',
-            default => (string) $allocation['stare'],
-        };
-
-        $statement = $this->db->prepare("
-            UPDATE echipamente_alocari
-            SET status = :status, stare = :stare, data_returnarii = CURDATE(),
-                observatii = COALESCE(NULLIF(:observatii, ''), observatii), updated_at = NOW()
-            WHERE id = :id
-        ");
-        $statement->execute([
-            'status' => $outcome === 'pierdut' ? 'pierdut' : 'returnat',
-            'stare' => $condition,
-            'observatii' => $notes,
-            'id' => $allocationId,
-        ]);
-
-        $unitId = (int) ($allocation['unitate_id'] ?? 0);
-        $backToStock = (int) $allocation['returnabil'] === 1 && $outcome === 'stoc';
-
-        if ($backToStock) {
-            $this->incrementStock(
-                (int) $allocation['catalog_id'],
-                (string) $allocation['locatie_implicita'],
-                (string) ($allocation['marime'] ?? ''),
-                (int) $allocation['cantitate']
-            );
+        // O alocare se returnează o singură dată: al doilea submit (alt tab, formular retrimis)
+        // ar crește stocul de două ori. Verificarea se repetă atomic în UPDATE-ul de mai jos.
+        if (!in_array((string) $allocation['status'], self::ACTIVE_STATUSES, true)) {
+            throw new InvalidArgumentException('Articolul "' . (string) $allocation['denumire'] . '" a fost deja returnat sau închis.');
         }
 
-        // Unitatea identificabilă redevine disponibilă doar dacă e utilizabilă;
-        // deteriorată sau pierdută rămâne în evidență, dar în afara stocului.
-        if ($unitId > 0) {
-            $this->setUnitStatus($unitId, match ($outcome) {
-                'pierdut' => 'pierdut',
-                'deteriorat' => 'deteriorat',
-                default => $backToStock ? 'disponibil' : 'casat',
-            }, [
-                'alocare_id' => null,
+        // Statusul alocării, intrarea în stoc, unitatea și mișcarea se scriu împreună sau deloc.
+        $this->db->beginTransaction();
+        try {
+            $condition = match ($outcome) {
+                'deteriorat' => 'deteriorata',
+                'pierdut' => 'pierduta',
+                default => (string) $allocation['stare'],
+            };
+
+            $statement = $this->db->prepare("
+                UPDATE echipamente_alocari
+                SET status = :status, stare = :stare, data_returnarii = CURDATE(),
+                    observatii = COALESCE(NULLIF(:observatii, ''), observatii), updated_at = NOW()
+                WHERE id = :id AND status IN (" . $this->inList(self::ACTIVE_STATUSES) . ")
+            ");
+            $statement->execute([
+                'status' => $outcome === 'pierdut' ? 'pierdut' : 'returnat',
                 'stare' => $condition,
+                'observatii' => $notes,
+                'id' => $allocationId,
             ]);
-        }
+            if ($statement->rowCount() === 0) {
+                throw new InvalidArgumentException('Articolul "' . (string) $allocation['denumire'] . '" a fost deja returnat sau închis.');
+            }
 
-        $this->logMovement(
-            $allocationId,
-            (int) $allocation['catalog_id'],
-            (int) $allocation['detinator_id'],
-            match ($outcome) {
-                'pierdut' => 'pierdere',
-                'deteriorat' => 'deteriorare',
-                default => 'returnare',
-            },
-            (int) $allocation['cantitate'],
-            (string) $allocation['locatie_implicita'],
-            $notes,
-            [
-                'marime' => (string) ($allocation['marime'] ?? ''),
-                'motiv' => $outcome === 'stoc' ? 'corectie' : $outcome,
-                'unitate_id' => $unitId > 0 ? $unitId : null,
-                'detinator_tip' => (string) $allocation['detinator_tip'],
-            ]
-        );
+            $unitId = (int) ($allocation['unitate_id'] ?? 0);
+            $backToStock = (int) $allocation['returnabil'] === 1 && $outcome === 'stoc';
+
+            if ($backToStock) {
+                $this->incrementStock(
+                    (int) $allocation['catalog_id'],
+                    (string) $allocation['locatie_implicita'],
+                    (string) ($allocation['marime'] ?? ''),
+                    (int) $allocation['cantitate']
+                );
+            }
+
+            // Unitatea identificabilă redevine disponibilă doar dacă e utilizabilă;
+            // deteriorată sau pierdută rămâne în evidență, dar în afara stocului.
+            if ($unitId > 0) {
+                $this->setUnitStatus($unitId, match ($outcome) {
+                    'pierdut' => 'pierdut',
+                    'deteriorat' => 'deteriorat',
+                    default => $backToStock ? 'disponibil' : 'casat',
+                }, [
+                    'alocare_id' => null,
+                    'stare' => $condition,
+                ]);
+            }
+
+            $this->logMovement(
+                $allocationId,
+                (int) $allocation['catalog_id'],
+                (int) $allocation['detinator_id'],
+                match ($outcome) {
+                    'pierdut' => 'pierdere',
+                    'deteriorat' => 'deteriorare',
+                    default => 'returnare',
+                },
+                (int) $allocation['cantitate'],
+                (string) $allocation['locatie_implicita'],
+                $notes,
+                [
+                    'marime' => (string) ($allocation['marime'] ?? ''),
+                    'motiv' => $outcome === 'stoc' ? 'corectie' : $outcome,
+                    'unitate_id' => $unitId > 0 ? $unitId : null,
+                    'detinator_tip' => (string) $allocation['detinator_tip'],
+                ]
+            );
+            $this->db->commit();
+        } catch (Throwable $exception) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            throw $exception;
+        }
     }
 
     /** Marchează starea unui articol aflat la șofer (deteriorat / de înlocuit / pierdut). */
@@ -1670,12 +1688,25 @@ class DriverEquipmentModel extends BaseModel
         $location = (string) $catalog['locatie_implicita'];
         $size = $this->normalizeSize($data['marime'] ?? $allocation['marime'] ?? null, $catalog);
 
+        // O alocare se înlocuiește o singură dată: un al doilea submit ar închide
+        // din nou alocarea veche și ar preda încă o bucată din stoc.
+        if (!in_array((string) $allocation['status'], self::ACTIVE_STATUSES, true)) {
+            throw new InvalidArgumentException('Articolul "' . (string) $allocation['denumire'] . '" a fost deja înlocuit sau închis.');
+        }
+
         // Verificarea se face pe mărimea cerută: stocul de 42 nu rezolvă o
         // înlocuire de 43, oricât de mare ar fi totalul articolului.
         $this->requireStock($catalog, $location, $size, $quantity);
 
         $this->db->beginTransaction();
         try {
+            // Re-verificare sub blocare: două cereri simultane nu pot trece amândouă.
+            $lock = $this->db->prepare('SELECT status FROM echipamente_alocari WHERE id = :id FOR UPDATE');
+            $lock->execute(['id' => $allocationId]);
+            if (!in_array((string) $lock->fetchColumn(), self::ACTIVE_STATUSES, true)) {
+                throw new InvalidArgumentException('Articolul "' . (string) $allocation['denumire'] . '" a fost deja înlocuit sau închis.');
+            }
+
             $this->closeReplacedAllocation(
                 $allocationId,
                 $allocation,
@@ -2848,6 +2879,374 @@ class DriverEquipmentModel extends BaseModel
 
         usort($owners, static fn(array $a, array $b): int => $b['valoare'] <=> $a['valoare'] ?: strcoll($a['nume'], $b['nume']));
         $totals['articole'] = count($allCatalog);
+
+        return ['owners' => $owners, 'totals' => $totals];
+    }
+
+    /**
+     * Cardul „În stoc” (Echipamente șoferi / TESA): total -> categorii -> articole.
+     *
+     * Pornește din getStockRows() — exact rândurile paginii Stoc echipamente — deci
+     * statusul, rezervările, pragurile și valoarea (disponibil × cost linie; null
+     * pentru abonamente) sunt aceleași. Stocul este comun celor două pagini și nu
+     * se filtrează pe destinație (destinația din catalog e doar o sugestie).
+     * Liniile se desfac pe mărime acolo unde articolul se ține pe mărimi.
+     */
+    public function buildStockOverview(): array
+    {
+        $categories = [];
+        $totals = ['disponibil' => 0, 'rezervat' => 0, 'valoare' => 0.0, 'articole' => 0, 'pret_lipsa' => 0];
+        $availableArticles = [];
+
+        foreach ($this->getStockRows([]) as $row) {
+            $name = trim((string) $row['categorie']) !== '' ? trim((string) $row['categorie']) : 'Fără categorie';
+            $visual = $this->categoryVisual($name);
+            $catKey = $visual['slug'];
+            $articleId = (int) $row['catalog_id'];
+            $isSubscription = $row['valoare'] === null;
+            $unit = (float) $row['cost_unitar'];
+            $missingPrice = !$isSubscription && $unit <= 0;
+
+            if (!isset($categories[$catKey])) {
+                $categories[$catKey] = [
+                    'key' => $catKey, 'name' => $name, 'icon' => $visual['icon'], 'anchor' => $visual['anchor'],
+                    'disponibil' => 0, 'rezervat' => 0, 'valoare' => 0.0, 'pret_lipsa' => 0, 'articole' => [],
+                ];
+            }
+            $category = &$categories[$catKey];
+            if (!isset($category['articole'][$articleId])) {
+                $category['articole'][$articleId] = [
+                    'id' => $articleId, 'denumire' => (string) $row['denumire'],
+                    'disponibil' => 0, 'rezervat' => 0, 'valoare' => 0.0, 'praguri' => [], 'linii' => [],
+                ];
+            }
+            $article = &$category['articole'][$articleId];
+
+            // O linie per mărime (dacă articolul are mărimi), altfel una per gestiune.
+            $parts = $row['marimi'] !== [] ? $row['marimi'] : [[
+                'marime' => '', 'disponibil' => (int) $row['disponibil'], 'rezervat' => (int) $row['rezervat'], 'prag_minim' => (int) $row['prag_minim'],
+            ]];
+            foreach ($parts as $part) {
+                $available = (int) $part['disponibil'];
+                $threshold = (int) $part['prag_minim'];
+                $article['linii'][] = [
+                    'locatie' => (string) $row['locatie'],
+                    'marime' => (string) $part['marime'],
+                    'disponibil' => $available,
+                    'rezervat' => (int) $part['rezervat'],
+                    'prag' => $threshold,
+                    'pret' => $isSubscription || $missingPrice ? null : $unit,
+                    'valoare' => $isSubscription || $missingPrice ? null : $available * $unit,
+                    'abonament' => $isSubscription,
+                    'status' => $this->stockStatus(['disponibil' => $available, 'prag_minim' => $threshold]),
+                ];
+                $article['praguri'][$threshold] = true;
+            }
+
+            $value = $isSubscription || $missingPrice ? 0.0 : (float) $row['valoare'];
+            foreach ([&$article, &$category] as &$bucket) {
+                $bucket['disponibil'] += (int) $row['disponibil'];
+                $bucket['rezervat'] += (int) $row['rezervat'];
+                $bucket['valoare'] += $value;
+            }
+            unset($bucket);
+            $category['pret_lipsa'] += $missingPrice ? 1 : 0;
+
+            $totals['disponibil'] += (int) $row['disponibil'];
+            $totals['rezervat'] += (int) $row['rezervat'];
+            $totals['valoare'] += $value;
+            $totals['pret_lipsa'] += $missingPrice ? 1 : 0;
+            if ((int) $row['disponibil'] > 0) {
+                $availableArticles[$articleId] = true;
+            }
+            unset($article, $category);
+        }
+
+        foreach ($categories as &$category) {
+            $thresholds = [];
+            foreach ($category['articole'] as &$article) {
+                $article['praguri'] = array_keys($article['praguri']);
+                sort($article['praguri']);
+                $thresholds = array_merge($thresholds, $article['praguri']);
+            }
+            unset($article);
+            $thresholds = array_values(array_unique($thresholds));
+            sort($thresholds);
+            // Pragurile diferă pe articol / mărime: nu inventăm un prag unic al categoriei.
+            $category['praguri'] = $thresholds;
+            $category['sub_prag'] = 0;
+            foreach ($category['articole'] as $article) {
+                foreach ($article['linii'] as $line) {
+                    $category['sub_prag'] += $line['status']['key'] !== 'in_stoc' ? 1 : 0;
+                }
+            }
+            uasort($category['articole'], static fn(array $a, array $b): int => $b['valoare'] <=> $a['valoare'] ?: strcoll($a['denumire'], $b['denumire']));
+            $category['articole'] = array_values($category['articole']);
+        }
+        unset($category);
+        uasort($categories, static fn(array $a, array $b): int => $b['valoare'] <=> $a['valoare'] ?: strcoll($a['name'], $b['name']));
+        $totals['articole'] = count($availableArticles);
+
+        return ['categories' => array_values($categories), 'totals' => $totals];
+    }
+
+    /**
+     * Cardul „De returnat”: persoane -> articolele pe care trebuie să le aducă înapoi.
+     *
+     * Aceeași regulă ca indicatorul `de_returnat` din getKpis(): alocare activă,
+     * articol returnabil și fie marcată pentru înlocuire (bucata veche revine), fie
+     * deținătorul nu mai este activ. Valoarea = cantitate × costul de la predare —
+     * valoare înregistrată de recuperat, NU pierdere și nici sumă recuperată.
+     * Returnarea se face pe toată alocarea (backend-ul nu are returnări parțiale).
+     */
+    public function buildReturnOverview(string $ownerType = self::OWNER_DRIVER): array
+    {
+        $ownerType = $this->normalizeOwnerType($ownerType);
+        $activeIn = $this->inList(self::ACTIVE_STATUSES);
+        $replaceIn = $this->inList(self::REPLACEMENT_STATUSES);
+        $isDriver = $ownerType === self::OWNER_DRIVER;
+
+        $rows = $this->prepared("
+            SELECT a.id, a.catalog_id, a.cantitate, a.marime, a.cost_unitar, a.data_predarii, a.status, a.stare,
+                   c.denumire, c.categorie, c.grupa, c.returnabil,
+                   COALESCE(a.driver_id, a.staff_id) AS detinator_id,
+                   COALESCE(s.nume, sm.nume_complet) AS detinator_nume,
+                   COALESCE(s.status, sm.status) AS detinator_status,
+                   COALESCE(s.employment_status, sm.employment_status, 'active') AS detinator_angajare,
+                   v.nr_inmatriculare AS vehicul, sm.functie, stp.name AS departament
+            FROM echipamente_alocari a
+            INNER JOIN echipamente_catalog c ON c.id = a.catalog_id
+            LEFT JOIN soferi s ON s.id = a.driver_id
+            LEFT JOIN vehicule v ON v.id = s.vehicle_id
+            LEFT JOIN staff_members sm ON sm.id = a.staff_id
+            LEFT JOIN staff_types stp ON stp.id = sm.staff_type_id
+            WHERE a.status IN ($activeIn) AND a.detinator_tip = :tip AND c.returnabil = 1
+              AND (
+                  a.status IN ($replaceIn)
+                  OR COALESCE(s.status, sm.status) = 'inactiv'
+                  OR COALESCE(s.employment_status, sm.employment_status, 'active') = 'terminated'
+              )
+            ORDER BY detinator_nume ASC, a.data_predarii ASC
+        ", ['tip' => $ownerType])->fetchAll();
+
+        $owners = [];
+        $catalogIds = [];
+        $totals = ['bucati' => 0, 'valoare' => 0.0, 'persoane' => 0, 'pret_lipsa' => 0];
+
+        foreach ($rows as $row) {
+            $ownerId = (int) $row['detinator_id'];
+            $inactiveOwner = (string) $row['detinator_status'] === 'inactiv' || (string) $row['detinator_angajare'] === 'terminated';
+            $forReplacement = in_array((string) $row['status'], self::REPLACEMENT_STATUSES, true);
+            $qty = (int) $row['cantitate'];
+            $unit = (float) $row['cost_unitar'];
+            $name = trim((string) $row['categorie']) !== '' ? trim((string) $row['categorie']) : 'Fără categorie';
+            $visual = $this->categoryVisual($name);
+
+            if (!isset($owners[$ownerId])) {
+                $owners[$ownerId] = [
+                    'id' => $ownerId,
+                    'nume' => (string) $row['detinator_nume'],
+                    'initiale' => $this->initials((string) $row['detinator_nume']),
+                    'meta' => $isDriver
+                        ? trim((string) ($row['vehicul'] ?? ''))
+                        : implode(' · ', array_filter([(string) ($row['functie'] ?? ''), (string) ($row['departament'] ?? '')])),
+                    'inactiv' => $inactiveOwner,
+                    'bucati' => 0, 'valoare' => 0.0, 'pret_lipsa' => 0,
+                    'articole' => [], 'categorii' => [], 'linii' => [],
+                ];
+            }
+            $owner = &$owners[$ownerId];
+            $owner['linii'][] = [
+                'id' => (int) $row['id'],
+                'catalog_id' => (int) $row['catalog_id'],
+                'denumire' => (string) $row['denumire'],
+                'categorie' => $name,
+                'cat' => $visual['slug'],
+                'icon' => $visual['icon'],
+                'marime' => (string) ($row['marime'] ?? ''),
+                'cantitate' => $qty,
+                'pret' => $unit > 0 ? $unit : null,
+                'valoare' => $unit > 0 ? $qty * $unit : null,
+                'data_predarii' => (string) $row['data_predarii'],
+                // Motivul derivă din datele existente — nu există o coloană „motiv returnare”.
+                'motiv' => $inactiveOwner && !$forReplacement
+                    ? ($isDriver ? 'Șofer inactiv / plecat' : 'Persoană inactivă / plecată')
+                    : 'Marcat pentru înlocuire',
+                'status' => self::STATUSES[(string) $row['status']] ?? (string) $row['status'],
+                'status_key' => (string) $row['status'],
+                'stare' => self::CONDITIONS[(string) $row['stare']] ?? (string) $row['stare'],
+                'returnabil' => (int) $row['returnabil'],
+                'status_raw' => (string) $row['status'],
+                'stare_raw' => (string) $row['stare'],
+            ];
+            if (!isset($owner['categorii'][$visual['slug']])) {
+                $owner['categorii'][$visual['slug']] = [
+                    'key' => $visual['slug'], 'name' => $name, 'icon' => $visual['icon'], 'anchor' => $visual['anchor'],
+                    'articole' => [], 'bucati' => 0, 'valoare' => 0.0,
+                ];
+            }
+            $owner['categorii'][$visual['slug']]['articole'][(int) $row['catalog_id']] = true;
+            $owner['categorii'][$visual['slug']]['bucati'] += $qty;
+            $owner['categorii'][$visual['slug']]['valoare'] += $unit > 0 ? $qty * $unit : 0;
+            $owner['articole'][(int) $row['catalog_id']] = true;
+            $owner['bucati'] += $qty;
+            $owner['valoare'] += $unit > 0 ? $qty * $unit : 0;
+            $owner['pret_lipsa'] += $unit > 0 ? 0 : 1;
+            unset($owner);
+
+            $catalogIds[(int) $row['catalog_id']] = true;
+            $totals['bucati'] += $qty;
+            $totals['valoare'] += $unit > 0 ? $qty * $unit : 0;
+            $totals['pret_lipsa'] += $unit > 0 ? 0 : 1;
+        }
+
+        foreach ($owners as &$owner) {
+            $owner['articole'] = count($owner['articole']);
+            foreach ($owner['categorii'] as &$category) {
+                $category['articole'] = count($category['articole']);
+            }
+            unset($category);
+            $owner['categorii'] = array_values($owner['categorii']);
+        }
+        unset($owner);
+        usort($owners, static fn(array $a, array $b): int => $b['valoare'] <=> $a['valoare'] ?: strcoll($a['nume'], $b['nume']));
+
+        $totals['persoane'] = count($owners);
+        $totals['articole'] = count($catalogIds);
+        $totals['linii'] = count($rows);
+
+        return ['owners' => $owners, 'totals' => $totals];
+    }
+
+    /**
+     * Cardul „De înlocuit”: persoane -> articolele care trebuie înlocuite.
+     *
+     * Regula este cea a indicatorului `de_inlocuit` și a filtrului Status „De înlocuit”:
+     * alocări cu status de_inlocuit / necesita_inlocuire (getAllocations filtrează exact așa).
+     * Termenul, zilele rămase și stocul pentru înlocuire vin din decorateAllocation() — același
+     * rând de stoc (gestiunea implicită + mărimea) pe care îl verifică replaceFromStock().
+     *
+     * Valoarea estimată = cantitate × prețul de ÎNLOCUIRE: costul liniei de stoc din care s-ar
+     * preda (gestiune implicită + mărime), altfel costul implicit din catalog. Fără niciunul,
+     * linia e marcată „preț lipsă” — nu se inventează.
+     */
+    public function buildReplacementOverview(string $ownerType = self::OWNER_DRIVER): array
+    {
+        $ownerType = $this->normalizeOwnerType($ownerType);
+        $isDriver = $ownerType === self::OWNER_DRIVER;
+        $items = $this->getAllocations(['detinator_tip' => $ownerType, 'status' => 'de_inlocuit']);
+
+        $catalogIds = array_values(array_unique(array_map(static fn(array $i): int => (int) $i['catalog_id'], $items)));
+        $catalogCost = [];
+        $stockCost = [];
+        if ($catalogIds !== []) {
+            $in = implode(',', array_map('intval', $catalogIds));
+            foreach ($this->db->query("SELECT id, cost_implicit FROM echipamente_catalog WHERE id IN ($in)")->fetchAll() as $c) {
+                $catalogCost[(int) $c['id']] = (float) $c['cost_implicit'];
+            }
+            foreach ($this->db->query("SELECT catalog_id, locatie, marime, cost_unitar FROM echipamente_stoc WHERE catalog_id IN ($in)")->fetchAll() as $s) {
+                $stockCost[(int) $s['catalog_id'] . '|' . (string) $s['locatie'] . '|' . (string) $s['marime']] = (float) $s['cost_unitar'];
+            }
+        }
+        $vehicles = [];
+        if ($isDriver && $items !== []) {
+            foreach ($this->db->query('SELECT s.id, v.nr_inmatriculare FROM soferi s LEFT JOIN vehicule v ON v.id = s.vehicle_id')->fetchAll() as $v) {
+                $vehicles[(int) $v['id']] = (string) ($v['nr_inmatriculare'] ?? '');
+            }
+        }
+
+        $owners = [];
+        $articleIds = [];
+        $totals = ['bucati' => 0, 'valoare' => 0.0, 'pret_lipsa' => 0, 'fara_stoc' => 0];
+
+        foreach ($items as $item) {
+            $ownerId = (int) $item['detinator_id'];
+            $qty = (int) $item['cantitate'];
+            $size = (string) ($item['marime'] ?? '');
+            $stockKey = (int) $item['catalog_id'] . '|' . (string) $item['locatie_implicita'] . '|' . $size;
+            $unit = ($stockCost[$stockKey] ?? 0) > 0 ? $stockCost[$stockKey] : (float) ($catalogCost[(int) $item['catalog_id']] ?? 0);
+            $value = $unit > 0 ? $qty * $unit : null;
+            $name = trim((string) $item['categorie']) !== '' ? trim((string) $item['categorie']) : 'Fără categorie';
+            $visual = $this->categoryVisual($name);
+            $inStock = (int) $item['stoc_disponibil'];
+            $daysLeft = $item['zile_ramase'];
+
+            // Motivul din datele existente (marcaj, stare fizică, termen) — fără coduri noi.
+            $reason = match (true) {
+                (string) $item['stare'] === 'deteriorata' => 'Deteriorat',
+                (string) $item['stare'] === 'pierduta' => 'Pierdut',
+                !empty($item['periodic']) && $daysLeft !== null && $daysLeft < 0 => 'Schimb periodic (termen depășit)',
+                (string) $item['stare'] === 'uzata' => 'Uzură',
+                (string) $item['status'] === 'necesita_inlocuire' => 'Necesită înlocuire',
+                default => 'Marcat pentru înlocuire',
+            };
+
+            if (!isset($owners[$ownerId])) {
+                $owners[$ownerId] = [
+                    'id' => $ownerId,
+                    'nume' => (string) $item['detinator_nume'],
+                    'initiale' => $this->initials((string) $item['detinator_nume']),
+                    'meta' => $isDriver
+                        ? ($vehicles[$ownerId] ?? '')
+                        : implode(' · ', array_filter([(string) ($item['detinator_functie'] ?? ''), (string) ($item['detinator_departament'] ?? '')])),
+                    'articole' => [], 'bucati' => 0, 'valoare' => 0.0, 'pret_lipsa' => 0, 'fara_stoc' => 0,
+                    'categorii' => [], 'linii' => [],
+                ];
+            }
+            $owner = &$owners[$ownerId];
+            $owner['linii'][] = [
+                'item' => $item,
+                'cat' => $visual['slug'],
+                'icon' => $visual['icon'],
+                'categorie' => $name,
+                'cantitate' => $qty,
+                'marime' => $size,
+                'pret' => $unit > 0 ? $unit : null,
+                'valoare' => $value,
+                'motiv' => $reason,
+                'nota' => trim((string) ($item['observatii'] ?? '')),
+                'termen' => $item['termen'],
+                'zile' => $daysLeft,
+                'status' => self::STATUSES[(string) $item['status']] ?? (string) $item['status'],
+                'stoc' => $inStock,
+                'stoc_ok' => $inStock >= $qty,
+            ];
+            if (!isset($owner['categorii'][$visual['slug']])) {
+                $owner['categorii'][$visual['slug']] = [
+                    'key' => $visual['slug'], 'name' => $name, 'icon' => $visual['icon'], 'anchor' => $visual['anchor'],
+                    'articole' => [], 'bucati' => 0, 'valoare' => 0.0,
+                ];
+            }
+            $owner['categorii'][$visual['slug']]['articole'][(int) $item['catalog_id']] = true;
+            $owner['categorii'][$visual['slug']]['bucati'] += $qty;
+            $owner['categorii'][$visual['slug']]['valoare'] += $value ?? 0;
+            $owner['articole'][(int) $item['catalog_id']] = true;
+            $owner['bucati'] += $qty;
+            $owner['valoare'] += $value ?? 0;
+            $owner['pret_lipsa'] += $value === null ? 1 : 0;
+            $owner['fara_stoc'] += $inStock >= $qty ? 0 : 1;
+            unset($owner);
+
+            $articleIds[(int) $item['catalog_id']] = true;
+            $totals['bucati'] += $qty;
+            $totals['valoare'] += $value ?? 0;
+            $totals['pret_lipsa'] += $value === null ? 1 : 0;
+            $totals['fara_stoc'] += $inStock >= $qty ? 0 : 1;
+        }
+
+        foreach ($owners as &$owner) {
+            $owner['articole'] = count($owner['articole']);
+            foreach ($owner['categorii'] as &$category) {
+                $category['articole'] = count($category['articole']);
+            }
+            unset($category);
+            $owner['categorii'] = array_values($owner['categorii']);
+        }
+        unset($owner);
+        usort($owners, static fn(array $a, array $b): int => $b['valoare'] <=> $a['valoare'] ?: strcoll($a['nume'], $b['nume']));
+
+        $totals['persoane'] = count($owners);
+        $totals['articole'] = count($articleIds);
 
         return ['owners' => $owners, 'totals' => $totals];
     }

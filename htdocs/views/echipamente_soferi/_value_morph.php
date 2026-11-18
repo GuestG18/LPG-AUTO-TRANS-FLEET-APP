@@ -34,29 +34,6 @@ if ($isStaffPage) {
     $baseFilters['action'] = 'tesa';
 }
 
-$statusCards = [
-    [
-        'tone' => 'green', 'icon' => 'bi-archive', 'title' => 'În stoc',
-        'value' => (int) ($kpis['in_stoc'] ?? 0),
-        'label' => $plural((int) ($kpis['articole_in_stoc'] ?? 0), 'articol disponibil', 'articole disponibile'),
-        'link' => 'Vezi stocul', 'href' => build_query_url(['page' => 'echipamente_soferi', 'action' => 'stoc']),
-        'hint' => 'Bucăți libere în stocul comun (șoferi + TESA)',
-    ],
-    [
-        'tone' => 'orange', 'icon' => 'bi-arrow-counterclockwise', 'title' => 'De returnat',
-        'value' => (int) ($kpis['de_returnat'] ?? 0),
-        'label' => (int) ($kpis['de_returnat'] ?? 0) === 1 ? 'articol' : 'articole',
-        'link' => 'Vezi lista', 'href' => build_query_url(array_merge($baseFilters, ['returnabil' => 'da', 'status' => 'de_inlocuit'])),
-        'hint' => 'Articole returnabile marcate pentru înlocuire sau rămase la persoane inactive',
-    ],
-    [
-        'tone' => 'amber', 'icon' => 'bi-exclamation-triangle', 'title' => 'De înlocuit',
-        'value' => (int) ($kpis['de_inlocuit'] ?? 0),
-        'label' => (int) ($kpis['de_inlocuit'] ?? 0) === 1 ? 'articol' : 'articole',
-        'link' => 'Vezi lista', 'href' => build_query_url(array_merge($baseFilters, ['status' => 'de_inlocuit'])),
-        'hint' => 'Alocări marcate „De înlocuit” / „Necesită înlocuire”',
-    ],
-];
 
 // Datele pentru JS: nivelul 3 se completează din ele (antet, categorii, puncte pe siluetă).
 $jsOwners = [];
@@ -76,11 +53,12 @@ foreach ($vOwners as $owner) {
     ];
 }
 ?>
+<?php $stockOverview = $stockOverview ?? null; ?>
 <link rel="stylesheet" href="<?= e(url('assets/css/echipamente-valoare.css?v=' . (string) @filemtime(BASE_PATH . '/assets/css/echipamente-valoare.css'))) ?>">
 
 <section class="dcv" data-dcv data-dcv-role="<?= e($role) ?>" data-dcv-default-variant="<?= e($defaultVariant) ?>" aria-label="Valoare echipamente alocate">
 
-    <article class="dcv-card" data-dcv-card data-dcv-level="1">
+    <article class="dcv-card" data-dcv-card data-dcv-level="1" data-ws-card="value">
 
         <!-- ---------------------------------------------- Nivel 1: total -->
         <div class="dcv-face dcv-l1" data-dcv-face="1">
@@ -275,20 +253,10 @@ foreach ($vOwners as $owner) {
         </div>
     </article>
 
-    <!-- Carduri de stare -->
-    <aside class="dcv-status" aria-label="Stare inventar">
-        <?php foreach ($statusCards as $card): ?>
-            <a class="dcv-stat is-<?= e($card['tone']) ?>" href="<?= e($card['href']) ?>" title="<?= e($card['hint']) ?>">
-                <span class="dcv-stat-ico" aria-hidden="true"><i class="bi <?= e($card['icon']) ?>"></i></span>
-                <span class="dcv-stat-text">
-                    <strong><?= e($card['title']) ?></strong>
-                    <b><?= e(format_number_ro($card['value'], 0)) ?></b>
-                    <small><?= e($card['label']) ?></small>
-                    <em><?= e($card['link']) ?> <i class="bi bi-arrow-right" aria-hidden="true"></i></em>
-                </span>
-            </a>
-        <?php endforeach; ?>
-    </aside>
+    <?php // Cardurile de inventar sunt toate cu fețe: „În stoc”, „De returnat”, „De înlocuit”. ?>
+    <?php include __DIR__ . '/_stock_morph.php'; ?>
+    <?php include __DIR__ . '/_return_morph.php'; ?>
+    <?php include __DIR__ . '/_replace_morph.php'; ?>
 
     <script type="application/json" data-dcv-data><?= json_encode([
         'owners' => $jsOwners,

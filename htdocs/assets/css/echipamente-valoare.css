@@ -13,10 +13,9 @@
     --dcv-ease: cubic-bezier(.22, .8, .24, 1);
     --dcv-glow: 96, 165, 250;
 
-    align-items: flex-start;
-    display: flex;
-    flex-wrap: wrap;
+    display: grid;
     gap: 1rem;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     margin-bottom: 1.25rem;
 }
 
@@ -34,13 +33,9 @@
     min-width: 0;
     overflow: hidden;
     position: relative;
-    width: 400px;
 }
 
 /* Dimensiunea urmează nivelul: KPI compact -> listă -> detaliu (animată din JS). */
-.dcv-card[data-dcv-level="1"] { min-height: 236px; width: 400px; }
-.dcv-card[data-dcv-level="2"] { min-height: 380px; width: 500px; }
-.dcv-card[data-dcv-level="3"] { min-height: 500px; width: min(1000px, 100%); }
 
 .dcv-face {
     display: flex;
@@ -913,7 +908,7 @@
     display: grid;
     flex: 0 1 auto;
     gap: .8rem;
-    grid-template-columns: repeat(3, 176px);
+    grid-template-columns: 176px;
 }
 
 .dcv-stat {
@@ -1012,12 +1007,540 @@
     outline: none;
 }
 
+/* ----------------------------------------------------- Cardul „În stoc” -- */
+
+/* Al doilea card cu fețe: compact ca un card de stare, se lărgește doar în adâncime. */
+.dcs-card {
+    background:
+        radial-gradient(120% 90% at 0% 0%, rgba(220, 252, 231, .5), transparent 55%),
+        #fff;
+    border: 1px solid #dfe7f3;
+    border-radius: 18px;
+    box-shadow: 0 16px 30px -26px rgba(15, 23, 42, .55);
+    flex: 0 0 auto;
+    max-width: 100%;
+    min-width: 0;
+    overflow: hidden;
+    position: relative;
+    transition: border-color .2s ease, box-shadow .2s ease;
+}
+
+
+.dcs-card:not([data-dcs-level="1"]) {
+    border-color: #cfe0f5;
+    box-shadow: 0 1px 0 #fff inset, 0 22px 44px -30px rgba(30, 64, 175, .45), 0 2px 6px -2px rgba(15, 23, 42, .06);
+}
+
+.dcs-face[hidden] {
+    display: none !important;
+}
+
+.dcs-face.is-entering {
+    animation: dcvFaceIn .32s var(--dcv-ease) both;
+}
+
+.dcs-face.is-entering .dcs-row,
+.dcs-face.is-entering .dcs-article {
+    animation: dcvRowIn .3s var(--dcv-ease) both;
+}
+
+/* Nivel 1 */
+.dcs-l1 {
+    background: none;
+    border: 0;
+    color: #0f172a;
+    display: grid;
+    gap: .1rem;
+    padding: .85rem .9rem .9rem;
+    text-align: left;
+    width: 100%;
+}
+
+.dcs-l1-top {
+    align-items: center;
+    display: flex;
+    gap: .55rem;
+    margin-bottom: .35rem;
+}
+
+.dcs-l1-top strong {
+    flex: 1 1 auto;
+    font-size: .92rem;
+    font-weight: 800;
+}
+
+.dcs-ico {
+    align-items: center;
+    background: #e8f8ef;
+    border-radius: 12px;
+    color: #16a34a;
+    display: inline-flex;
+    font-size: 1.1rem;
+    height: 38px;
+    justify-content: center;
+    width: 38px;
+}
+
+.dcs-go {
+    color: #94a3b8;
+    transition: transform .2s var(--dcv-ease), color .2s ease;
+}
+
+.dcs-l1:hover .dcs-go,
+.dcs-l1:focus-visible .dcs-go {
+    color: #16a34a;
+    transform: translateX(3px);
+}
+
+.dcs-l1:focus-visible {
+    outline: none;
+}
+
+.dcs-card[data-dcs-level="1"]:hover,
+.dcs-card[data-dcs-level="1"]:focus-within {
+    border-color: #a7e3bd;
+    box-shadow: 0 0 0 3px rgba(34, 197, 94, .14), 0 20px 34px -24px rgba(15, 23, 42, .6);
+}
+
+.dcs-qty {
+    color: #15803d;
+    font-size: 1.6rem;
+    font-variant-numeric: tabular-nums;
+    font-weight: 800;
+    line-height: 1.1;
+}
+
+.dcs-qty small {
+    color: #64748b;
+    font-size: .8rem;
+    font-weight: 700;
+}
+
+.dcs-sub {
+    color: var(--des-muted);
+    font-size: .76rem;
+}
+
+.dcs-val {
+    border-top: 1px solid #eef2f7;
+    color: #0f172a;
+    font-size: .92rem;
+    font-variant-numeric: tabular-nums;
+    font-weight: 800;
+    margin-top: .45rem;
+    padding-top: .45rem;
+}
+
+/* Nivel 2 */
+.dcs-l2,
+.dcs-l3 {
+    display: flex;
+    flex-direction: column;
+    padding: 1rem 1.1rem 1rem;
+}
+
+.dcs-search {
+    flex: 0 0 auto;
+    margin: .8rem 0 .4rem;
+}
+
+.dcs-list-head,
+.dcs-row {
+    align-items: center;
+    display: grid;
+    gap: .5rem;
+    grid-template-columns: minmax(0, 1fr) 56px 84px 104px 14px;
+}
+
+.dcs-list-head {
+    color: var(--des-muted);
+    font-size: .72rem;
+    font-weight: 600;
+    padding: .35rem .6rem;
+}
+
+.dcs-list {
+    display: grid;
+    gap: .15rem;
+    max-height: 236px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-color: #c7d2e3 transparent;
+    scrollbar-width: thin;
+}
+
+.dcs-row {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 11px;
+    color: #0f172a;
+    font-size: .84rem;
+    padding: .42rem .6rem;
+    text-align: left;
+    transition: background-color .15s ease, border-color .15s ease;
+}
+
+.dcs-row[hidden] {
+    display: none;
+}
+
+.dcs-row:hover,
+.dcs-row:focus-visible {
+    background: #f5f8fe;
+    outline: none;
+}
+
+.dcs-row.is-selected {
+    background: var(--dcv-blue-soft);
+    border-color: #93c5fd;
+}
+
+.dcs-row-name {
+    align-items: center;
+    display: flex;
+    font-weight: 700;
+    gap: .55rem;
+    min-width: 0;
+}
+
+.dcs-row-name > span:last-child {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.dcs-row-ico {
+    align-items: center;
+    background: #e8f8ef;
+    border-radius: 9px;
+    color: #16a34a;
+    display: inline-flex;
+    flex: 0 0 auto;
+    height: 30px;
+    justify-content: center;
+    width: 30px;
+}
+
+.dcs-row .is-money {
+    font-weight: 700;
+}
+
+.dcs-foot-link {
+    align-self: flex-end;
+    color: var(--dcv-blue);
+    font-size: .78rem;
+    font-weight: 700;
+    margin-top: auto;
+    padding-top: .5rem;
+    text-decoration: none;
+}
+
+/* Nivel 3 */
+.dcs-detail[hidden] {
+    display: none;
+}
+
+.dcs-detail {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    gap: .75rem;
+    margin-top: .6rem;
+    min-height: 0;
+}
+
+.dcs-head {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: .7rem;
+}
+
+.dcs-head h2 {
+    font-size: 1.2rem;
+    margin-right: auto;
+}
+
+.dcs-head-ico {
+    align-items: center;
+    background: #e8f8ef;
+    border-radius: 12px;
+    color: #16a34a;
+    display: inline-flex;
+    font-size: 1.15rem;
+    height: 40px;
+    justify-content: center;
+    width: 40px;
+}
+
+.dcv-chip.is-green {
+    background: #f0fbf4;
+    border-color: #c8ecd6;
+    color: #15803d;
+}
+
+.dcv-chip.is-green i {
+    color: #16a34a;
+}
+
+.dcs-body {
+    display: grid;
+    gap: 1rem;
+    grid-template-columns: 200px minmax(0, 1fr);
+    min-height: 0;
+}
+
+.dcs-visual {
+    align-items: flex-start;
+    display: flex;
+    gap: .55rem;
+}
+
+.dcs-stage {
+    align-items: center;
+    display: flex;
+    flex: 1 1 auto;
+    height: 236px;
+    justify-content: center;
+    position: relative;
+}
+
+.dcs-stage .dcv-platform {
+    bottom: 6px;
+    width: 96%;
+}
+
+.dcs-art {
+    border-radius: 18px;
+    display: block;
+    filter: drop-shadow(0 16px 16px rgba(15, 23, 42, .25));
+    height: 196px;
+    position: relative;
+    width: 150px;
+    z-index: 1;
+}
+
+.dcs-art.is-crop {
+    background-position: var(--dcs-px, 50%) var(--dcs-py, 50%);
+    background-repeat: no-repeat;
+    background-size: var(--dcs-zoom, 260%) auto;
+    -webkit-mask-image: radial-gradient(closest-side, #000 74%, transparent 100%);
+    mask-image: radial-gradient(closest-side, #000 74%, transparent 100%);
+}
+
+.dcs-art.is-photo img {
+    height: 100%;
+    object-fit: contain;
+    width: 100%;
+}
+
+.dcs-art.is-icon {
+    align-items: center;
+    color: #16a34a;
+    display: flex;
+    font-size: 4.5rem;
+    justify-content: center;
+}
+
+.dcs-picker {
+    display: grid;
+    gap: .35rem;
+    max-height: 236px;
+    overflow-y: auto;
+    scrollbar-width: none;
+}
+
+.dcs-pick {
+    align-items: center;
+    background: #fff;
+    border: 1px solid var(--dcv-line);
+    border-radius: 10px;
+    color: #475569;
+    display: inline-flex;
+    flex-direction: column;
+    font-size: .58rem;
+    font-weight: 800;
+    height: 40px;
+    justify-content: center;
+    line-height: 1;
+    transition: border-color .15s ease, box-shadow .15s ease, color .15s ease;
+    width: 40px;
+}
+
+.dcs-pick i {
+    font-size: .9rem;
+}
+
+.dcs-pick.is-active,
+.dcs-article.is-active {
+    border-color: var(--dcv-blue);
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, .15);
+    color: var(--dcv-blue);
+}
+
+.dcs-main {
+    display: flex;
+    flex-direction: column;
+    gap: .65rem;
+    min-width: 0;
+}
+
+.dcs-metrics {
+    display: grid;
+    gap: .5rem;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.dcs-metrics[hidden] {
+    display: none;
+}
+
+.dcs-metric {
+    background: #fff;
+    border: 1px solid var(--dcv-line);
+    border-radius: 12px;
+    box-shadow: 0 8px 18px -16px rgba(15, 23, 42, .6);
+    display: grid;
+    gap: .05rem;
+    padding: .5rem .65rem;
+}
+
+.dcs-metric span {
+    color: var(--des-muted);
+    font-size: .7rem;
+    font-weight: 600;
+}
+
+.dcs-metric b {
+    font-size: 1.05rem;
+    font-variant-numeric: tabular-nums;
+    font-weight: 800;
+    white-space: nowrap;
+}
+
+.dcs-metric small {
+    color: var(--des-faint);
+    font-size: .66rem;
+}
+
+.dcs-metric.is-green b { color: #15803d; }
+.dcs-metric.is-blue b { color: var(--dcv-blue); }
+.dcs-metric.is-red b { color: #dc2626; }
+.dcs-metric.is-money b { color: #0f172a; }
+
+.dcs-articles {
+    display: flex;
+    gap: .5rem;
+    overflow-x: auto;
+    padding-bottom: .2rem;
+    scrollbar-color: #c7d2e3 transparent;
+    scrollbar-width: thin;
+}
+
+.dcs-article {
+    align-items: center;
+    background: #fff;
+    border: 1px solid var(--dcv-line);
+    border-radius: 12px;
+    color: #0f172a;
+    display: flex;
+    flex: 0 0 auto;
+    gap: .5rem;
+    max-width: 230px;
+    padding: .45rem .65rem .45rem .45rem;
+    text-align: left;
+    transition: border-color .15s ease, box-shadow .15s ease;
+}
+
+.dcs-article-ico {
+    align-items: center;
+    background: #f1f5fb;
+    border-radius: 9px;
+    color: #475569;
+    display: inline-flex;
+    flex: 0 0 auto;
+    height: 32px;
+    justify-content: center;
+    width: 32px;
+}
+
+.dcs-article-text {
+    display: grid;
+    min-width: 0;
+}
+
+.dcs-article-text strong {
+    font-size: .8rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.dcs-article-text small {
+    color: var(--des-muted);
+    font-size: .7rem;
+    white-space: nowrap;
+}
+
+.dcs-table-box {
+    border: 1px solid var(--dcv-line);
+    border-radius: 13px;
+    max-height: 196px;
+    overflow: auto;
+    overscroll-behavior: contain;
+    scrollbar-color: #c7d2e3 transparent;
+    scrollbar-width: thin;
+}
+
+.dcs-line[hidden] {
+    display: none;
+}
+
+.dcs-table td .des-status {
+    font-size: .72rem;
+}
+
+/* Când „În stoc” e deschis, cardul de valoare rămâne compact (nivelul 1) și
+   cardurile De returnat / De înlocuit se așază una sub alta, ca widgeturi. */
+.dcv.is-stock-open .dcv-status {
+    grid-template-columns: 176px;
+}
+
 /* ----------------------------------------------------------- Responsive -- */
 
 @media (max-width: 767.98px) {
     .dcv-card,
-    .dcv-card[data-dcv-level] {
+    .dcv-card[data-dcv-level],
+    .dcs-card,
+    .dcs-card[data-dcs-level] {
         width: 100%;
+    }
+
+    .dcs-body {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .dcs-metrics {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .dcs-list-head span:nth-child(2),
+    .dcs-row > span:nth-child(2) {
+        display: none;
+    }
+
+    .dcs-list-head,
+    .dcs-row {
+        font-size: .78rem;
+        grid-template-columns: minmax(0, 1fr) 54px 82px 12px;
+    }
+
+    .dcs-row-ico {
+        display: none;
+    }
+
+    .dcv.is-stock-open .dcv-status {
+        grid-template-columns: minmax(0, 1fr);
     }
 
     .dcv-status {
@@ -1060,4 +1583,861 @@
         animation: none !important;
         transition-duration: 0s !important;
     }
+}
+
+/* Tabelul din „Detaliu stoc”: numele articolului pe un rând; lățimea minimă
+   ține coloanele lizibile, iar caseta derulează orizontal la nevoie. */
+.dcs-table {
+    font-size: .74rem;
+    min-width: 700px;
+}
+
+.dcs-table thead th,
+.dcs-table td {
+    padding-left: .4rem;
+    padding-right: .4rem;
+}
+
+.dcs-table .dcv-item-ico {
+    display: none;
+}
+
+.dcs-table td .des-status {
+    white-space: nowrap;
+}
+
+.dcs-table td:first-child strong {
+    white-space: nowrap;
+}
+
+/* ---------------------------------------------------- Cardul „De returnat” -- */
+
+/* Al treilea card cu fețe, accent portocaliu; folosește aceleași piese ca „În stoc”
+   (listă, metrici) și ca „Valoare” (siluetă, categorii, tabel). */
+.dcr-card {
+    --dcr-orange: #ea580c;
+    --dcr-orange-soft: #fff4ec;
+
+    background:
+        radial-gradient(120% 90% at 0% 0%, rgba(255, 237, 213, .55), transparent 55%),
+        #fff;
+    border: 1px solid #dfe7f3;
+    border-radius: 18px;
+    box-shadow: 0 16px 30px -26px rgba(15, 23, 42, .55);
+    flex: 0 0 auto;
+    max-width: 100%;
+    min-width: 0;
+    overflow: hidden;
+    position: relative;
+}
+
+
+.dcr-card:not([data-dcr-level="1"]) {
+    border-color: #f6d3bc;
+    box-shadow: 0 1px 0 #fff inset, 0 22px 44px -30px rgba(194, 65, 12, .4), 0 2px 6px -2px rgba(15, 23, 42, .06);
+}
+
+.dcr-face[hidden] {
+    display: none !important;
+}
+
+.dcr-face.is-entering {
+    animation: dcvFaceIn .32s var(--dcv-ease) both;
+}
+
+.dcr-face.is-entering .dcr-row,
+.dcr-face.is-entering .dcv-cat {
+    animation: dcvRowIn .3s var(--dcv-ease) both;
+}
+
+.dcr-l1 {
+    background: none;
+    border: 0;
+    color: #0f172a;
+    display: grid;
+    gap: .1rem;
+    padding: .85rem .9rem .9rem;
+    text-align: left;
+    width: 100%;
+}
+
+.dcr-l1:focus-visible {
+    outline: none;
+}
+
+.dcr-card[data-dcr-level="1"]:hover,
+.dcr-card[data-dcr-level="1"]:focus-within {
+    border-color: #f8c9a6;
+    box-shadow: 0 0 0 3px rgba(234, 88, 12, .12), 0 20px 34px -24px rgba(15, 23, 42, .6);
+}
+
+.dcr-l1:hover .dcs-go,
+.dcr-l1:focus-visible .dcs-go {
+    color: var(--dcr-orange);
+    transform: translateX(3px);
+}
+
+.dcr-ico {
+    align-items: center;
+    background: var(--dcr-orange-soft);
+    border-radius: 12px;
+    color: var(--dcr-orange);
+    display: inline-flex;
+    font-size: 1.1rem;
+    height: 38px;
+    justify-content: center;
+    width: 38px;
+}
+
+.dcr-qty {
+    color: var(--dcr-orange);
+    font-size: 1.6rem;
+    font-variant-numeric: tabular-nums;
+    font-weight: 800;
+    line-height: 1.1;
+}
+
+.dcr-qty small {
+    color: #64748b;
+    font-size: .8rem;
+    font-weight: 700;
+}
+
+.dcr-l1 .dcs-val small {
+    color: var(--des-muted);
+    font-size: .7rem;
+    font-weight: 600;
+}
+
+/* Nivel 2 */
+.dcr-list-head,
+.dcr-row {
+    align-items: center;
+    display: grid;
+    gap: .5rem;
+    grid-template-columns: minmax(0, 1fr) 54px 74px 100px 14px;
+}
+
+.dcr-list-head {
+    color: var(--des-muted);
+    font-size: .72rem;
+    font-weight: 600;
+    padding: .35rem .6rem;
+}
+
+.dcr-row {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 11px;
+    color: #0f172a;
+    font-size: .84rem;
+    padding: .42rem .6rem;
+    text-align: left;
+    transition: background-color .15s ease, border-color .15s ease;
+}
+
+.dcr-row[hidden] {
+    display: none;
+}
+
+.dcr-row:hover,
+.dcr-row:focus-visible {
+    background: #fff8f3;
+    outline: none;
+}
+
+.dcr-row.is-selected {
+    background: var(--dcr-orange-soft);
+    border-color: #fdba8c;
+}
+
+.dcr-row.is-selected .dcv-person-go {
+    color: var(--dcr-orange);
+}
+
+.dcr-row .is-money {
+    color: var(--dcr-orange);
+    font-weight: 700;
+}
+
+.dcr-meta {
+    color: var(--des-faint);
+    display: block;
+    font-size: .7rem;
+    font-weight: 500;
+}
+
+.dcr-empty {
+    align-items: center;
+    color: var(--des-muted);
+    display: flex;
+    flex-direction: column;
+    font-size: .82rem;
+    gap: .3rem;
+    padding: 1.6rem 1rem;
+    text-align: center;
+}
+
+.dcr-empty[hidden] {
+    display: none;
+}
+
+.dcr-empty i {
+    color: #16a34a;
+    font-size: 1.8rem;
+}
+
+.dcr-empty strong {
+    color: #0f172a;
+}
+
+/* Nivel 3 */
+.dcr-l3 {
+    display: flex;
+    flex-direction: column;
+    padding: .85rem 1.1rem 1rem;
+}
+
+.dcr-body {
+    display: grid;
+    gap: 1rem;
+    grid-template-columns: 180px minmax(0, 1fr);
+    margin-top: .6rem;
+}
+
+.dcr-figure {
+    height: 330px;
+}
+
+.dcr-avatar {
+    background: var(--dcr-orange-soft);
+    color: var(--dcr-orange);
+}
+
+.dcr-action {
+    align-items: center;
+    background: linear-gradient(180deg, #f97316, #ea580c);
+    border: 0;
+    border-radius: 11px;
+    box-shadow: 0 10px 20px -12px rgba(234, 88, 12, .9);
+    color: #fff;
+    display: inline-flex;
+    font-size: .84rem;
+    font-weight: 700;
+    gap: .45rem;
+    padding: .55rem .95rem;
+    transition: transform .2s var(--dcv-ease), box-shadow .2s ease, opacity .2s ease;
+}
+
+.dcr-action:hover:not(:disabled) {
+    box-shadow: 0 14px 24px -12px rgba(234, 88, 12, .95);
+    transform: translateY(-1px);
+}
+
+.dcr-action:disabled {
+    cursor: not-allowed;
+    opacity: .5;
+}
+
+.dcr-metrics {
+    display: grid;
+    gap: .5rem;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.dcr-metric b {
+    color: var(--dcr-orange);
+}
+
+.dcr-cats .dcv-cat.is-active {
+    border-color: var(--dcr-orange);
+    box-shadow: 0 0 0 3px rgba(234, 88, 12, .14), 0 10px 22px -16px rgba(234, 88, 12, .7);
+}
+
+.dcr-cats .dcv-cat-ico {
+    background: var(--dcr-orange-soft);
+    color: var(--dcr-orange);
+}
+
+.dcr-scroll {
+    max-height: 168px;
+}
+
+.dcr-line {
+    cursor: pointer;
+    transition: background-color .15s ease;
+}
+
+.dcr-line[hidden] {
+    display: none;
+}
+
+.dcr-line:hover {
+    background: #fffaf6;
+}
+
+.dcr-line.is-picked > td {
+    background: var(--dcr-orange-soft);
+}
+
+.dcr-line.is-picked > td:first-child {
+    box-shadow: inset 3px 0 0 var(--dcr-orange);
+}
+
+.dcr-badge {
+    border-radius: 999px;
+    font-size: .7rem;
+    font-weight: 700;
+    padding: .18rem .55rem;
+    white-space: nowrap;
+}
+
+.dcr-badge.is-orange {
+    background: var(--dcr-orange-soft);
+    color: #c2410c;
+}
+
+.dcr-badge.is-muted {
+    background: #f1f5f9;
+    color: #475569;
+}
+
+.dcr-row-return {
+    align-items: center;
+    background: #fff;
+    border: 1px solid #f6d3bc;
+    border-radius: 8px;
+    color: var(--dcr-orange);
+    display: inline-flex;
+    height: 28px;
+    justify-content: center;
+    width: 28px;
+}
+
+.dcr-row-return:hover {
+    background: var(--dcr-orange-soft);
+}
+
+.dcr-note {
+    align-items: flex-start;
+    color: var(--des-muted);
+    display: flex;
+    font-size: .72rem;
+    gap: .35rem;
+    margin: 0;
+}
+
+.dcv-dot.is-orange {
+    box-shadow: 0 0 0 3px #f97316, 0 0 10px 4px rgba(249, 115, 22, .7);
+}
+
+.dcv-dot.is-orange.is-hot {
+    box-shadow: 0 0 0 4px #ea580c, 0 0 20px 8px rgba(249, 115, 22, .9);
+}
+
+@media (max-width: 767.98px) {
+    .dcr-card,
+    .dcr-card[data-dcr-level] {
+        width: 100%;
+    }
+
+    .dcr-body {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .dcr-figure {
+        height: 240px;
+    }
+
+    .dcr-metrics {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .dcr-list-head,
+    .dcr-row {
+        font-size: .78rem;
+        grid-template-columns: minmax(0, 1fr) 62px 86px 12px;
+    }
+
+    .dcr-list-head span:nth-child(2),
+    .dcr-row > span:nth-child(2),
+    .dcr-row .dcv-avatar {
+        display: none;
+    }
+
+    .dcr-table {
+        min-width: 680px;
+    }
+}
+
+/* ---------------------------------------------------- Cardul „De înlocuit” -- */
+
+/* Aceeași structură ca „De returnat” (.dcr-*), cu accent roșu/chihlimbar de avertizare. */
+.dci-card {
+    --dcr-orange: #dc2626;
+    --dcr-orange-soft: #fef2f2;
+
+    background:
+        radial-gradient(120% 90% at 0% 0%, rgba(254, 226, 226, .55), transparent 55%),
+        #fff;
+    border: 1px solid #dfe7f3;
+    border-radius: 18px;
+    box-shadow: 0 16px 30px -26px rgba(15, 23, 42, .55);
+    flex: 0 0 auto;
+    max-width: 100%;
+    min-width: 0;
+    overflow: hidden;
+    position: relative;
+}
+
+
+.dci-card:not([data-dci-level="1"]) {
+    border-color: #f5c9c9;
+    box-shadow: 0 1px 0 #fff inset, 0 22px 44px -30px rgba(185, 28, 28, .38), 0 2px 6px -2px rgba(15, 23, 42, .06);
+}
+
+.dci-face[hidden] {
+    display: none !important;
+}
+
+.dci-face.is-entering {
+    animation: dcvFaceIn .32s var(--dcv-ease) both;
+}
+
+.dci-face.is-entering .dcr-row,
+.dci-face.is-entering .dcv-cat {
+    animation: dcvRowIn .3s var(--dcv-ease) both;
+}
+
+.dci-l1 {
+    background: none;
+    border: 0;
+    color: #0f172a;
+    display: grid;
+    gap: .1rem;
+    padding: .85rem .9rem .9rem;
+    text-align: left;
+    width: 100%;
+}
+
+.dci-l1:focus-visible {
+    outline: none;
+}
+
+.dci-card[data-dci-level="1"]:hover,
+.dci-card[data-dci-level="1"]:focus-within {
+    border-color: #f7b4b4;
+    box-shadow: 0 0 0 3px rgba(220, 38, 38, .1), 0 20px 34px -24px rgba(15, 23, 42, .6);
+}
+
+.dci-l1:hover .dcs-go,
+.dci-l1:focus-visible .dcs-go {
+    color: #dc2626;
+    transform: translateX(3px);
+}
+
+.dci-ico {
+    align-items: center;
+    background: #fff7e0;
+    border-radius: 12px;
+    color: #d97706;
+    display: inline-flex;
+    font-size: 1.1rem;
+    height: 38px;
+    justify-content: center;
+    width: 38px;
+}
+
+.dci-qty {
+    color: #dc2626;
+    font-size: 1.6rem;
+    font-variant-numeric: tabular-nums;
+    font-weight: 800;
+    line-height: 1.1;
+}
+
+.dci-qty small {
+    color: #64748b;
+    font-size: .8rem;
+    font-weight: 700;
+}
+
+.dci-l1 .dcs-val small {
+    color: var(--des-muted);
+    font-size: .7rem;
+    font-weight: 600;
+}
+
+.dci-row:hover,
+.dci-row:focus-visible {
+    background: #fff7f7;
+}
+
+.dci-row.is-selected {
+    background: #fff5eb;
+    border-color: #fdba8c;
+}
+
+.dci-row .is-money {
+    color: #b91c1c;
+}
+
+.dci-head-ico {
+    align-items: center;
+    background: #fff7e0;
+    border-radius: 12px;
+    color: #d97706;
+    display: inline-flex;
+    flex: 0 0 auto;
+    font-size: 1.2rem;
+    height: 42px;
+    justify-content: center;
+    width: 42px;
+}
+
+.dci-card .dcv-id-text b {
+    color: #0f172a;
+}
+
+.dci-action {
+    background: linear-gradient(180deg, #f97316, #ea580c);
+}
+
+.dci-metric b {
+    color: #dc2626;
+}
+
+.dci-cats .dcv-cat.is-active {
+    border-color: #ea580c;
+    box-shadow: 0 0 0 3px rgba(234, 88, 12, .14), 0 10px 22px -16px rgba(234, 88, 12, .7);
+}
+
+.dci-cats .dcv-cat-ico {
+    background: #fff7e0;
+    color: #d97706;
+}
+
+.dci-line {
+    cursor: pointer;
+    transition: background-color .15s ease;
+}
+
+.dci-line[hidden] {
+    display: none;
+}
+
+.dci-line:hover {
+    background: #fffafa;
+}
+
+.dci-line.is-picked > td {
+    background: #fff5eb;
+}
+
+.dci-line.is-picked > td:first-child {
+    box-shadow: inset 3px 0 0 #ea580c;
+}
+
+.dci-stock-ok {
+    color: #15803d !important;
+}
+
+.dci-stock-no {
+    color: #dc2626 !important;
+    font-weight: 600;
+}
+
+.dci-late {
+    color: #dc2626;
+    display: block;
+    font-size: .66rem;
+    font-weight: 700;
+}
+
+.dcr-badge.is-red {
+    background: #fef2f2;
+    color: #b91c1c;
+}
+
+.dci-row-replace {
+    border-color: #f5c9c9;
+    color: #dc2626;
+}
+
+.dcv-dot.is-red {
+    box-shadow: 0 0 0 3px #ef4444, 0 0 10px 4px rgba(239, 68, 68, .65);
+}
+
+.dcv-dot.is-red.is-hot {
+    box-shadow: 0 0 0 4px #dc2626, 0 0 20px 8px rgba(239, 68, 68, .9);
+}
+
+@media (max-width: 767.98px) {
+    .dci-card,
+    .dci-card[data-dci-level] {
+        width: 100%;
+    }
+
+    .dci-row .dcv-avatar {
+        display: none;
+    }
+}
+
+/* ===================================================== Grila celor 4 carduri
+   Implicit: patru carduri egale pe toată lățimea (4 / 2 / 1 coloane).
+   Deschis (.has-open): cardul activ ocupă tot rândul (spațiu de lucru), iar
+   celelalte trei devin o bandă compactă deasupra lui, din care se poate comuta.
+   ========================================================================== */
+
+.dcv > [data-ws-card] {
+    display: flex;
+    flex-direction: column;
+    min-height: 196px;
+    width: auto;
+}
+
+.dcv > [data-ws-card] > [data-dcv-face="1"],
+.dcv > [data-ws-card] > .dcs-l1,
+.dcv > [data-ws-card] > .dcr-l1,
+.dcv > [data-ws-card] > .dci-l1 {
+    flex: 1 1 auto;
+}
+
+/* Cardurile mici: valoarea stă jos, aliniată între carduri. */
+.dcs-l1,
+.dcr-l1,
+.dci-l1 {
+    align-content: start;
+    grid-template-rows: auto auto auto 1fr;
+    padding: 1rem 1.1rem 1rem;
+}
+
+.dcs-l1 .dcs-val,
+.dcr-l1 .dcs-val,
+.dci-l1 .dcs-val {
+    align-self: end;
+}
+
+.dcs-l1 .dcs-l1-top strong,
+.dcr-l1 .dcs-l1-top strong,
+.dci-l1 .dcs-l1-top strong {
+    font-size: 1rem;
+}
+
+.dcs-qty,
+.dcr-qty,
+.dci-qty {
+    font-size: 1.9rem;
+}
+
+/* Starea deschisă */
+.dcv.has-open {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.dcv.has-open > [data-ws-card][data-open] {
+    grid-column: 1 / -1;
+    order: 2;
+}
+
+.dcv.has-open > [data-ws-card]:not([data-open]) {
+    cursor: pointer;
+    min-height: 0;
+    order: 1;
+}
+
+/* Banda compactă: icon + titlu + cifra principală pe un rând. */
+.dcv.has-open > [data-ws-card]:not([data-open]) .dcs-l1,
+.dcv.has-open > [data-ws-card]:not([data-open]) .dcr-l1,
+.dcv.has-open > [data-ws-card]:not([data-open]) .dci-l1 {
+    align-items: center;
+    display: grid;
+    gap: 0 .75rem;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    grid-template-rows: auto;
+    padding: .55rem .85rem;
+}
+
+.dcv.has-open > [data-ws-card]:not([data-open]) .dcs-l1-top {
+    margin: 0;
+}
+
+.dcv.has-open > [data-ws-card]:not([data-open]) .dcs-ico,
+.dcv.has-open > [data-ws-card]:not([data-open]) .dcr-ico,
+.dcv.has-open > [data-ws-card]:not([data-open]) .dci-ico {
+    height: 32px;
+    width: 32px;
+}
+
+.dcv.has-open > [data-ws-card]:not([data-open]) .dcs-sub {
+    display: none;
+}
+
+.dcv.has-open > [data-ws-card]:not([data-open]) .dcs-qty,
+.dcv.has-open > [data-ws-card]:not([data-open]) .dcr-qty,
+.dcv.has-open > [data-ws-card]:not([data-open]) .dci-qty {
+    font-size: 1.25rem;
+    grid-column: 2;
+    grid-row: 1;
+}
+
+.dcv.has-open > [data-ws-card]:not([data-open]) .dcs-val {
+    border: 0;
+    font-size: .82rem;
+    grid-column: 3;
+    grid-row: 1;
+    margin: 0;
+    padding: 0;
+}
+
+.dcv.has-open > [data-ws-card]:not([data-open]) .dcs-val small {
+    display: none;
+}
+
+.dcv.has-open > [data-ws-card]:not([data-open]) .dcs-l1-top .dcs-go {
+    display: none;
+}
+
+/* Cardul de valoare în bandă: icon + titlu + total. */
+.dcv.has-open > .dcv-card:not([data-open]) .dcv-l1 {
+    align-items: center;
+    display: grid;
+    gap: 0 .75rem;
+    grid-template-columns: minmax(0, 1fr) auto;
+    padding: .55rem .85rem;
+}
+
+.dcv.has-open > .dcv-card:not([data-open]) .dcv-l1-head p,
+.dcv.has-open > .dcv-card:not([data-open]) .dcv-l1-stats,
+.dcv.has-open > .dcv-card:not([data-open]) .dcv-hint,
+.dcv.has-open > .dcv-card:not([data-open]) .dcv-warn {
+    display: none;
+}
+
+.dcv.has-open > .dcv-card:not([data-open]) .dcv-l1-head .dcv-ico {
+    border-radius: 10px;
+    font-size: 1rem;
+    height: 32px;
+    width: 32px;
+}
+
+.dcv.has-open > .dcv-card:not([data-open]) .dcv-l1-head h2 {
+    font-size: .92rem;
+}
+
+.dcv.has-open > .dcv-card:not([data-open]) .dcv-total strong {
+    font-size: 1.25rem;
+}
+
+.dcv.has-open > .dcv-card:not([data-open]) .dcv-total > i:first-child {
+    display: none;
+}
+
+.dcv.has-open > [data-ws-card]:not([data-open]):hover {
+    border-color: #bcd3f7;
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, .1), 0 14px 26px -22px rgba(15, 23, 42, .6);
+}
+
+/* Butonul de închidere al spațiului de lucru (readuce grila de 4 carduri). */
+.dcv-ws-close-btn {
+    align-items: center;
+    background: #f1f5fb;
+    border: 0;
+    border-radius: 50%;
+    color: #334155;
+    display: none;
+    height: 34px;
+    justify-content: center;
+    position: absolute;
+    right: .85rem;
+    top: .85rem;
+    transition: background-color .15s ease, transform .2s var(--dcv-ease);
+    width: 34px;
+    z-index: 6;
+}
+
+.dcv-ws-close-btn:hover {
+    background: #e5ecf7;
+    transform: rotate(90deg);
+}
+
+[data-ws-card][data-open] > .dcv-ws-close-btn {
+    display: inline-flex;
+}
+
+/* Nivelurile 2-3 pe toată lățimea: lista și spațiul de lucru respiră, dar
+   înălțimea urmează conținutul (listele derulează intern). */
+[data-ws-card][data-open] .dcv-face-head,
+[data-ws-card][data-open] .dcv-crumbs {
+    padding-right: 2.6rem;
+}
+
+[data-ws-card][data-open] .dcv-list,
+[data-ws-card][data-open] .dcs-list {
+    max-height: 300px;
+}
+
+.dcv-card[data-open] .dcv-l3-body,
+.dcr-body {
+    grid-template-columns: 200px minmax(0, 1fr);
+}
+
+.dcv-card[data-open] .dcv-figure,
+.dcr-figure {
+    height: 340px;
+}
+
+.dcv-card[data-open] .dcv-items-scroll,
+[data-ws-card][data-open] .dcr-scroll,
+[data-ws-card][data-open] .dcs-table-box {
+    max-height: 260px;
+}
+
+/* Tabletă: 2 coloane; deschis: banda pe 3 coloane mici sau 1 dacă nu încap. */
+@media (max-width: 1199.98px) {
+    .dcv {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .dcv.has-open {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .dcv.has-open > [data-ws-card]:not([data-open]) .dcs-val,
+    .dcv.has-open > [data-ws-card]:not([data-open]) .dcv-total-go {
+        display: none;
+    }
+}
+
+@media (max-width: 767.98px) {
+    .dcv,
+    .dcv.has-open {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .dcv > [data-ws-card] {
+        min-height: 0;
+    }
+}
+
+.dcs-desc {
+    color: var(--des-faint);
+    font-size: .76rem;
+    line-height: 1.35;
+    margin-top: .55rem;
+}
+
+.dcv.has-open > [data-ws-card]:not([data-open]) .dcs-desc {
+    display: none;
+}
+
+@media (max-width: 767.98px) {
+    .dcs-desc {
+        display: none;
+    }
+}
+
+/* Toate cele 4 carduri închise au aceeași înălțime, și pe 2 rânduri (tabletă). */
+.dcv:not(.has-open) {
+    grid-auto-rows: 1fr;
 }

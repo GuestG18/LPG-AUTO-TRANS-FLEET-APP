@@ -52,48 +52,101 @@
         return card.querySelector('[data-dcv-face="' + n + '"]');
     }
 
-    function go(next) {
+    /**
+     * Comun ambelor carduri (Valoare + În stoc): ascunde fețele celelalte, setează
+     * nivelul și animă lățimea + înălțimea de la vechiul dreptunghi la cel nou, apoi
+     * fața nouă intră cu opacitate/translație. Ca „Cost total operațional”.
+     */
+    /*
+     * Animație FLIP comună celor 4 carduri. La prima schimbare de față dintr-o
+     * interacțiune se notează poziția și mărimea TUTUROR cardurilor; după ce toate
+     * schimbările sincrone s-au aplicat (microtask), fiecare card pornește din
+     * dreptunghiul vechi (translate + lățime/înălțime) spre cel nou. Așa cardul
+     * activ crește pe tot rândul, iar celelalte alunecă în banda compactă, fără salt.
+     */
+    const wsCards = Array.prototype.slice.call(root.querySelectorAll('[data-ws-card]'));
+    let flipBefore = null;
+
+    function captureLayout() {
+        if (flipBefore || reduceMotion.matches) {
+            return;
+        }
+        flipBefore = new Map();
+        wsCards.forEach(function (node) { flipBefore.set(node, node.getBoundingClientRect()); });
+        const before = flipBefore;
+        Promise.resolve().then(function () {
+            flipBefore = null;
+            wsCards.forEach(function (node) {
+                const a = before.get(node);
+                const b = node.getBoundingClientRect();
+                if (!a || !node.animate || (Math.abs(a.left - b.left) < 1 && Math.abs(a.top - b.top) < 1
+                    && Math.abs(a.width - b.width) < 1 && Math.abs(a.height - b.height) < 1)) {
+                    return;
+                }
+                node.animate([
+                    { transform: 'translate(' + (a.left - b.left) + 'px,' + (a.top - b.top) + 'px)', width: a.width + 'px', height: a.height + 'px' },
+                    { transform: 'none', width: b.width + 'px', height: b.height + 'px' },
+                ], { duration: 300, easing: 'cubic-bezier(.22,.8,.24,1)' });
+            });
+        });
+    }
+
+    function syncOpenState() {
+        let open = false;
+        wsCards.forEach(function (node) {
+            const isOpen = Array.prototype.some.call(node.attributes, function (a) {
+                return /^data-dc[vsri]-level$/.test(a.name) && a.value !== '1';
+            });
+            node.toggleAttribute('data-open', isOpen);
+            open = open || isOpen;
+        });
+        root.classList.toggle('has-open', open);
+    }
+
+    function morphCard(el, prefix, next, quiet) {
+        captureLayout();
+        el.querySelectorAll('[data-' + prefix + '-face]').forEach(function (node) {
+            node.hidden = node.getAttribute('data-' + prefix + '-face') !== String(next);
+        });
+        el.setAttribute('data-' + prefix + '-level', String(next));
+        syncOpenState();
+
+        const target = el.querySelector('[data-' + prefix + '-face="' + next + '"]');
+        if (!quiet && !reduceMotion.matches) {
+            target.classList.remove('is-entering');
+            void target.offsetWidth;
+            target.classList.add('is-entering');
+            window.setTimeout(function () { target.classList.remove('is-entering'); }, 520);
+        }
+        return target;
+    }
+
+    function go(next, quiet) {
         next = Number(next);
         if (next === level) {
             return;
         }
-        const fromRect = card.getBoundingClientRect();
-        card.querySelectorAll('[data-dcv-face]').forEach(function (node) {
-            node.hidden = node.getAttribute('data-dcv-face') !== String(next);
-        });
-        card.setAttribute('data-dcv-level', String(next));
         level = next;
-
-        const target = face(next);
-        if (reduceMotion.matches || !card.animate) {
+        // Un singur spațiu de lucru deschis: cardul de valoare închide „În stoc”.
+        if (next > 1) {
+            collapseOthers('value');
+        }
+        const target = morphCard(card, 'dcv', next, quiet);
+        if (!quiet) {
             focusFace(target);
-            return;
         }
-        // Cardul crește / scade în lățime și înălțime (KPI compact -> listă -> detaliu);
-        // cardurile de stare se mută odată cu el.
-        const toRect = card.getBoundingClientRect();
-        if (Math.abs(toRect.height - fromRect.height) > 1 || Math.abs(toRect.width - fromRect.width) > 1) {
-            card.animate([
-                { width: fromRect.width + 'px', height: fromRect.height + 'px' },
-                { width: toRect.width + 'px', height: toRect.height + 'px' },
-            ], {
-                duration: 320,
-                easing: 'cubic-bezier(.22,.8,.24,1)',
-            });
-        }
-        target.classList.remove('is-entering');
-        void target.offsetWidth;
-        target.classList.add('is-entering');
-        window.setTimeout(function () { target.classList.remove('is-entering'); }, 520);
-        focusFace(target);
     }
 
     function focusFace(target) {
-        const focusable = target.querySelector('[data-dcv-search], .dcv-back, .dcv-total');
+        const focusable = target.querySelector('[data-dcv-search], [data-dcs-search], .dcv-back, .dcv-total');
         if (focusable) {
             focusable.focus({ preventScroll: true });
         }
     }
+
+    let stockApi = null;
+    let returnApi = null;
+    let replaceApi = null;
 
     // ------------------------------------------------------------------
     // Nivel 2: căutare, sortare, doar cu echipamente
@@ -361,6 +414,404 @@
         const top = root.getBoundingClientRect().top + window.scrollY - 16;
         window.scrollTo({ top: top, behavior: reduceMotion.matches ? 'auto' : 'smooth' });
     }, true);
+
+    // ------------------------------------------------------------------
+    // Cardul „În stoc”: 1 total -> 2 categorii -> 3 detaliu (articolul selectat
+    // doar filtrează nivelul 3, nu deschide o a patra față).
+    // ------------------------------------------------------------------
+
+    stockApi = (function () {
+        const stockCard = root.querySelector('[data-dcs-card]');
+        if (!stockCard) {
+            return null;
+        }
+        let stockLevel = 1;
+        let stockCat = '';
+        const rows = Array.prototype.slice.call(stockCard.querySelectorAll('.dcs-row'));
+        const search = stockCard.querySelector('[data-dcs-search]');
+
+        function goStock(next, quiet) {
+            next = Number(next);
+            if (next === stockLevel) {
+                return;
+            }
+            stockLevel = next;
+            root.classList.toggle('is-stock-open', next > 1);
+            // Cardul de valoare revine la totalul compact cât timp stocul e deschis.
+            if (next > 1) {
+                collapseOthers(api);
+            }
+            const target = morphCard(stockCard, 'dcs', next, quiet);
+            if (!quiet) {
+                focusFace(target);
+            }
+        }
+
+        function selectArticle(detail, id) {
+            const current = detail.getAttribute('data-article') || '';
+            const next = current === id ? '' : id;
+            detail.setAttribute('data-article', next);
+            detail.querySelectorAll('[data-dcs-article]').forEach(function (node) {
+                node.classList.toggle('is-active', node.getAttribute('data-dcs-article') === next);
+            });
+            detail.querySelectorAll('[data-dcs-metrics]').forEach(function (node) {
+                node.hidden = node.getAttribute('data-dcs-metrics') !== next;
+            });
+            detail.querySelectorAll('[data-dcs-line]').forEach(function (row) {
+                row.hidden = next !== '' && row.getAttribute('data-dcs-line') !== next;
+            });
+            const article = detail.querySelector('.dcs-article[data-dcs-article="' + next + '"]');
+            if (article) {
+                article.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: reduceMotion.matches ? 'auto' : 'smooth' });
+            }
+        }
+
+        function openCategory(key) {
+            stockCat = key;
+            const row = stockCard.querySelector('.dcs-row[data-dcs-cat="' + key + '"]');
+            stockCard.querySelector('[data-dcs-crumb]').textContent = row ? row.querySelector('.dcs-row-name span:last-child').textContent : key;
+            stockCard.querySelectorAll('[data-dcs-detail]').forEach(function (detail) {
+                const show = detail.getAttribute('data-dcs-detail') === key;
+                detail.hidden = !show;
+                if (show && detail.getAttribute('data-article')) {
+                    detail.setAttribute('data-article', '');
+                    selectArticle(detail, '');
+                }
+            });
+            rows.forEach(function (r) { r.classList.toggle('is-selected', r.getAttribute('data-dcs-cat') === key); });
+            goStock(3);
+        }
+
+        if (search) {
+            search.addEventListener('input', function () {
+                const term = normalize(search.value.trim());
+                let shown = 0;
+                rows.forEach(function (r) {
+                    const show = term === '' || normalize(r.getAttribute('data-name')).indexOf(term) !== -1;
+                    r.hidden = !show;
+                    shown += show ? 1 : 0;
+                });
+                const empty = stockCard.querySelector('[data-dcs-list-empty]');
+                if (empty && rows.length > 0) {
+                    empty.hidden = shown > 0;
+                }
+            });
+        }
+
+        stockCard.addEventListener('click', function (event) {
+            const goButton = event.target.closest('[data-dcs-go]');
+            if (goButton) {
+                goStock(goButton.getAttribute('data-dcs-go'));
+                return;
+            }
+            const catRow = event.target.closest('.dcs-row[data-dcs-cat]');
+            if (catRow) {
+                openCategory(catRow.getAttribute('data-dcs-cat'));
+                return;
+            }
+            const articleButton = event.target.closest('[data-dcs-article]');
+            if (articleButton) {
+                selectArticle(articleButton.closest('[data-dcs-detail]'), articleButton.getAttribute('data-dcs-article'));
+            }
+        });
+
+        document.addEventListener('keydown', function (event) {
+            if (event.key === 'Escape' && stockLevel > 1 && !document.querySelector('.modal.show, .des-floating-menu.show')) {
+                goStock(stockLevel - 1);
+            }
+        });
+
+        const api = { go: goStock };
+        return api;
+    })();
+
+    // ------------------------------------------------------------------
+    // Cardurile „De returnat” (dcr) și „De înlocuit” (dci): aceeași structură —
+    // 1 total -> 2 persoane -> 3 spațiu de lucru al persoanei. Categoria și linia
+    // aleasă doar filtrează / selectează în nivelul 3. Butonul principal deschide
+    // formularul EXISTENT (Returnează / Înlocuiește) pentru linia selectată.
+    // ------------------------------------------------------------------
+
+    function personWorkspace(p, opts) {
+        const wsCard = root.querySelector('[data-' + p + '-card]');
+        if (!wsCard) {
+            return null;
+        }
+        const attr = function (name) { return 'data-' + p + '-' + name; };
+        const sel = function (name, value) {
+            return '[' + attr(name) + (value === undefined ? '' : '="' + value + '"') + ']';
+        };
+        const wsData = (function () {
+            try {
+                return JSON.parse((wsCard.querySelector(sel('data')) || {}).textContent || '{}');
+            } catch (error) {
+                return {};
+            }
+        })();
+        const wsOwners = wsData.owners || {};
+        const rows = Array.prototype.slice.call(wsCard.querySelectorAll('.' + p + '-row'));
+        const lines = Array.prototype.slice.call(wsCard.querySelectorAll('.' + p + '-line'));
+        const search = wsCard.querySelector(sel('search'));
+        const figureEl = wsCard.querySelector('.' + p + '-figure');
+        const dots = wsCard.querySelector(sel('dots'));
+        const catsEl = wsCard.querySelector(sel('cats'));
+        const action = wsCard.querySelector(sel('action'));
+        let wsLevel = 1;
+        let owner = null;
+        let cat = '';
+        let picked = null;
+
+        function goWs(next, quiet) {
+            next = Number(next);
+            if (next === wsLevel) {
+                return;
+            }
+            wsLevel = next;
+            root.classList.toggle(opts.openClass, next > 1);
+            if (next > 1) {
+                collapseOthers(api);
+            }
+            const target = morphCard(wsCard, p, next, quiet);
+            if (!quiet) {
+                focusFace(target);
+            }
+        }
+
+        function syncFigure() {
+            const saved = store.get('variant.' + role);
+            const v = saved === 'm' || saved === 'f' ? saved : (root.getAttribute('data-dcv-default-variant') || 'm');
+            figureEl.setAttribute('data-variant', v);
+            figureEl.querySelectorAll('.dcv-figure-img').forEach(function (image) {
+                image.classList.toggle('is-active', image.getAttribute('data-variant') === v);
+            });
+            const map = anchors[role + '-' + v] || {};
+            const used = {};
+            dots.querySelectorAll('.dcv-dot').forEach(function (dot) {
+                const zone = dot.getAttribute('data-zone');
+                const at = map[zone] || map.alte || [50, 50];
+                const n = used[zone] = (used[zone] || 0) + 1;
+                dot.style.left = (at[0] + (n - 1) * 5) + '%';
+                dot.style.top = (at[1] + (n - 1) * 3) + '%';
+            });
+        }
+
+        function pick(line) {
+            picked = line;
+            lines.forEach(function (row) { row.classList.toggle('is-picked', row === line); });
+            if (action) {
+                action.disabled = !line;
+                action.title = line ? opts.actionVerb + ': ' + line.querySelector('strong').textContent.trim() : 'Alege un articol din tabel';
+            }
+        }
+
+        function applyCat(key) {
+            cat = key;
+            let first = null;
+            lines.forEach(function (row) {
+                const show = row.getAttribute('data-owner') === owner && (key === '' || row.getAttribute('data-cat') === key);
+                row.hidden = !show;
+                if (show && !first) {
+                    first = row;
+                }
+            });
+            catsEl.querySelectorAll('.dcv-cat').forEach(function (button) {
+                const active = button.getAttribute(attr('cat')) === key;
+                button.classList.toggle('is-active', active);
+                button.setAttribute('aria-selected', active ? 'true' : 'false');
+            });
+            dots.querySelectorAll('.dcv-dot').forEach(function (dot) {
+                const match = dot.getAttribute(attr('cat')) === key;
+                dot.classList.toggle('is-hot', key !== '' && match);
+                dot.classList.toggle('is-dim', key !== '' && !match);
+            });
+            if (!picked || picked.hidden) {
+                pick(first);
+            }
+        }
+
+        function openOwner(id) {
+            const data = wsOwners[String(id)];
+            if (!data) {
+                return;
+            }
+            owner = String(id);
+            picked = null;
+            const setText = function (name, text) {
+                wsCard.querySelectorAll(sel(name)).forEach(function (node) { node.textContent = text; });
+            };
+            setText('crumb', data.nume);
+            setText('initials', data.initiale);
+            setText('name', data.nume);
+            setText('meta', [data.meta, data.inactiv ? 'inactiv' : ''].filter(Boolean).join(' · '));
+            setText('m-total', plural(data.linii, 'alocare', 'alocări'));
+            setText('m-articole', nf0.format(data.articole));
+            setText('m-bucati', nf0.format(data.bucati));
+            setText('m-valoare', money(data.valoare) + (data.pretLipsa > 0 ? ' *' : ''));
+            setText('m-note', data.pretLipsa > 0 ? plural(data.pretLipsa, 'linie fără preț', 'linii fără preț') : opts.valueNote);
+            setText('m-extra', opts.extraNote ? opts.extraNote(data) : '');
+
+            catsEl.innerHTML = '';
+            dots.innerHTML = '';
+            (data.categorii || []).forEach(function (c) {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'dcv-cat';
+                button.setAttribute('role', 'tab');
+                button.setAttribute(attr('cat'), c.key);
+                button.innerHTML = '<span class="dcv-cat-ico"><i class="bi ' + c.icon + '"></i></span>'
+                    + '<span class="dcv-cat-name"></span>'
+                    + '<span class="dcv-cat-value">' + money(c.valoare) + '</span>'
+                    + '<span class="dcv-cat-meta">' + plural(c.articole, 'articol', 'articole') + ' &nbsp;|&nbsp; ' + plural(c.bucati, 'buc.', 'buc.') + '</span>';
+                button.querySelector('.dcv-cat-name').textContent = c.name;
+                catsEl.appendChild(button);
+
+                const dot = document.createElement('button');
+                dot.type = 'button';
+                dot.className = 'dcv-dot ' + opts.dotClass;
+                dot.tabIndex = -1;
+                dot.setAttribute(attr('cat'), c.key);
+                dot.setAttribute('data-zone', c.anchor);
+                dot.setAttribute('aria-label', c.name);
+                dot.title = c.name + ' — ' + plural(c.bucati, 'buc.', 'buc.') + ' ' + opts.dotLabel;
+                dots.appendChild(dot);
+            });
+            syncFigure();
+            applyCat('');
+            rows.forEach(function (r) { r.classList.toggle('is-selected', r.getAttribute(attr('owner')) === owner); });
+            goWs(3);
+        }
+
+        if (search) {
+            search.addEventListener('input', function () {
+                const term = normalize(search.value.trim());
+                let shown = 0;
+                rows.forEach(function (r) {
+                    const show = term === '' || normalize(r.getAttribute('data-name')).indexOf(term) !== -1;
+                    r.hidden = !show;
+                    shown += show ? 1 : 0;
+                });
+                const empty = wsCard.querySelector(sel('list-empty'));
+                if (empty && rows.length > 0) {
+                    empty.hidden = shown > 0;
+                }
+            });
+        }
+
+        wsCard.addEventListener('click', function (event) {
+            const goButton = event.target.closest(sel('go'));
+            if (goButton) {
+                goWs(goButton.getAttribute(attr('go')));
+                return;
+            }
+            const ownerRow = event.target.closest(sel('owner'));
+            if (ownerRow) {
+                openOwner(ownerRow.getAttribute(attr('owner')));
+                return;
+            }
+            const catButton = event.target.closest(sel('cat'));
+            if (catButton) {
+                const key = catButton.getAttribute(attr('cat'));
+                applyCat(cat === key ? '' : key);
+                return;
+            }
+            if (event.target.closest(sel('action'))) {
+                // Același formular ca acțiunea din meniul articolului (modalul existent).
+                const trigger = picked && picked.querySelector(opts.rowTrigger);
+                if (trigger) {
+                    trigger.click();
+                }
+                return;
+            }
+            const line = event.target.closest('.' + p + '-line');
+            if (line && !event.target.closest('[data-des-open]')) {
+                pick(line);
+            }
+        });
+
+        document.addEventListener('keydown', function (event) {
+            if (event.key === 'Escape' && wsLevel > 1 && !document.querySelector('.modal.show, .des-floating-menu.show')) {
+                goWs(wsLevel - 1);
+            }
+        });
+
+        const api = { go: goWs };
+        return api;
+    }
+
+    /** Un singur spațiu de lucru mare deschis: celelalte carduri revin la nivelul 1. */
+    function collapseOthers(except) {
+        if (except !== 'value' && level > 1) {
+            go(1, true);
+        }
+        [stockApi, returnApi, replaceApi].forEach(function (other) {
+            if (other && other !== except) {
+                other.go(1, true);
+            }
+        });
+    }
+
+    returnApi = personWorkspace('dcr', {
+        openClass: 'is-return-open',
+        rowTrigger: '.dcr-row-return',
+        actionVerb: 'Returnează',
+        dotClass: 'is-orange',
+        dotLabel: 'de returnat',
+        valueNote: 'nu e pierdere',
+    });
+
+    replaceApi = personWorkspace('dci', {
+        openClass: 'is-replace-open',
+        rowTrigger: '.dci-row-replace',
+        actionVerb: 'Înlocuiește',
+        dotClass: 'is-red',
+        dotLabel: 'de înlocuit',
+        valueNote: 'cost estimat de înlocuire',
+        extraNote: function (data) {
+            return data.faraStoc > 0 ? plural(data.faraStoc, 'linie fără stoc', 'linii fără stoc') : 'stoc suficient';
+        },
+    });
+
+    // ------------------------------------------------------------------
+    // Grila celor 4 carduri: buton de închidere pe spațiul de lucru și comutare
+    // directă din banda compactă (cardurile nedeschise).
+    // ------------------------------------------------------------------
+
+    const wsGo = {
+        value: function (n) { go(n); },
+        stock: stockApi ? stockApi.go : null,
+        return: returnApi ? returnApi.go : null,
+        replace: replaceApi ? replaceApi.go : null,
+    };
+
+    wsCards.forEach(function (node) {
+        const close = document.createElement('button');
+        close.type = 'button';
+        close.className = 'dcv-ws-close-btn';
+        close.setAttribute('aria-label', 'Închide și revino la cele patru carduri');
+        close.title = 'Închide';
+        close.innerHTML = '<i class="bi bi-x-lg" aria-hidden="true"></i>';
+        node.appendChild(close);
+    });
+
+    root.addEventListener('click', function (event) {
+        const close = event.target.closest('.dcv-ws-close-btn');
+        const node = event.target.closest('[data-ws-card]');
+        if (!node) {
+            return;
+        }
+        const open = wsGo[node.getAttribute('data-ws-card')];
+        if (close) {
+            if (open) {
+                open(1);
+            }
+            return;
+        }
+        // Banda compactă: tot cardul e clicabil și deschide direct nivelul 2.
+        if (root.classList.contains('has-open') && !node.hasAttribute('data-open')
+            && !event.target.closest('[data-dcv-go], [data-dcs-go], [data-dcr-go], [data-dci-go]') && open) {
+            open(2);
+        }
+    });
 
     setVariant(variant(), false);
 })();
