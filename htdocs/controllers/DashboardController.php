@@ -262,6 +262,7 @@ class DashboardController
             'dispecer.live_gps' => BASE_PATH . '/views/dispecer_curse/_live_gps_panel.php',
             'drivers.activity' => BASE_PATH . '/views/dashboard/_driver_activity_card.php',
             'carburanti.kpis' => BASE_PATH . '/views/dashboard/_fuel_card.php',
+            'rentabilitate.kpis' => BASE_PATH . '/views/dashboard/_rentabilitate_card.php',
             'cheltuieli.kpis' => BASE_PATH . '/views/dashboard/_expenses_card.php',
             'stoc.piese' => BASE_PATH . '/views/dashboard/_stock_card.php',
             'consumabile.alerts' => BASE_PATH . '/views/dashboard/_consumabile_card.php',
@@ -344,6 +345,46 @@ class DashboardController
                         'beneficiar_id' => !empty($cardConfig['beneficiar_id']) ? $cardConfig['beneficiar_id'] : null,
                         'transport_type' => $cardConfig['transport_type'] ?? null,
                         'driver_ids' => $driverCard['is_all'] ? null : $driverCard['filters']['driver_ids'],
+                    ]);
+                    break;
+
+                case 'rentabilitate.kpis':
+                    // Aceeasi sursa ca pagina (list() → kpiBlock), cu filtrele PROPRII ale cardului (config din layout).
+                    $ropFilters = [
+                        'mode' => (string) ($cardConfig['mode'] ?? 'vehicule'),
+                        'from' => $dateStart,
+                        'to' => $dateEnd,
+                        'tip' => (string) ($cardConfig['tip'] ?? ''),
+                        'beneficiar' => (int) ($cardConfig['beneficiar'] ?? 0),
+                        'vehicle_id' => (int) ($cardConfig['vehicle_id'] ?? 0),
+                        'driver_id' => (int) ($cardConfig['driver_id'] ?? 0),
+                    ];
+                    $ropKpi = (new ProfitabilityRegisterService($this->db))->kpiSummary($ropFilters);
+                    $ropList = static function (array $rows): array {
+                        $out = [];
+                        foreach ($rows as $row) {
+                            $out[(string) $row['id']] = (string) $row['label'];
+                        }
+                        return $out;
+                    };
+                    $cfOptions = [
+                        'mode' => ['soferi' => 'Șoferi'],
+                        'tip' => (array) $ropKpi['optiuni']['tipuri'],
+                        'beneficiar' => array_map('strval', (array) $ropKpi['optiuni']['beneficiari']),
+                        'vehicle_id' => $ropList((array) $ropKpi['optiuni']['vehicule']),
+                        'driver_id' => $ropList((array) $ropKpi['optiuni']['soferi']),
+                    ];
+                    $cfShownFrom = (string) $ropKpi['from'];
+                    $ropApplied = (array) $ropKpi['aplicat'];
+                    $ropSourceUrl = build_query_url([
+                        'page' => 'rentabilitate',
+                        'mode' => $ropKpi['mode'] === 'soferi' ? 'soferi' : null,
+                        'from' => $ropKpi['from'],
+                        'to' => $ropKpi['to'],
+                        'tip' => $ropApplied['tip'] !== '' ? $ropApplied['tip'] : null,
+                        'beneficiar' => $ropApplied['beneficiar'] ?: null,
+                        'vehicle_id' => $ropApplied['vehicle_id'] ?: null,
+                        'driver_id' => $ropApplied['driver_id'] ?: null,
                     ]);
                     break;
 

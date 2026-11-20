@@ -34,6 +34,16 @@ class OperationalCostService
     /** Zilele intervalului cerut (null = luna întreagă, comportamentul paginii Cost / km). */
     private ?int $rangeDays = null;
     private int $daysInMonth = 30;
+    /**
+     * Mod istoric (Rentabilitate Operationala): semiremorcile NU se lipesc de tractorul cuplat ACUM
+     * (fiecare vehicul fizic isi pastreaza costurile, alocarea pe ansamblu se face dupa cuplajul
+     * datat), iar costurile de personal raman pe sofer (driverLedger), nu pe vehiculul lui curent.
+     */
+    private bool $historical = false;
+    /** @var array<int,array<string,array{value:float,label:string,cod:string,tip:string,detail:list<array>}>> */
+    private array $driverLedger = [];
+    /** Soferii (inclusiv inactivi acum) cu curse in perioada — doar in modul istoric. */
+    private array $extraDriverIds = [];
 
     public function __construct(PDO $db)
     {
@@ -204,6 +214,40 @@ class OperationalCostService
         return $this->units;
     }
 
+    /**
+     * O luna (sau o parte din ea) in modul istoric: costurile pe fiecare vehicul FIZIC (fara lipirea
+     * semiremorcii de cuplajul curent) si costurile de personal pe fiecare sofer. Folosit de
+     * OperationalProfitabilityService, care face alocarea pe ansamblu dupa cuplajele datate.
+     *
+     * @param list<int> $driverIds soferii cu activitate in perioada (si cei inactivi acum)
+     * @return array{period:array,units:array,drivers:array,elements:array,company:array}
+     */
+    public function computeHistoricalMonth(string $month, ?string $dateStart = null, ?string $dateEnd = null, array $driverIds = []): array
+    {
+        $this->historical = true;
+        $this->driverLedger = [];
+        $this->extraDriverIds = array_values(array_unique(array_map('intval', $driverIds)));
+        try {
+            $period = $this->resolvePeriod($month, (string) $dateStart, (string) $dateEnd);
+            $this->period = $period;
+            $this->rangeDays = $period['range_days'];
+            $this->daysInMonth = (int) $period['days'];
+            $settings = $this->model->getSettings();
+            $this->settings = $settings;
+            $this->buildUnits($period, $settings, 'km_real');
+            return [
+                'period' => $period,
+                'units' => $this->units,
+                'drivers' => $this->driverLedger,
+                'elements' => array_values($this->elementStatus),
+                'company' => $this->companyRows,
+            ];
+        } finally {
+            $this->historical = false;
+            $this->extraDriverIds = [];
+        }
+    }
+
     // ==================================================================
     // Construirea unităților operaționale + rezolvarea elementelor
     // ==================================================================
@@ -275,7 +319,8 @@ class OperationalCostService
     private function buildUnits(array $period, array $settings, string $kmField): void
     {
         $vehicles = $this->model->getHeavyVehicles();
-        $couplings = $this->model->getActiveCouplings();
+        // In modul istoric nu se lipeste semiremorca de tractorul cuplat ACUM (cuplajul se aplica datat).
+        $couplings = $this->historical ? [] : $this->model->getActiveCouplings();
         $activity = $this->model->getActivityByVehicle($period['start'], $period['end']);
         $elements = $this->model->getElements(true);
         $eur = (float) ($settings['eur_ron_rate'] ?: 0);
@@ -328,7 +373,7 @@ class OperationalCostService
         $this->elementStatus = [];
 
         // pregătește sursele partajate o singură dată (evită N interogări — §37)
-        $drivers = $this->model->getActiveDriversWithSalary($period['end']);
+        $drivers = $this->model->getActiveDriversWithSalary($period['end'], $this->historical ? $this->extraDriverIds : []);
         $driverDocs = $this->model->getDriverDocumentAnnualCosts();
         $fuelDiesel = $this->model->getFuelPeriodCosts($period['start'], $period['end'], 'motorina', $vatFallback);
         $fuelAdblue = $this->model->getFuelPeriodCosts($period['start'], $period['end'], 'adblue', $vatFallback);
@@ -409,6 +454,16 @@ class OperationalCostService
             if ($driverId !== null || in_array($code, ['salariu_soferi', 'analize_soferi', 'ssm_su', 'cursuri_soferi', 'diurna'], true)) {
                 $u['personnel_total'] += $value;
             }
+            $total += $value;
+        };
+
+        // Mod istoric: costul de personal ramane pe sofer; alocarea pe vehicule se face dupa km-ii lui reali.
+        $pushDriver = function (int $driverId, float $value, array $detail) use ($el, $code, &$total): void {
+            if (!isset($this->driverLedger[$driverId][$code])) {
+                $this->driverLedger[$driverId][$code] = ['value' => 0.0, 'label' => (string) $el['nume'], 'cod' => $code, 'tip' => (string) $el['tip'], 'detail' => []];
+            }
+            $this->driverLedger[$driverId][$code]['value'] += $value;
+            $this->driverLedger[$driverId][$code]['detail'][] = $detail;
             $total += $value;
         };
 
@@ -494,7 +549,9 @@ class OperationalCostService
                         'normalizare' => 'salariu × ' . $multSalarial . ' (multiplicator angajator)',
                         'valoare' => $value,
                     ];
-                    if ($unitId !== null && isset($this->units[$unitId])) {
+                    if ($this->historical) {
+                        $pushDriver((int) $drv['id'], $value, $detail);
+                    } elseif ($unitId !== null && isset($this->units[$unitId])) {
                         $push($unitId, $value, $detail, $drv['id']);
                     } else {
                         $pushCompany($value, 'Șofer fără vehicul asociat: ' . $drv['nume']);
@@ -519,7 +576,9 @@ class OperationalCostService
                         'normalizare' => 'Σ(cost × 365 / validity) / 12',
                         'valoare' => $monthly,
                     ];
-                    if ($unitId !== null && isset($this->units[$unitId])) {
+                    if ($this->historical) {
+                        $pushDriver((int) $driverId, $monthly, $detail);
+                    } elseif ($unitId !== null && isset($this->units[$unitId])) {
                         $push($unitId, $monthly, $detail, $driverId);
                     } else {
                         $pushCompany($monthly, 'Șofer fără vehicul: ' . $drivers[$driverId]['nume']);
@@ -614,7 +673,13 @@ class OperationalCostService
             case 'mentenanta_reparatii':
                 $rt = $source === 'mentenanta_intretinere' ? 'intretinere' : 'reparatie';
                 $rows = $this->model->getMaintenancePeriodCosts($period['start'], $period['end'], $rt);
+                $capitalExcluded = 0.0;
+                $capitalItems = 0;
+                $unconfirmed = 0.0;
                 foreach ($rows as $vid => $row) {
+                    $capitalExcluded += (float) ($row['capitalizat_exclus'] ?? 0);
+                    $capitalItems += (int) ($row['capitalizat_items'] ?? 0);
+                    $unconfirmed += (float) ($row['investitii_neconfirmate'] ?? 0);
                     if ($row['total'] <= 0) {
                         continue;
                     }
@@ -629,6 +694,14 @@ class OperationalCostService
                 $status['quality_note'] = $rows !== []
                     ? count($rows) . ' vehicule cu intervenții în perioadă (istoric încă subțire — km_interventie nepopulat)'
                     : 'Nicio intervenție în perioadă';
+                if ($capitalItems > 0) {
+                    // Investitiile confirmate capitalizabile NU sunt cost operational; amortizarea lor lipseste inca.
+                    $status['quality_note'] .= sprintf('; exclus %s lei investiții capitalizabile (%d înregistrări, amortizare necalculată — lipsesc valoarea/durata per activ)',
+                        number_format($capitalExcluded, 2, ',', '.'), $capitalItems);
+                }
+                if ($unconfirmed > 0) {
+                    $status['quality_note'] .= sprintf('; include %s lei investiții cu tratament contabil neconfirmat', number_format($unconfirmed, 2, ',', '.'));
+                }
                 break;
 
             case 'ocr_piese':
@@ -690,6 +763,15 @@ class OperationalCostService
                     $vid = (int) $row['vehicle_id'];
                     $unitId = $carrier[$vid] ?? $vid;
                     $driverId = $row['driver_id'] !== null ? (int) $row['driver_id'] : null;
+                    if ($this->historical && $source === 'diurna' && $driverId !== null) {
+                        $pushDriver($driverId, (float) $row['total'], [
+                            'sursa' => 'Cheltuieli cursă (' . $row['items'] . ' înregistrări, tip=diurna)',
+                            'normalizare' => 'sumă realizată în perioadă',
+                            'valoare' => (float) $row['total'],
+                            'vehicle_id' => $vid,
+                        ]);
+                        continue;
+                    }
                     $push($unitId, (float) $row['total'], [
                         'sursa' => 'Cheltuieli cursă (' . $row['items'] . ' înregistrări, tip=' . $tip . ')',
                         'normalizare' => 'sumă realizată în perioadă (net de refacturări facturate)',
@@ -729,7 +811,9 @@ class OperationalCostService
                             'normalizare' => $this->manualFormulaLabel($el, $eur),
                             'valoare' => $monthly,
                         ];
-                        if ($unitId !== null && isset($this->units[$unitId])) {
+                        if ($this->historical) {
+                            $pushDriver((int) $drv['id'], $monthly, $detail);
+                        } elseif ($unitId !== null && isset($this->units[$unitId])) {
                             $push($unitId, $monthly, $detail, $drv['id']);
                         } else {
                             $pushCompany($monthly, 'Șofer fără vehicul: ' . $drv['nume']);

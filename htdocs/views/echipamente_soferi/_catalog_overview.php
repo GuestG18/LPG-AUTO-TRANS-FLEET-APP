@@ -166,7 +166,8 @@ $jsItems = array_values(array_map(static fn(array $row): array => [
                                         data-dcx-open="<?= e((string) $card['key']) ?>" data-dcx-key="<?= e((string) $card['key']) ?>"
                                         data-at-m="<?= e($am[0] . ',' . $am[1]) ?>" data-at-f="<?= e($af[0] . ',' . $af[1]) ?>"
                                         style="left:<?= e((string) ($dv === 'f' ? $af : $am)[0]) ?>%;top:<?= e((string) ($dv === 'f' ? $af : $am)[1]) ?>%"
-                                        aria-label="<?= e((string) $ovCategories[$card['key']]['name']) ?>"></button>
+                                        title="Vezi fotografiile produselor" data-dcx-gallery="<?= e((string) $card['key']) ?>"
+                                        aria-label="<?= e((string) $ovCategories[$card['key']]['name']) ?> — fotografii"></button>
                             <?php endforeach; ?>
                         </div>
 
@@ -178,7 +179,7 @@ $jsItems = array_values(array_map(static fn(array $row): array => [
                             <button class="dcx-card" type="button" data-slot="<?= e((string) $card['slot']) ?>"
                                     data-dcx-open="<?= e((string) $card['key']) ?>" data-dcx-key="<?= e((string) $card['key']) ?>"
                                     data-dcx-role="<?= e($role) ?>"
-                                    title="<?= e($plural((int) $stats['articole'], 'articol', 'articole')) ?> · <?= e(format_number_ro($stats['alocat'], 0)) ?> buc. alocate">
+                                    title="Vezi articolele categoriei · <?= e($plural((int) $stats['articole'], 'articol', 'articole')) ?>, <?= e(format_number_ro($stats['alocat'], 0)) ?> buc. alocate">
                                 <?= $categoryThumb($category, $role, $dv) ?>
                                 <span class="dcx-card-text">
                                     <strong><?= e((string) $category['name']) ?></strong>
@@ -293,7 +294,8 @@ $jsItems = array_values(array_map(static fn(array $row): array => [
                         <tr class="dcx-row" data-dcx-row="<?= e($panelId) ?>" data-cat="<?= e((string) $row['categorie']) ?>" data-dest="<?= e((string) $row['destinatie']) ?>" tabindex="0" aria-expanded="false" aria-controls="<?= e($panelId) ?>">
                             <td>
                                 <div class="dcx-item">
-                                    <?= $categoryThumb($category, $row['destinatie'] === 'tesa' ? 'tesa' : 'sofer') ?>
+                                    <?php $itemPhoto = $photoUrl($item['imagine'] ?? null); ?>
+                                    <?= $itemPhoto !== null ? '<span class="dcx-thumb is-photo" aria-hidden="true"><img src="' . e($itemPhoto) . '" alt="" loading="lazy"></span>' : $categoryThumb($category, $row['destinatie'] === 'tesa' ? 'tesa' : 'sofer') ?>
                                     <div>
                                         <strong><?= e((string) $item['denumire']) ?></strong>
                                         <span>#<?= e((string) $id) ?> · <?= e(DriverEquipmentModel::DESTINATIONS[(string) $row['destinatie']] ?? 'Ambele') ?> · <?= e(DriverEquipmentModel::LOGIC_TYPES[(string) $item['tip_logic']] ?? (string) $item['tip_logic']) ?></span>

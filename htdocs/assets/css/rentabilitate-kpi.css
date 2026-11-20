@@ -1,0 +1,76 @@
+/* Cardurile KPI din Rentabilitate Operațională (assets/js/rentabilitate-kpi.js) — pagina și Tablou de bord.
+ * Cardul are dimensiuni FIXE: navigarea (indicator → beneficiari → tip → vehicule/șoferi) schimbă doar conținutul,
+ * prin vederi suprapuse (crossfade + alunecare scurtă), cu derulare internă pentru listele lungi. */
+.rop-kpis {
+    --rk-ink: #101828; --rk-ink-2: #344054; --rk-muted: #667085; --rk-line: #e4e7ec; --rk-line-2: #eef0f4;
+    display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin: 0 0 12px;
+}
+.rop-kpi {
+    --rk-c: #2f4fd8; --rk-soft: #eef2ff; --rk-line-c: #c7d0fb;
+    position: relative; height: 200px; min-width: 0; overflow: hidden; contain: layout paint;
+    border: 1px solid var(--rk-line); border-radius: 14px; background: #fff;
+    box-shadow: 0 1px 2px rgba(16, 24, 40, .04), 0 2px 8px rgba(16, 24, 40, .05);
+    transition: border-color .2s ease, box-shadow .2s ease;
+}
+.rop-kpi::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--rk-c); opacity: .85; z-index: 2; }
+.rop-kpi { --mc-c: var(--rk-c); --mc-soft: var(--rk-soft); --mc-line-c: var(--rk-line-c); }
+.rop-kpi.t-green { --rk-c: #16a34a; --rk-soft: #e3f6ea; --rk-line-c: #a9e3bd; }
+.rop-kpi.t-red { --rk-c: #e5484d; --rk-soft: #fde8ea; --rk-line-c: #f6b8bb; }
+.rop-kpi.t-violet { --rk-c: #7c3aed; --rk-soft: #f1e9ff; --rk-line-c: #d4bffb; }
+.rop-kpi.is-nav { border-color: var(--rk-line-c); box-shadow: 0 0 0 3px color-mix(in srgb, var(--rk-c) 10%, transparent), 0 6px 18px rgba(16, 24, 40, .07); }
+
+/* scena + tranzitiile + lista: componenta comuna MorphCard (assets/css/morph-card.css) */
+.rop-kpi .mc-view { padding: 11px 13px 10px 16px; background: #fff; }
+.rop-kpi .mc-head { min-height: 30px; gap: 9px; }
+.rop-kpi .mc-back { width: 30px; height: 30px; flex-basis: 30px; border-radius: 9px; }
+.rop-kpi .mc-crumbs { margin: 6px 0 4px; }
+.rop-kpi .mc-seg { margin: 0 0 4px; }
+.rop-kpi .mc-list { margin: 0 -6px 0 -4px; padding-right: 2px; }
+.rop-kpi-ico { width: 30px; height: 30px; flex: 0 0 30px; border-radius: 9px; display: grid; place-items: center; background: var(--rk-soft); color: var(--rk-c); font-size: 15px; }
+.rop-kpi-title { font-size: 13px; font-weight: 600; color: var(--rk-ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1 1 auto; }
+.rop-kc-explore { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 3px; height: 24px; padding: 0 6px 0 9px; border: 1px solid transparent; border-radius: 7px; background: var(--rk-soft); color: var(--rk-c); font-size: 11.5px; font-weight: 600; cursor: pointer; }
+.rop-kc-explore i { font-size: 11px; }
+.rop-kc-explore:hover { border-color: var(--rk-line-c); }
+.rop-kc-now { flex: 0 0 auto; font-size: 13px; font-weight: 700; color: var(--rk-c); font-variant-numeric: tabular-nums; }
+
+.rop-kc-metric { display: flex; flex-direction: column; align-items: flex-start; gap: 0; margin: 6px 0 0; padding: 2px 4px; border: 0; border-radius: 9px; background: transparent; text-align: left; cursor: pointer; min-width: 0; max-width: 100%; transition: background .15s; }
+.rop-kc-metric:hover:not(:disabled) { background: #f8f9fc; }
+.rop-kc-metric:disabled { cursor: default; }
+.rop-kc-metric:focus-visible, .rop-kc-explore:focus-visible { outline: 2px solid var(--rk-line-c); outline-offset: 1px; }
+.rop-kpi-value { font-size: 25px; font-weight: 800; color: var(--rk-ink); letter-spacing: -.3px; line-height: 1.2; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.rop-kpi-value.is-neg { color: #d42a2a; }
+.rop-kpi-value.is-pos { color: #157a3d; }
+.rop-kpi-sub { font-size: 11.5px; color: var(--rk-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+
+.rop-kc-scope { display: flex; align-items: center; gap: 6px; margin-top: auto; min-height: 22px; font-size: 12px; color: var(--rk-ink-2); min-width: 0; }
+.rop-kc-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; font-weight: 500; }
+.rop-kc-scope.is-scoped .rop-kc-path { color: var(--rk-c); font-weight: 600; }
+.rop-kc-dot { width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: var(--rk-c); box-shadow: 0 0 0 3px color-mix(in srgb, var(--rk-c) 18%, transparent); }
+.rop-kc-clear { margin-left: auto; width: 20px; height: 20px; flex: 0 0 20px; border: 0; border-radius: 50%; background: var(--rk-soft); color: var(--rk-c); display: grid; place-items: center; cursor: pointer; padding: 0; }
+.rop-kpi-state { display: flex; align-items: center; gap: 5px; font-size: 11.5px; line-height: 1.3; min-width: 0; margin-top: 2px; }
+.rop-kpi-state span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rop-kpi-state.is-ok { color: #157a3d; }
+.rop-kpi-state.is-warn { color: #a15c00; }
+
+.rop-kpis.is-loading .rop-kpi-value, .rop-kpis.is-loading .rop-kpi-sub { opacity: .5; transition: opacity .15s; }
+
+/* Filtre active (sub carduri): afisarea starii comune + stergere; nu e a doua bara de filtre */
+.rop-active { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin: 0 0 12px; padding: 7px 12px; border: 1px solid #e4e7ec; border-radius: 10px; background: #fff; font-size: 13px; }
+.rop-active[hidden] { display: none; }
+.rop-active { min-height: 42px; }
+.rop-active-none { color: #667085; }
+.rop-active > b { font-weight: 600; color: #344054; margin-right: 2px; }
+.rop-chip { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 6px 0 10px; border: 1px solid #c7d0fb; border-radius: 13px; background: #eef2ff; color: #2440b8; font-size: 12.5px; }
+.rop-chip button { width: 18px; height: 18px; display: inline-grid; place-items: center; border: 0; border-radius: 50%; background: transparent; color: inherit; cursor: pointer; padding: 0; }
+.rop-chip button:hover { background: #dde3ff; }
+.rop-active-reset { margin-left: auto; border: 0; background: none; color: #2440b8; font-size: 13px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 5px; }
+
+@media (max-width: 1400px) { .rop-kpi-value { font-size: 22px; } }
+@media (max-width: 1250px) { .rop-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 760px) { .rop-kpis { grid-template-columns: minmax(0, 1fr); } }
+@media (prefers-reduced-motion: reduce) {
+    .rop-kpi { transition: none !important; }
+}
+
+/* In Tablou de bord: aceleasi carduri si aceeasi navigare, grila se adapteaza latimii cardului de dashboard */
+.dash-rop-card .rop-kpis { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); margin: 0; }

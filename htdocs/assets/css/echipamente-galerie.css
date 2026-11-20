@@ -1,0 +1,470 @@
+/* ==========================================================================
+   Galeria pe categorii (clic pe un punct de pe siluetă). Prefix .dgl-.
+   Panoul acoperă zona siluetei (host-ul are position: relative) — rămâne în
+   aceeași secțiune, nu e un modal.
+   ========================================================================== */
+
+.has-gallery {
+    position: relative;
+}
+
+.dgl {
+    --dgl-accent: #2563eb;
+    --dgl-accent-soft: #eef4ff;
+
+    animation: dglIn .26s cubic-bezier(.22, .8, .24, 1) both;
+    backdrop-filter: blur(6px);
+    background: rgba(255, 255, 255, .96);
+    border: 1px solid #dbe6f6;
+    border-radius: 18px;
+    box-shadow: 0 24px 48px -28px rgba(15, 23, 42, .55);
+    display: flex;
+    flex-direction: column;
+    gap: .55rem;
+    inset: 0;
+    outline: none;
+    overflow: hidden;
+    padding: .7rem .75rem .75rem;
+    position: absolute;
+    z-index: 20;
+}
+
+.dgl.is-orange { --dgl-accent: #ea580c; --dgl-accent-soft: #fff4ec; }
+.dgl.is-red { --dgl-accent: #dc2626; --dgl-accent-soft: #fef2f2; }
+
+.dgl.is-closing {
+    animation: dglOut .18s ease both;
+}
+
+@keyframes dglIn {
+    from { opacity: 0; transform: translateY(10px) scale(.98); }
+    to { opacity: 1; transform: none; }
+}
+
+@keyframes dglOut {
+    to { opacity: 0; transform: translateY(6px) scale(.985); }
+}
+
+.dgl-head {
+    align-items: center;
+    display: flex;
+    gap: .55rem;
+}
+
+.dgl-ico {
+    align-items: center;
+    background: var(--dgl-accent-soft);
+    border-radius: 10px;
+    color: var(--dgl-accent);
+    display: inline-flex;
+    flex: 0 0 auto;
+    height: 32px;
+    justify-content: center;
+    width: 32px;
+}
+
+.dgl-title {
+    display: grid;
+    flex: 1 1 auto;
+    line-height: 1.2;
+    min-width: 0;
+}
+
+.dgl-title strong {
+    font-size: .92rem;
+    font-weight: 800;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.dgl-title small {
+    color: #64748b;
+    font-size: .7rem;
+}
+
+.dgl-count {
+    white-space: nowrap;
+    color: #64748b;
+    font-size: .72rem;
+    font-variant-numeric: tabular-nums;
+    font-weight: 700;
+}
+
+.dgl-close {
+    align-items: center;
+    background: #f1f5fb;
+    border: 0;
+    border-radius: 50%;
+    color: #334155;
+    display: inline-flex;
+    flex: 0 0 auto;
+    height: 30px;
+    justify-content: center;
+    transition: background-color .15s ease, transform .2s ease;
+    width: 30px;
+}
+
+.dgl-close:hover {
+    background: #e5ecf7;
+    transform: rotate(90deg);
+}
+
+.dgl-view {
+    align-items: center;
+    display: flex;
+    flex: 1 1 auto;
+    gap: .35rem;
+    min-height: 0;
+}
+
+.dgl-stage {
+    align-items: center;
+    background:
+        radial-gradient(closest-side, rgba(147, 197, 253, .28), transparent 75%),
+        #f8fbff;
+    border-radius: 14px;
+    display: flex;
+    flex: 1 1 auto;
+    height: 100%;
+    justify-content: center;
+    min-height: 120px;
+    min-width: 0;
+    overflow: hidden;
+    padding: .5rem;
+}
+
+.dgl-stage.is-swapping > * {
+    animation: dglIn .22s cubic-bezier(.22, .8, .24, 1) both;
+}
+
+.dgl-stage img {
+    filter: drop-shadow(0 10px 14px rgba(15, 23, 42, .22));
+    max-height: 100%;
+    max-width: 100%;
+    object-fit: contain;
+}
+
+.dgl-noimg {
+    align-items: center;
+    color: #94a3b8;
+    display: flex;
+    flex-direction: column;
+    font-size: 2.6rem;
+    gap: .2rem;
+}
+
+.dgl-noimg small {
+    font-size: .72rem;
+}
+
+.dgl-nav {
+    align-items: center;
+    background: #fff;
+    border: 1px solid #dbe6f6;
+    border-radius: 50%;
+    color: #1e293b;
+    display: inline-flex;
+    flex: 0 0 auto;
+    height: 30px;
+    justify-content: center;
+    width: 30px;
+}
+
+.dgl-nav[hidden] {
+    display: none;
+}
+
+.dgl-nav:hover {
+    border-color: var(--dgl-accent);
+    color: var(--dgl-accent);
+}
+
+.dgl-info {
+    display: grid;
+    gap: .15rem;
+    text-align: center;
+}
+
+.dgl-info strong {
+    font-size: .88rem;
+    font-weight: 800;
+}
+
+.dgl-meta {
+    color: #475569;
+    font-size: .74rem;
+}
+
+.dgl-meta b {
+    color: #0f172a;
+}
+
+.dgl-meta em {
+    color: #d97706;
+}
+
+.dgl-meta .is-ok { color: #15803d; font-weight: 600; }
+.dgl-meta .is-out { color: #dc2626; font-weight: 600; }
+
+.dgl-badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .3rem;
+    justify-content: center;
+    margin-top: .15rem;
+}
+
+.dgl-badge {
+    align-items: center;
+    background: #f1f5f9;
+    border-radius: 999px;
+    color: #475569;
+    display: inline-flex;
+    font-size: .66rem;
+    font-weight: 700;
+    gap: .25rem;
+    padding: .12rem .5rem;
+}
+
+.dgl-badge.is-owned {
+    background: var(--dgl-accent-soft);
+    color: var(--dgl-accent);
+}
+
+.dgl-badge.is-muted {
+    color: #94a3b8;
+}
+
+.dgl-thumbs {
+    display: flex;
+    flex: 0 0 auto;
+    gap: .4rem;
+    overflow-x: auto;
+    padding: .15rem .1rem .25rem;
+    scrollbar-color: #c7d2e3 transparent;
+    scrollbar-width: thin;
+}
+
+.dgl-thumb {
+    align-items: center;
+    background: #fff;
+    border: 2px solid #e3eaf5;
+    border-radius: 11px;
+    color: #94a3b8;
+    display: inline-flex;
+    flex: 0 0 auto;
+    height: 48px;
+    justify-content: center;
+    padding: 2px;
+    position: relative;
+    transition: border-color .15s ease, transform .15s ease;
+    width: 48px;
+}
+
+.dgl-thumb img {
+    border-radius: 8px;
+    height: 100%;
+    object-fit: contain;
+    width: 100%;
+}
+
+.dgl-thumb:hover {
+    transform: translateY(-1px);
+}
+
+.dgl-thumb.is-active {
+    border-color: var(--dgl-accent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--dgl-accent) 18%, transparent);
+}
+
+.dgl-thumb.is-owned::after {
+    background: var(--dgl-accent);
+    border: 2px solid #fff;
+    border-radius: 50%;
+    content: "";
+    height: 11px;
+    position: absolute;
+    right: -4px;
+    top: -4px;
+    width: 11px;
+}
+
+.dgl-empty {
+    align-items: center;
+    color: #64748b;
+    display: flex;
+    flex: 1 1 auto;
+    font-size: .82rem;
+    justify-content: center;
+    margin: 0;
+    text-align: center;
+}
+
+/* Panoul în Catalog (zona mare a siluetei): fotografie mai mare. */
+.dcx-stage-body > .dgl {
+    padding: 1rem 1.1rem 1rem;
+}
+
+.dcx-stage-body > .dgl .dgl-thumb {
+    height: 62px;
+    width: 62px;
+}
+
+.dcx-stage-body > .dgl .dgl-info strong {
+    font-size: 1.05rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .dgl,
+    .dgl.is-closing,
+    .dgl-stage.is-swapping > * {
+        animation: none;
+    }
+}
+
+/* ------------------------------------------------------------ Carusel -- */
+
+.dgl-carousel {
+    background:
+        radial-gradient(closest-side, rgba(147, 197, 253, .26), transparent 75%),
+        #f8fbff;
+    border-radius: 14px;
+    flex: 1 1 auto;
+    height: 100%;
+    min-height: 130px;
+    min-width: 0;
+    overflow: hidden;
+    overflow: clip;
+    position: relative;
+    touch-action: pan-y;
+    user-select: none;
+}
+
+.dgl-track {
+    align-items: center;
+    column-gap: 14px;
+    display: flex;
+    height: 100%;
+    transition: transform .34s cubic-bezier(.22, .8, .24, 1);
+    will-change: transform;
+}
+
+.dgl-slide {
+    align-items: center;
+    cursor: pointer;
+    display: flex;
+    flex: 0 0 46%;
+    height: 82%;
+    justify-content: center;
+    opacity: .28;
+    position: relative;
+    transform: scale(.72);
+    transition: transform .34s cubic-bezier(.22, .8, .24, 1), opacity .34s ease, filter .34s ease;
+}
+
+.dgl-slide.is-near {
+    filter: saturate(.7);
+    opacity: .55;
+}
+
+.dgl-slide.is-active {
+    cursor: default;
+    opacity: 1;
+    transform: none;
+}
+
+.dgl-slide img {
+    filter: drop-shadow(0 12px 16px rgba(15, 23, 42, .25));
+    max-height: 100%;
+    max-width: 100%;
+    object-fit: contain;
+    pointer-events: none;
+}
+
+.dgl-slide-flag {
+    align-items: center;
+    background: var(--dgl-accent);
+    border: 2px solid #fff;
+    border-radius: 50%;
+    color: #fff;
+    display: inline-flex;
+    font-size: .7rem;
+    height: 22px;
+    justify-content: center;
+    position: absolute;
+    right: 8%;
+    top: 4%;
+    width: 22px;
+}
+
+.dgl-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .4rem;
+    justify-content: center;
+    margin-top: .35rem;
+}
+
+.dgl-action {
+    align-items: center;
+    background: #fff;
+    border: 1px solid #dbe6f6;
+    border-radius: 10px;
+    color: #1e293b;
+    display: inline-flex;
+    font-size: .76rem;
+    font-weight: 700;
+    gap: .35rem;
+    padding: .35rem .7rem;
+    transition: border-color .15s ease, background-color .15s ease;
+}
+
+.dgl-action:hover {
+    border-color: var(--dgl-accent);
+    color: var(--dgl-accent);
+}
+
+.dgl-action.is-primary {
+    background: var(--dgl-accent);
+    border-color: var(--dgl-accent);
+    color: #fff;
+}
+
+.dgl-action.is-primary:hover {
+    color: #fff;
+    filter: brightness(1.08);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .dgl-track,
+    .dgl-slide {
+        transition: none;
+    }
+}
+
+/* Telefon: zona siluetei e foarte înaltă (casetele sunt una sub alta); caruselul
+   rămâne de mărime fixă, sus, iar panoul se oprește după conținut. */
+@media (max-width: 767.98px) {
+    .dcx-stage-body > .dgl {
+        bottom: auto;
+    }
+
+    .dgl-view {
+        flex: 0 0 auto;
+    }
+
+    .dgl-carousel {
+        height: 240px;
+    }
+
+    .dgl-slide {
+        flex-basis: 62%;
+    }
+}
+
+/* Spațiu pentru antetul fix al aplicației când panoul e adus în vedere. */
+.dgl {
+    scroll-margin-bottom: 16px;
+    scroll-margin-top: 112px;
+}

@@ -469,6 +469,65 @@
         });
     }
 
+    // Galeria: clic pe un punct de pe siluetă -> produsele categoriei, în aceeași
+    // zonă (caseta categoriei continuă să deschidă spațiul de lucru).
+    // Eticheta (caseta categoriei) sau punctul de pe siluetă -> caruselul cu
+    // articolele categoriei. Din carusel: „Vezi în tabel” (spațiul de lucru cu
+    // rândul articolului deschis) și „Editează” (formularul existent).
+    function openInTable(key, itemId) {
+        const opener = root.querySelector('.dcx-nav-cat[data-dcx-open="' + key + '"]');
+        if (!opener) {
+            return;
+        }
+        opener.click();
+        window.setTimeout(function () {
+            const row = root.querySelector('.dcx-row[data-dcx-row="dcx-ws-panel-' + itemId + '"]');
+            if (!row) {
+                return;
+            }
+            if (row.getAttribute('aria-expanded') !== 'true') {
+                row.click();
+            }
+            row.classList.add('is-flash');
+            window.setTimeout(function () { row.classList.remove('is-flash'); }, 1600);
+            row.scrollIntoView({ block: 'center', behavior: reduceMotion.matches ? 'auto' : 'smooth' });
+        }, reduceMotion.matches ? 0 : 420);
+    }
+
+    root.addEventListener('click', function (event) {
+        const trigger = event.target.closest('.dcx-stage .dcx-card[data-dcx-key], .dcx-dot[data-dcx-gallery]');
+        if (!trigger || !window.EquipmentGallery) {
+            return;
+        }
+        const stage = trigger.closest('[data-dcx-stage]');
+        const body = stage ? stage.querySelector('.dcx-stage-body') : null;
+        const key = trigger.getAttribute('data-dcx-gallery') || trigger.getAttribute('data-dcx-key');
+        if (body && window.EquipmentGallery.open(body, key, {
+            role: stage.getAttribute('data-dcx-stage'),
+            returnFocus: trigger,
+            actions: [
+                { key: 'tabel', label: 'Vezi în tabel', icon: 'bi-table', primary: true },
+                {
+                    key: 'edit', label: 'Editează', icon: 'bi-pencil',
+                    when: function (item) { return !!document.querySelector('[data-des-catalog-edit-ref="' + item.id + '"]'); },
+                },
+            ],
+            onAction: function (action, item) {
+                if (action === 'tabel') {
+                    openInTable(key, item.id);
+                } else if (action === 'edit') {
+                    const edit = document.querySelector('[data-des-catalog-edit-ref="' + item.id + '"]');
+                    if (edit) {
+                        edit.click();
+                    }
+                }
+            },
+        })) {
+            event.preventDefault();
+            event.stopPropagation();
+        }
+    }, true);
+
     // Catalogul se deschide mereu pe siluetă.
     setView('silueta', false);
     window.addEventListener('load', drawAllLinks);

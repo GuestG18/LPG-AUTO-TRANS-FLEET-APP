@@ -17,6 +17,9 @@ declare(strict_types=1);
  * Schema: database/migrations/2026_11_04_000001_componente_vehicul_locatii.sql, aplicata si aici
  * (ensureSchema), in afara oricarei tranzactii (DDL face COMMIT implicit).
  */
+require_once dirname(__DIR__) . '/services/FinancialFoundationSchema.php';
+require_once dirname(__DIR__) . '/services/PartsInventoryService.php';
+
 class VehicleComponentModel extends BaseModel
 {
     public const UNMOUNT_REASONS = ['uzura' => 'Uzură', 'defect' => 'Defect', 'retur_stoc' => 'Retur în stoc', 'altul' => 'Alt motiv', 'inlocuire' => 'Înlocuire'];
@@ -228,7 +231,14 @@ class VehicleComponentModel extends BaseModel
             throw new InvalidArgumentException('Alege cel puțin o poziție.');
         }
         $fromStock = $data['source'] === 'stoc';
+        $isTransfer = $data['source'] === 'transfer';
         $totalQuantity = $quantity * count($targets);
+        $inventory = new PartsInventoryService($this->db);
+        $ledger = $inventory->ready();
+        if ($isTransfer && (!$ledger || empty($data['transfer_usage_id']) || count($targets) !== 1)) {
+            throw new InvalidArgumentException('Transferul mută o singură componentă montată, pe o singură poziție.');
+        }
+        $directSource = ($data['source'] ?? '') === 'atelier' ? 'atelier_extern' : 'achizitie_directa';
 
         $this->db->beginTransaction();
         try {
@@ -271,6 +281,35 @@ class VehicleComponentModel extends BaseModel
                     throw new InvalidArgumentException('Data înlocuirii nu poate fi înaintea montării anterioare (' . date('d.m.Y', strtotime((string) $old['data_montare'])) . ').');
                 }
 
+                $usageFields = [
+                    'vehicle_id' => (int) $data['vehicle_id'],
+                    'data_montare' => (string) $data['date'],
+                    'km_montare' => $data['km'],
+                    'montata_de' => $mountedBy,
+                    'observatii' => trim((string) $data['notes']),
+                    'component_key' => (string) $data['component_key'],
+                    'locatie' => $location,
+                    'axle_no' => $target['axle'],
+                    'parte' => $target['side'],
+                    'created_by' => $userId,
+                ];
+                $key = !empty($data['idempotency_key']) ? 'montare-' . $data['idempotency_key'] . '-' . count($ids) : null;
+                if ($ledger && ($fromStock || $isTransfer)) {
+                    // Din stoc: consum FIFO pe receptii (cost original). Transfer: cost istoric, fara achizitie noua.
+                    $result = $fromStock
+                        ? $inventory->consume((int) $part['id'], $quantity, $usageFields, $key)
+                        : $inventory->transfer((int) $data['transfer_usage_id'], (int) $data['vehicle_id'], $usageFields, $key);
+                    $newId = (int) $result['usage_id'];
+                    $ids[] = $newId;
+                    if ($old !== null) {
+                        $this->db->prepare(
+                            'UPDATE mentenanta_piese_utilizari
+                             SET demontat_la = :data, km_demontare = :km, motiv_demontare = "inlocuire", inlocuita_de_id = :new_id
+                             WHERE id = :id'
+                        )->execute([':data' => (string) $data['date'], ':km' => $data['km'], ':new_id' => $newId, ':id' => (int) $old['id']]);
+                    }
+                    continue;
+                }
                 if ($fromStock) {
                     $this->db->prepare('UPDATE mentenanta_piese SET stoc_curent = stoc_curent - :quantity, updated_at = :updated_at WHERE id = :id')
                         ->execute([':quantity' => $quantity, ':updated_at' => date('Y-m-d H:i:s'), ':id' => (int) $part['id']]);
@@ -301,6 +340,10 @@ class VehicleComponentModel extends BaseModel
                 ]);
                 $newId = (int) $this->db->lastInsertId();
                 $ids[] = $newId;
+                if ($ledger) {
+                    $this->db->prepare('UPDATE mentenanta_piese_utilizari SET sursa_piesa = :s, idempotency_key = :k WHERE id = :id')
+                        ->execute([':s' => $directSource, ':k' => $key, ':id' => $newId]);
+                }
 
                 if ($old !== null) {
                     $this->db->prepare(
@@ -342,8 +385,14 @@ class VehicleComponentModel extends BaseModel
                 'UPDATE mentenanta_piese_utilizari SET demontat_la = :data, km_demontare = :km, motiv_demontare = :motiv, observatii_demontare = :obs WHERE id = :id'
             )->execute([':data' => $date, ':km' => $km, ':motiv' => $reason, ':obs' => trim($notes) !== '' ? trim($notes) : null, ':id' => $usageId]);
             if ($reason === 'retur_stoc') {
-                $this->db->prepare('UPDATE mentenanta_piese SET stoc_curent = stoc_curent + :quantity, updated_at = :updated_at WHERE id = :id')
-                    ->execute([':quantity' => (float) $usage['cantitate'], ':updated_at' => date('Y-m-d H:i:s'), ':id' => (int) $usage['part_id']]);
+                $inventory = new PartsInventoryService($this->db);
+                if ($inventory->ready()) {
+                    // Revine pe receptiile ei originale, cu acelasi cost (remontarea nu foloseste pretul curent).
+                    $inventory->returnToStock($usageId);
+                } else {
+                    $this->db->prepare('UPDATE mentenanta_piese SET stoc_curent = stoc_curent + :quantity, updated_at = :updated_at WHERE id = :id')
+                        ->execute([':quantity' => (float) $usage['cantitate'], ':updated_at' => date('Y-m-d H:i:s'), ':id' => (int) $usage['part_id']]);
+                }
             }
             $this->db->commit();
         } catch (Throwable $exception) {

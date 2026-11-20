@@ -2,6 +2,10 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/InterventionWorkflowModel.php';
+require_once dirname(__DIR__) . '/services/FinancialFoundationSchema.php';
+require_once dirname(__DIR__) . '/services/CostNature.php';
+require_once dirname(__DIR__) . '/services/PartsInventoryService.php';
+require_once dirname(__DIR__) . '/services/FinancialClassificationService.php';
 
 class MaintenanceModel extends BaseModel
 {
@@ -330,23 +334,11 @@ class MaintenanceModel extends BaseModel
 
             foreach ($sourceIds as $sourceId) {
                 $usageStmt = $this->db->prepare(
-                    "SELECT part_id, cantitate, direct_mount
-                     FROM mentenanta_piese_utilizari WHERE maintenance_id = :id FOR UPDATE"
+                    "SELECT * FROM mentenanta_piese_utilizari WHERE maintenance_id = :id FOR UPDATE"
                 );
                 $usageStmt->execute([':id' => $sourceId]);
                 foreach ($usageStmt->fetchAll() as $usage) {
-                    if (empty($usage['direct_mount'])) {
-                        $restore = $this->db->prepare(
-                            "UPDATE mentenanta_piese
-                             SET stoc_curent = stoc_curent + :qty, updated_at = :updated_at
-                             WHERE id = :id"
-                        );
-                        $restore->execute([
-                            ':qty' => (float) $usage['cantitate'],
-                            ':updated_at' => date('Y-m-d H:i:s'),
-                            ':id' => (int) $usage['part_id'],
-                        ]);
-                    }
+                    $this->restoreUsageStock($usage);
                 }
 
                 $this->db->prepare("DELETE FROM mentenanta_piese_utilizari WHERE maintenance_id = :id")->execute([':id' => $sourceId]);
@@ -379,7 +371,10 @@ class MaintenanceModel extends BaseModel
                 if ($stockPart === null || (float) ($stockPart['stoc_curent'] ?? 0) < $partQuantity) {
                     throw new RuntimeException('Stoc insuficient pentru piesa selectată.');
                 }
-                $stockPartCost = $partQuantity * max(0, (float) ($stockPart['pret_achizitie'] ?? 0));
+                // Costul piesei = costul receptiilor consumate (FIFO), nu pretul de catalog curent.
+                $stockPartCost = $this->inventory()->ready()
+                    ? 0.0
+                    : $partQuantity * max(0, (float) ($stockPart['pret_achizitie'] ?? 0));
             }
 
             $laborCost = max(0, (float) ($data['cost_manopera'] ?? 0));
@@ -395,10 +390,11 @@ class MaintenanceModel extends BaseModel
                 $partsUsed = $partsUsed !== '' ? ($partsUsed . ', ' . $stockPartLabel) : $stockPartLabel;
             }
 
+            $recordType = $this->normalizeRecordType((string) $data['record_type']);
             $values = [
                 ':vehicle_id' => (int) $data['vehicle_id'],
                 ':tip_interventie' => trim((string) $data['tip_interventie']),
-                ':record_type' => $this->normalizeRecordType((string) $data['record_type']),
+                ':record_type' => $recordType,
                 ':centru_cost' => trim((string) ($data['centru_cost'] ?? 'Altele')),
                 ':technical_category_id' => !empty($data['technical_category_id']) ? (int) $data['technical_category_id'] : null,
                 ':technical_component_id' => !empty($data['technical_component_id']) ? (int) $data['technical_component_id'] : null,
@@ -437,6 +433,7 @@ class MaintenanceModel extends BaseModel
                     observatii = :observatii, updated_at = :updated_at
                     WHERE id = :id";
                 $this->db->prepare($sql)->execute($values);
+                $this->applyNatureOnUpdate($id, $data);
             } else {
                 $values[':created_at'] = date('Y-m-d H:i:s');
                 $sql = "INSERT INTO mentenanta
@@ -453,9 +450,10 @@ class MaintenanceModel extends BaseModel
                      :observatii, :created_at, :updated_at)";
                 $this->db->prepare($sql)->execute($values);
                 $id = (int) $this->db->lastInsertId();
+                $this->applyNatureOnInsert($id, $data, $recordType, 'manual', null);
 
                 if ($stockPart !== null) {
-                    $this->decreaseStockAndCreateUsage(
+                    $consumedCost = $this->decreaseStockAndCreateUsage(
                         $stockPart,
                         $partQuantity,
                         (int) $data['vehicle_id'],
@@ -467,6 +465,12 @@ class MaintenanceModel extends BaseModel
                         (string) ($data['observatii'] ?? ''),
                         false
                     );
+                    if ($this->inventory()->ready()) {
+                        // Costul piesei vine din receptiile consumate; totalul = manopera + piese (ca inainte).
+                        $this->db->prepare(
+                            'UPDATE mentenanta SET cost_piese = cost_piese + :x, cost = cost_manopera + cost_piese WHERE id = :id'
+                        )->execute([':x' => $consumedCost, ':id' => $id]);
+                    }
                 }
             }
 
@@ -489,21 +493,11 @@ class MaintenanceModel extends BaseModel
         $this->db->beginTransaction();
         try {
             $usageStmt = $this->db->prepare(
-                "SELECT part_id, cantitate, direct_mount
-                 FROM mentenanta_piese_utilizari WHERE maintenance_id = :id FOR UPDATE"
+                "SELECT * FROM mentenanta_piese_utilizari WHERE maintenance_id = :id FOR UPDATE"
             );
             $usageStmt->execute([':id' => $id]);
             foreach ($usageStmt->fetchAll() as $usage) {
-                if (empty($usage['direct_mount'])) {
-                    $restore = $this->db->prepare(
-                        "UPDATE mentenanta_piese SET stoc_curent = stoc_curent + :qty, updated_at = :updated_at WHERE id = :id"
-                    );
-                    $restore->execute([
-                        ':qty' => (float) $usage['cantitate'],
-                        ':updated_at' => date('Y-m-d H:i:s'),
-                        ':id' => (int) $usage['part_id'],
-                    ]);
-                }
+                $this->restoreUsageStock($usage);
             }
             $this->db->prepare("DELETE FROM mentenanta_piese_utilizari WHERE maintenance_id = :id")->execute([':id' => $id]);
             $deleted = $this->db->prepare("DELETE FROM mentenanta WHERE id = :id");
@@ -604,6 +598,7 @@ class MaintenanceModel extends BaseModel
                 )->execute($values);
                 $id = (int) $this->db->lastInsertId();
             }
+            $this->applyInterventionClassification($id, $data);
 
             if ($values[':status_interventie'] === 'finalizata') {
                 $this->convertScheduledIntervention($id);
@@ -1478,6 +1473,23 @@ class MaintenanceModel extends BaseModel
             )->execute($values);
             }
             $partId = $archivedId > 0 ? $archivedId : (int) $this->db->lastInsertId();
+            $initialQuantity = (float) $values[':stoc_curent'];
+            if ($mode === 'stoc' && $initialQuantity > 0 && $this->inventory()->ready()) {
+                // Stocul initial intra printr-o receptie cu pretul declarat (fara pret = neverificat).
+                $this->db->prepare('UPDATE mentenanta_piese SET stoc_curent = 0 WHERE id = :id')->execute([':id' => $partId]);
+                $declared = (float) $values[':pret_achizitie'];
+                $this->inventory()->receive($partId, $initialQuantity, [
+                    'data_receptie' => $this->isDateValue($data['data_receptie'] ?? null) ? (string) $data['data_receptie'] : date('Y-m-d'),
+                    'cost_unitar' => $declared > 0 ? $declared : null,
+                    'furnizor' => $values[':furnizor'],
+                    'factura_numar' => $data['factura_numar'] ?? null,
+                    'factura_data' => $this->isDateValue($data['factura_data'] ?? null) ? (string) $data['factura_data'] : null,
+                    'sursa_tip' => 'receptie_manuala',
+                    'status_evaluare' => $declared > 0 ? 'declarat_manual' : 'neverificat_istoric',
+                    'idempotency_key' => !empty($data['idempotency_key']) ? 'piesa-noua-' . $data['idempotency_key'] : null,
+                    'observatii' => 'Stoc inițial la adăugarea piesei',
+                ], $createdBy);
+            }
             }
 
             if ($mode === 'direct') {
@@ -1522,6 +1534,10 @@ class MaintenanceModel extends BaseModel
                     ':updated_at' => date('Y-m-d H:i:s'),
                 ]);
                 $maintenanceId = (int) $this->db->lastInsertId();
+                $this->applyNatureOnInsert($maintenanceId, $data + [
+                    'vehicle_id' => $vehicleId,
+                    'natura_cost' => $data['natura_cost'] ?? ($scheduledId !== null ? ($scheduled['natura_cost'] ?? null) : null),
+                ], $recordType, 'stoc_piese_direct', $partId);
                 $usageStmt = $this->db->prepare(
                     "INSERT INTO mentenanta_piese_utilizari
                         (part_id, maintenance_id, scheduled_intervention_id, vehicle_id, cantitate,
@@ -1542,6 +1558,11 @@ class MaintenanceModel extends BaseModel
                     ':notes' => $this->nullIfEmpty((string) ($data['mount_notes'] ?? '')),
                     ':created_at' => date('Y-m-d H:i:s'),
                 ]);
+                if ($this->inventory()->ready()) {
+                    // Achizitie directa pentru vehicul: nu a trecut prin stoc.
+                    $this->db->prepare("UPDATE mentenanta_piese_utilizari SET sursa_piesa = 'achizitie_directa' WHERE id = :id")
+                        ->execute([':id' => (int) $this->db->lastInsertId()]);
+                }
             }
 
             $this->db->commit();
@@ -1571,13 +1592,18 @@ class MaintenanceModel extends BaseModel
 
         $sets = ['updated_at = :updated_at'];
         $params = [':id' => $partId, ':updated_at' => date('Y-m-d H:i:s')];
+        $receiptQuantity = 0.0;
         if ($mode === 'stoc') {
             $quantity = (float) ($data['stoc_initial'] ?? 0);
             if ($quantity <= 0) {
                 throw new RuntimeException('Introdu cantitatea adăugată în stoc.');
             }
-            $sets[] = 'stoc_curent = stoc_curent + :quantity';
-            $params[':quantity'] = $quantity;
+            if ($this->inventory()->ready()) {
+                $receiptQuantity = $quantity; // intra prin receptie (dupa UPDATE), cu costul ei
+            } else {
+                $sets[] = 'stoc_curent = stoc_curent + :quantity';
+                $params[':quantity'] = $quantity;
+            }
         }
 
         $text = ['producator', 'cod_oem', 'garantie_piesa', 'garantie_manopera', 'descriere'];
@@ -1615,6 +1641,22 @@ class MaintenanceModel extends BaseModel
         }
 
         $this->db->prepare('UPDATE mentenanta_piese SET ' . implode(', ', $sets) . ' WHERE id = :id')->execute($params);
+
+        if ($receiptQuantity > 0) {
+            $rawPrice = trim((string) ($data['pret_achizitie'] ?? ''));
+            $price = $rawPrice !== '' && is_numeric($rawPrice) && (float) $rawPrice > 0 ? (float) $rawPrice : null;
+            $this->inventory()->receive($partId, $receiptQuantity, [
+                'data_receptie' => $this->isDateValue($data['data_receptie'] ?? null) ? (string) $data['data_receptie'] : date('Y-m-d'),
+                'cost_unitar' => $price,
+                'furnizor' => trim((string) ($data['furnizor'] ?? '')) ?: null,
+                'factura_numar' => $data['factura_numar'] ?? null,
+                'factura_data' => $this->isDateValue($data['factura_data'] ?? null) ? (string) $data['factura_data'] : null,
+                'sursa_tip' => 'receptie_manuala',
+                'status_evaluare' => $price !== null ? 'declarat_manual' : 'neverificat_istoric',
+                'idempotency_key' => !empty($data['idempotency_key']) ? 'receptie-' . $data['idempotency_key'] : null,
+                'observatii' => 'Completare stoc din Stoc piese',
+            ]);
+        }
 
         return (string) $row['denumire'];
     }
@@ -1654,6 +1696,11 @@ class MaintenanceModel extends BaseModel
             ':updated_at' => date('Y-m-d H:i:s'),
         ]);
         $maintenanceId = (int) $this->db->lastInsertId();
+        $this->applyNatureOnInsert($maintenanceId, [
+            'vehicle_id' => (int) $row['vehicle_id'],
+            'natura_cost' => $row['natura_cost'] ?? null,
+            'proiect_investitie_id' => $row['proiect_investitie_id'] ?? null,
+        ], $this->normalizeRecordType((string) $row['tip_interventie']), 'interventie', $id);
         $this->db->prepare(
             "UPDATE mentenanta_interventii_programate
              SET converted_maintenance_id = :maintenance_id, updated_at = :updated_at WHERE id = :id"
@@ -1910,7 +1957,21 @@ class MaintenanceModel extends BaseModel
         string $mountedBy,
         string $notes,
         bool $direct
-    ): void {
+    ): float {
+        // Cu registrul de receptii: consum FIFO, costul montarii = costul original al receptiilor.
+        if ($this->inventory()->ready()) {
+            $result = $this->inventory()->consume((int) $part['id'], $quantity, [
+                'vehicle_id' => $vehicleId,
+                'maintenance_id' => $maintenanceId,
+                'scheduled_intervention_id' => $scheduledId,
+                'data_montare' => $date,
+                'km_montare' => $km,
+                'montata_de' => $mountedBy,
+                'observatii' => $notes,
+            ], $maintenanceId !== null ? 'mentenanta-' . $maintenanceId . '-piesa-' . (int) $part['id'] : null);
+            return (float) $result['cost_total'];
+        }
+
         $this->db->prepare(
             "UPDATE mentenanta_piese
              SET stoc_curent = stoc_curent - :quantity, updated_at = :updated_at WHERE id = :id"
@@ -1940,6 +2001,136 @@ class MaintenanceModel extends BaseModel
             ':direct_mount' => $direct ? 1 : 0,
             ':created_at' => date('Y-m-d H:i:s'),
         ]);
+        return $quantity * max(0, (float) ($part['pret_achizitie'] ?? 0));
+    }
+
+    private ?PartsInventoryService $inventoryService = null;
+
+    private function isDateValue(mixed $value): bool
+    {
+        $value = (string) ($value ?? '');
+        $parsed = DateTime::createFromFormat('Y-m-d', $value);
+        return $parsed !== false && $parsed->format('Y-m-d') === $value;
+    }
+
+    /**
+     * Stergerea unei inregistrari: piesele luate din stoc revin pe receptiile lor originale.
+     * Montajele directe si transferurile nu au scazut stocul, deci nu il cresc.
+     */
+    private function restoreUsageStock(array $usage): void
+    {
+        if (!empty($usage['direct_mount']) || ($usage['sursa_piesa'] ?? null) === 'transfer_vehicul') {
+            return;
+        }
+        if ($this->inventory()->ready()) {
+            $this->inventory()->reverse((int) $usage['id']);
+            return;
+        }
+        $this->db->prepare(
+            "UPDATE mentenanta_piese SET stoc_curent = stoc_curent + :qty, updated_at = :updated_at WHERE id = :id"
+        )->execute([
+            ':qty' => (float) $usage['cantitate'],
+            ':updated_at' => date('Y-m-d H:i:s'),
+            ':id' => (int) $usage['part_id'],
+        ]);
+    }
+
+    private function inventory(): PartsInventoryService
+    {
+        return $this->inventoryService ??= new PartsInventoryService($this->db);
+    }
+
+    /**
+     * Natura costului pe un rand nou din `mentenanta`: explicita din formular (natura_cost) sau derivata din
+     * record_type. Tratamentul contabil porneste implicit (reparatie / mentenanta = cheltuiala; investitie /
+     * echipare = de_confirmat). „capitalizabil” se seteaza doar prin FinancialClassificationService (cu motiv
+     * si istoric), niciodata dintr-un formular de inregistrare.
+     */
+    private function applyNatureOnInsert(int $id, array $data, string $recordType, string $sourceType, ?int $sourceId): void
+    {
+        if (!FinancialFoundationSchema::isReady($this->db)) {
+            return;
+        }
+        $explicit = CostNature::normalize((string) ($data['natura_cost'] ?? ''));
+        $nature = $explicit ?? CostNature::fromRecordType($recordType);
+        $this->db->prepare(
+            'UPDATE mentenanta SET natura_cost = :n, natura_cost_origine = :o, tratament_contabil = :t,
+                proiect_investitie_id = :p, sursa_tip = COALESCE(sursa_tip, :st), sursa_id = COALESCE(sursa_id, :si)
+             WHERE id = :id'
+        )->execute([
+            ':n' => $nature,
+            ':o' => $explicit !== null ? 'explicit' : 'derivat',
+            ':t' => CostNature::defaultTreatment($nature),
+            ':p' => $this->validProjectId($data['proiect_investitie_id'] ?? null, (int) ($data['vehicle_id'] ?? 0)),
+            ':st' => $sourceType,
+            ':si' => $sourceId,
+            ':id' => $id,
+        ]);
+    }
+
+    /** La editare natura se schimba doar daca formularul o trimite (prin serviciul de clasificare, cu istoric). */
+    private function applyNatureOnUpdate(int $id, array $data): void
+    {
+        if (!FinancialFoundationSchema::isReady($this->db)) {
+            return;
+        }
+        $nature = CostNature::normalize((string) ($data['natura_cost'] ?? ''));
+        if ($nature !== null) {
+            (new FinancialClassificationService($this->db))->setNature('mentenanta', $id, $nature,
+                isset($data['user_id']) ? (int) $data['user_id'] : null, 'Editare înregistrare');
+        }
+        if (array_key_exists('proiect_investitie_id', $data)) {
+            $this->db->prepare('UPDATE mentenanta SET proiect_investitie_id = :p WHERE id = :id')
+                ->execute([':p' => $this->validProjectId($data['proiect_investitie_id'], (int) ($data['vehicle_id'] ?? 0)), ':id' => $id]);
+        }
+    }
+
+    /**
+     * Natura (si proiectul) la nivel de interventie, daca formularul le trimite. Fara natura explicita
+     * interventia mosteneste natura din tip_interventie (ca pana acum).
+     */
+    public function applyInterventionClassification(int $interventionId, array $data): void
+    {
+        if (!FinancialFoundationSchema::isReady($this->db)) {
+            return;
+        }
+        $sets = [];
+        $params = [':id' => $interventionId];
+        if (array_key_exists('natura_cost', $data)) {
+            $nature = CostNature::normalize((string) $data['natura_cost']);
+            // Tratamentul se pastreaza doar daca natura nu se schimba; altfel revine la implicit.
+            $sets[] = 'tratament_contabil = IF(natura_cost <=> :n0, tratament_contabil, :t)';
+            $params[':n0'] = $nature;
+            $params[':t'] = $nature !== null ? CostNature::defaultTreatment($nature) : null;
+            $sets[] = 'natura_cost = :n';
+            $params[':n'] = $nature;
+        }
+        if (array_key_exists('proiect_investitie_id', $data)) {
+            $sets[] = 'proiect_investitie_id = :p';
+            $params[':p'] = $this->validProjectId($data['proiect_investitie_id'], (int) ($data['vehicle_id'] ?? 0));
+        }
+        if ($sets !== []) {
+            $this->db->prepare('UPDATE mentenanta_interventii_programate SET ' . implode(', ', $sets) . ' WHERE id = :id')->execute($params);
+        }
+    }
+
+    /** Proiectul trebuie sa apartina aceluiasi vehicul fizic (nu cuplajului). */
+    public function validProjectId(mixed $projectId, int $vehicleId): ?int
+    {
+        $projectId = (int) ($projectId ?? 0);
+        if ($projectId <= 0 || !FinancialFoundationSchema::isReady($this->db)) {
+            return null;
+        }
+        $stmt = $this->db->prepare('SELECT vehicle_id FROM investitii_proiecte WHERE id = :id');
+        $stmt->execute([':id' => $projectId]);
+        $owner = $stmt->fetchColumn();
+        if ($owner === false) {
+            throw new InvalidArgumentException('Proiectul de investiții nu există.');
+        }
+        if ($vehicleId > 0 && (int) $owner !== $vehicleId) {
+            throw new InvalidArgumentException('Proiectul de investiții aparține altui vehicul.');
+        }
+        return $projectId;
     }
 
     private function ensureSchema(): void
@@ -2097,6 +2288,8 @@ class MaintenanceModel extends BaseModel
             }
         }
         $this->backfillCorrectiveInvoicesFromRecords();
+        // Fundatia financiara (natura costului, receptii, proiecte, achizitii): DDL aditiv, doar ce lipseste.
+        FinancialFoundationSchema::ensure($this->db);
     }
 
     private function ensureCorrectiveInvoiceSchema(): void

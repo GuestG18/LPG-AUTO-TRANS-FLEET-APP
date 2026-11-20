@@ -2441,3 +2441,127 @@
 .dcv:not(.has-open) {
     grid-auto-rows: 1fr;
 }
+
+/* ------------------------------------------- Bule cu fotografii pe siluetă -- */
+
+/* Coloana siluetei se lărgește ca să încapă bulele de o parte și de alta. */
+.dcv-card[data-open] .dcv-l3-body,
+.dcr-body {
+    grid-template-columns: 340px minmax(0, 1fr);
+}
+
+.dcv-figure-wrap {
+    position: relative;
+}
+
+.dcv-bubbles {
+    inset: 0;
+    pointer-events: none;
+    position: absolute;
+    z-index: 4;
+}
+
+.dcv-bubble-links {
+    height: 100%;
+    inset: 0;
+    overflow: visible;
+    pointer-events: none;
+    position: absolute;
+    width: 100%;
+    z-index: 2;
+}
+
+.dcv-bubble-link {
+    fill: none;
+    stroke: #93c5fd;
+    stroke-dasharray: 3 3;
+    stroke-width: 1.4;
+    transition: stroke .2s ease, opacity .2s ease;
+}
+
+.dcv-bubble-link.is-hot {
+    stroke: #2563eb;
+    stroke-dasharray: none;
+    stroke-width: 2;
+}
+
+.dcv-bubble-link.is-dim,
+.dcv-bubble.is-dim {
+    opacity: .35;
+}
+
+.dcv-bubble {
+    align-items: center;
+    background: #fff;
+    border: 2px solid #dbe6f6;
+    border-radius: 14px;
+    box-shadow: 0 10px 20px -14px rgba(15, 23, 42, .7);
+    display: flex;
+    height: 52px;
+    justify-content: center;
+    overflow: visible;
+    padding: 3px;
+    pointer-events: auto;
+    position: absolute;
+    transition: left .3s var(--dcv-ease), top .3s var(--dcv-ease), transform .2s var(--dcv-ease), border-color .2s ease, box-shadow .2s ease, opacity .2s ease;
+    width: 52px;
+}
+
+.dcv-bubble[hidden] {
+    display: none;
+}
+
+.dcv-bubble img {
+    border-radius: 10px;
+    height: 100%;
+    object-fit: contain;
+    width: 100%;
+}
+
+.dcv-bubble:hover,
+.dcv-bubble:focus-visible,
+.dcv-bubble.is-hot {
+    border-color: #2563eb;
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, .18), 0 12px 22px -12px rgba(37, 99, 235, .7);
+    outline: none;
+    transform: scale(1.08);
+}
+
+.dcv-bubble[data-more]::after {
+    background: #13203b;
+    border-radius: 999px;
+    color: #fff;
+    content: attr(data-more);
+    font-size: .62rem;
+    font-weight: 800;
+    padding: .1rem .35rem;
+    position: absolute;
+    right: -8px;
+    top: -8px;
+}
+
+.dcr-card .dcv-bubble.is-hot { border-color: #ea580c; }
+.dcr-card .dcv-bubble-link.is-hot { stroke: #ea580c; }
+.dci-card .dcv-bubble.is-hot { border-color: #dc2626; }
+.dci-card .dcv-bubble-link.is-hot { stroke: #dc2626; }
+
+/* Iconița din tabele devine fotografia articolului. */
+.dcv-item-ico.is-photo {
+    background: #fff;
+    border: 1px solid var(--dcv-line);
+    overflow: hidden;
+    padding: 1px;
+}
+
+.dcv-item-ico.is-photo img {
+    height: 100%;
+    object-fit: contain;
+    width: 100%;
+}
+
+@media (max-width: 767.98px) {
+    .dcv-card[data-open] .dcv-l3-body,
+    .dcr-body {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}

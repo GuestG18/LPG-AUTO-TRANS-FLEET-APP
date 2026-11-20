@@ -15,6 +15,10 @@ declare(strict_types=1);
  * Articolele care nu se pot trimite (fara vehicul / fara componenta pentru stoc) raman
  * netrimise si se raporteaza; dupa corectare se trimit la urmatoarea apasare.
  */
+require_once __DIR__ . '/FinancialFoundationSchema.php';
+require_once __DIR__ . '/CostNature.php';
+require_once __DIR__ . '/PartsInventoryService.php';
+
 class OcrPartsMaintenanceSyncService
 {
     /** $maintenance se poate da gata construit: constructorul lui ruleaza DDL (COMMIT implicit). */
@@ -35,8 +39,9 @@ class OcrPartsMaintenanceSyncService
         $components = $catalog->components(true);
         $partIndex = $maintenance->getAutoComponentPartIndex();
 
+        $financial = FinancialFoundationSchema::isReady($this->db);
         $stmt = $this->db->prepare(
-            'SELECT r.id, r.data_interventie, r.furnizor, r.document, f.id AS factura_id, f.numar_factura
+            'SELECT r.*, f.id AS factura_id, f.numar_factura, f.data_facturii, f.cui_furnizor, f.moneda
              FROM ocr_reparatii r LEFT JOIN ocr_piese_facturi f ON f.id = r.factura_id
              WHERE r.id = :id'
         );
@@ -77,7 +82,11 @@ class OcrPartsMaintenanceSyncService
                 $summary['sarite'][] = $name . ': alege vehiculul.';
                 continue;
             }
-            $byVehicle[(int) $item['vehicle_id']][] = $item;
+            // Factura mixta nu se forteaza intr-o singura clasificare: un rand de mentenanta per
+            // vehicul x natura costului x proiect (natura din articol sau din tip_lucrare).
+            $nature = CostNature::normalize($item['natura_cost'] ?? null) ?? CostNature::fromOcrWorkType((string) $item['tip_lucrare']);
+            $projectId = (int) ($item['proiect_investitie_id'] ?? 0) ?: (int) ($event['proiect_investitie_id'] ?? 0);
+            $byVehicle[(int) $item['vehicle_id'] . '|' . $nature . '|' . $projectId][] = $item + ['_natura' => $nature, '_proiect' => $projectId ?: null];
         }
 
         $own = !$this->db->inTransaction();
@@ -99,24 +108,50 @@ class OcrPartsMaintenanceSyncService
                     $summary['sarite'][] = $item['denumire'] . ': piesa-componentă nu există în stoc.';
                     continue;
                 }
-                $this->db->prepare(
-                    'UPDATE mentenanta_piese
-                     SET stoc_curent = stoc_curent + :qty, pret_achizitie = :price,
-                         furnizor = COALESCE(:supplier, furnizor), updated_at = :now
-                     WHERE id = :id'
-                )->execute([
-                    ':qty' => (float) $item['cantitate'],
-                    ':price' => (float) $item['pret_unitar'],
-                    ':supplier' => $supplier !== '' ? mb_substr($supplier, 0, 190) : null,
-                    ':now' => $now,
-                    ':id' => (int) $part['id'],
-                ]);
+                if ($financial) {
+                    // Receptie cu pretul, furnizorul si factura de pe linia OCR (idempotenta pe articol).
+                    $receipt = (new PartsInventoryService($this->db))->receive((int) $part['id'], (float) $item['cantitate'], [
+                        'data_receptie' => $invoiceDate,
+                        'cost_unitar' => (float) $item['pret_unitar'],
+                        'moneda' => strtoupper((string) ($event['moneda'] ?? 'RON')) ?: 'RON',
+                        'furnizor' => $supplier !== '' ? $supplier : null,
+                        'cui_furnizor' => $event['cui_furnizor'] ?? null,
+                        'factura_numar' => $event['numar_factura'] ?? null,
+                        'factura_data' => $event['data_facturii'] ?? $invoiceDate,
+                        'ocr_factura_id' => !empty($event['factura_id']) ? (int) $event['factura_id'] : null,
+                        'ocr_articol_id' => (int) $item['id'],
+                        'sursa_tip' => 'ocr_factura',
+                        'sursa_id' => $eventId,
+                        'status_evaluare' => 'confirmat_document',
+                        'observatii' => $sourceNote,
+                    ], $userId);
+                    $this->db->prepare('UPDATE mentenanta_piese SET furnizor = COALESCE(:supplier, furnizor) WHERE id = :id')
+                        ->execute([':supplier' => $supplier !== '' ? mb_substr($supplier, 0, 190) : null, ':id' => (int) $part['id']]);
+                    $this->db->prepare('UPDATE ocr_reparatii_articole SET mentenanta_receptie_id = :r WHERE id = :id')
+                        ->execute([':r' => $receipt['id'], ':id' => (int) $item['id']]);
+                } else {
+                    $this->db->prepare(
+                        'UPDATE mentenanta_piese
+                         SET stoc_curent = stoc_curent + :qty, pret_achizitie = :price,
+                             furnizor = COALESCE(:supplier, furnizor), updated_at = :now
+                         WHERE id = :id'
+                    )->execute([
+                        ':qty' => (float) $item['cantitate'],
+                        ':price' => (float) $item['pret_unitar'],
+                        ':supplier' => $supplier !== '' ? mb_substr($supplier, 0, 190) : null,
+                        ':now' => $now,
+                        ':id' => (int) $part['id'],
+                    ]);
+                }
                 $markSent->execute([':m' => null, ':u' => null, ':p' => (int) $part['id'], ':q' => (float) $item['cantitate'], ':now' => $now, ':id' => (int) $item['id']]);
                 $summary['stoc']++;
                 $summary['trimise']++;
             }
 
-            foreach ($byVehicle as $vehicleId => $vehicleItems) {
+            foreach ($byVehicle as $vehicleItems) {
+                $vehicleId = (int) $vehicleItems[0]['vehicle_id'];
+                $nature = (string) $vehicleItems[0]['_natura'];
+                $projectId = $vehicleItems[0]['_proiect'];
                 $partsCost = 0.0;
                 $laborCost = 0.0;
                 $km = null;
@@ -158,7 +193,8 @@ class OcrPartsMaintenanceSyncService
                     ':vehicle_id' => $vehicleId,
                     ':tip' => mb_substr($invoiceLabel !== 'Factura' ? $invoiceLabel : 'Piese și manoperă din factură', 0, 190),
                     // Revizii / consumabile = intretinere; restul = reparatie (apare si la facturile de reparatii).
-                    ':record_type' => $maintenanceOnly ? 'intretinere' : 'reparatie',
+                    // Investitia ramane „reparatie” in record_type (compatibilitate); natura_cost o deosebeste.
+                    ':record_type' => $financial ? CostNature::recordTypeFor($nature) : ($maintenanceOnly ? 'intretinere' : 'reparatie'),
                     ':centru' => $categories !== [] ? (string) array_key_first($categories) : 'Altele',
                     ':descriere' => mb_substr(implode('; ', $lines), 0, 2000),
                     ':data' => $invoiceDate,
@@ -178,6 +214,15 @@ class OcrPartsMaintenanceSyncService
                 ]);
                 $maintenanceId = (int) $this->db->lastInsertId();
                 $summary['interventii']++;
+                if ($financial) {
+                    if ($projectId !== null) {
+                        $this->assertProjectVehicle((int) $projectId, $vehicleId);
+                    }
+                    $this->db->prepare(
+                        "UPDATE mentenanta SET natura_cost = :n, natura_cost_origine = 'explicit', tratament_contabil = :t,
+                            proiect_investitie_id = :p, sursa_tip = 'ocr_reparatie', sursa_id = :s WHERE id = :id"
+                    )->execute([':n' => $nature, ':t' => CostNature::defaultTreatment($nature), ':p' => $projectId, ':s' => $eventId, ':id' => $maintenanceId]);
+                }
 
                 foreach ($vehicleItems as $item) {
                     $usageId = null;
@@ -205,6 +250,10 @@ class OcrPartsMaintenanceSyncService
                                 ':created_at' => $now,
                             ]);
                             $usageId = (int) $this->db->lastInsertId();
+                            if ($financial) {
+                                $this->db->prepare("UPDATE mentenanta_piese_utilizari SET sursa_piesa = 'achizitie_directa', idempotency_key = :k WHERE id = :id")
+                                    ->execute([':k' => 'ocr-articol-' . (int) $item['id'], ':id' => $usageId]);
+                            }
                             $summary['montari']++;
                         }
                     }
@@ -224,6 +273,16 @@ class OcrPartsMaintenanceSyncService
         }
 
         return $summary;
+    }
+
+    private function assertProjectVehicle(int $projectId, int $vehicleId): void
+    {
+        $stmt = $this->db->prepare('SELECT vehicle_id FROM investitii_proiecte WHERE id = :id');
+        $stmt->execute([':id' => $projectId]);
+        $owner = $stmt->fetchColumn();
+        if ($owner === false || (int) $owner !== $vehicleId) {
+            throw new InvalidArgumentException('Proiectul de investiții ales nu aparține vehiculului de pe articol.');
+        }
     }
 
     /**

@@ -52,7 +52,11 @@
                                 <span class="des-toggle" aria-hidden="true"><i class="bi bi-chevron-right"></i></span>
                             <?php endif; ?>
                         </td>
-                        <td class="des-item-name"><?= e((string) $item['denumire']) ?></td>
+                        <td class="des-item-name">
+                            <?php $itemPhoto = $photoUrl($item['imagine'] ?? null); ?>
+                            <?php if ($itemPhoto !== null): ?><img class="des-photo-thumb" src="<?= e($itemPhoto) ?>" alt="" loading="lazy"><?php endif; ?>
+                            <?= e((string) $item['denumire']) ?>
+                        </td>
                         <td><?= e((string) $item['categorie']) ?></td>
                         <td><?= e(DriverEquipmentModel::GROUPS[(string) $item['grupa']] ?? 'Echipament fizic') ?></td>
                         <td>
@@ -104,6 +108,8 @@
                                                 'prag_minim_stoc' => (int) $item['prag_minim_stoc'],
                                                 'locatie_implicita' => (string) $item['locatie_implicita'],
                                                 'activ' => (int) $item['activ'],
+                                                'imagine_url' => $photoUrl($item['imagine'] ?? null) ?? '',
+                                                'observatii' => (string) ($item['observatii'] ?? ''),
                                             ], JSON_UNESCAPED_UNICODE)) ?>'>
                                                 <i class="bi bi-pencil"></i>Editează
                                             </button>

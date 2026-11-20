@@ -17,7 +17,9 @@ class DriverEquipmentController
 
     public function __construct(private PDO $db)
     {
+        require_once BASE_PATH . '/services/EquipmentPhotoService.php';
         $this->model = new DriverEquipmentModel($db);
+        $this->model->ensurePhotoColumn();
     }
 
     public function handle(string $action): void
@@ -94,7 +96,8 @@ class DriverEquipmentController
             'searchResults' => $searchResults,
             'searchView' => $searchView,
             'stockMap' => $this->model->getStockAvailabilityMap(),
-            'catalogItems' => $this->model->getCatalog(true),
+            'catalogItems' => $activeCatalog = $this->model->getCatalog(true),
+            'categoryGallery' => $this->model->buildCategoryGallery($activeCatalog),
             'ownerOptions' => $isStaff ? $this->model->getStaffOptions() : $this->model->getDriverOptions(),
             'driverOptions' => $isStaff ? $this->model->getStaffOptions() : $this->model->getDriverOptions(),
             'monthOptions' => $this->model->getMonthOptions(),
@@ -146,6 +149,7 @@ class DriverEquipmentController
             'currentPage' => 'echipamente_soferi',
             'filters' => ['q' => $search] + $catalogFilters,
             'catalogItems' => $catalogItems,
+            'categoryGallery' => $this->model->buildCategoryGallery($catalogItems),
             'catalogBreakdown' => $catalogBreakdown,
             'catalogOverview' => $this->model->buildCatalogOverview($catalogItems, $catalogBreakdown),
             'categories' => $this->model->getCategories(),
@@ -339,7 +343,28 @@ class DriverEquipmentController
         $this->guardPost('manage_catalog');
 
         $this->run(function (): string {
-            $this->model->saveCatalogItem($_POST);
+            // Fotografia se validează ÎNAINTE de salvare: o imagine greșită nu lasă
+            // articolul salvat pe jumătate.
+            $photos = new EquipmentPhotoService();
+            $upload = $_FILES['imagine'] ?? null;
+            $hasUpload = is_array($upload) && (int) ($upload['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_NO_FILE;
+            $newPhoto = $hasUpload ? $photos->store($upload) : null;
+
+            try {
+                $id = $this->model->saveCatalogItem($_POST);
+            } catch (Throwable $exception) {
+                $photos->delete($newPhoto);
+                throw $exception;
+            }
+
+            $oldPhoto = $this->model->getCatalogPhoto($id);
+            if ($newPhoto !== null) {
+                $this->model->setCatalogPhoto($id, $newPhoto);
+                $photos->delete($oldPhoto);
+            } elseif (!empty($_POST['sterge_imagine']) && $oldPhoto !== null) {
+                $this->model->setCatalogPhoto($id, null);
+                $photos->delete($oldPhoto);
+            }
 
             return 'Articolul din catalog a fost salvat.';
         }, ['action' => 'catalog']);
@@ -350,7 +375,13 @@ class DriverEquipmentController
         $this->guardPost('manage_catalog');
 
         $this->run(function (): string {
-            $this->model->deleteCatalogItem((int) ($_POST['id'] ?? 0));
+            $id = (int) ($_POST['id'] ?? 0);
+            $photo = $this->model->getCatalogPhoto($id);
+            $this->model->deleteCatalogItem($id);
+            // Fotografia pleacă doar dacă articolul chiar a fost șters (cel dezactivat o păstrează).
+            if ($photo !== null && !$this->model->catalogItemExists($id)) {
+                (new EquipmentPhotoService())->delete($photo);
+            }
 
             return 'Articolul a fost eliminat din catalog (sau dezactivat dacă are alocări).';
         }, ['action' => 'catalog']);

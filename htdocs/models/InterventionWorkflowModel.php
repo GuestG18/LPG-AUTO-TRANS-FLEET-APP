@@ -11,6 +11,10 @@ declare(strict_types=1);
  * Lucrarile stau in mentenanta_interventii_lucrari, pe componentele din catalogul
  * Reparatii Auto (mentenanta_auto_componente) — nu exista un al doilea catalog.
  */
+require_once dirname(__DIR__) . '/services/FinancialFoundationSchema.php';
+require_once dirname(__DIR__) . '/services/CostNature.php';
+require_once dirname(__DIR__) . '/services/PartsInventoryService.php';
+
 class InterventionWorkflowModel extends BaseModel
 {
     public const STATUS_LABELS = [
@@ -758,6 +762,14 @@ class InterventionWorkflowModel extends BaseModel
                 'vehicul_componenta_km' => $row['vehicle_id'] !== null && $row['component_vehicul_km'] !== null ? (int) $row['component_vehicul_km'] : null,
                 'origine' => (string) ($row['origine'] ?? ''),
                 'dispecer_editabila' => self::isDispatcherEditable($row),
+                // Fundatia financiara (NULL cat timp schema nu exista / campul nu e completat).
+                'natura_cost' => $row['natura_cost'] ?? null,
+                'proiect_investitie_id' => isset($row['proiect_investitie_id']) ? (int) $row['proiect_investitie_id'] : null,
+                'sursa_piesa' => $row['sursa_piesa'] ?? null,
+                'stock_part_id' => isset($row['stock_part_id']) ? (int) $row['stock_part_id'] : null,
+                'cantitate_piesa' => isset($row['cantitate_piesa']) ? (float) $row['cantitate_piesa'] : null,
+                'transfer_usage_id' => isset($row['transfer_usage_id']) ? (int) $row['transfer_usage_id'] : null,
+                'cost_piese_evaluat' => isset($row['cost_piese_evaluat']) ? (float) $row['cost_piese_evaluat'] : null,
             ];
         }
         return $items;
@@ -1248,7 +1260,8 @@ class InterventionWorkflowModel extends BaseModel
             if ($item['stare_evaluare'] === 'exclusa') {
                 continue;
             }
-            $parts += $item['cost_piese'];
+            // Piesa din stoc: costul receptiilor consumate (dupa finalizare), nu valoarea scrisa manual.
+            $parts += isset($item['cost_piese_evaluat']) && $item['cost_piese_evaluat'] !== null ? (float) $item['cost_piese_evaluat'] : $item['cost_piese'];
             $labor += $item['cost_manopera'];
         }
         $extra = (float) ($row['cost_suplimentar'] ?? 0);
@@ -1410,6 +1423,51 @@ class InterventionWorkflowModel extends BaseModel
      * Modificari din panoul lateral (doar campurile trimise). Sesizarea initiala nu se poate
      * modifica de aici; diagnosticul coordonatorului se salveaza separat de ea.
      */
+    /**
+     * Natura costului / proiectul de investitii la nivel de interventie (mostenite de lucrari fara natura proprie).
+     * Tratamentul contabil revine la implicit cand natura se schimba; „capitalizabil” doar prin
+     * FinancialClassificationService (motiv + istoric).
+     */
+    private function setFinancialClassification(array $existing, array $fields, ?int $userId): void
+    {
+        if (!FinancialFoundationSchema::isReady($this->db)) {
+            return;
+        }
+        $id = (int) $existing['id'];
+        $sets = [];
+        $params = [':id' => $id];
+        $log = [];
+        if (array_key_exists('natura_cost', $fields)) {
+            $nature = CostNature::normalize((string) $fields['natura_cost']);
+            if ($nature !== ($existing['natura_cost'] ?? null)) {
+                $sets[] = 'natura_cost = :n';
+                $sets[] = 'tratament_contabil = :t';
+                $params[':n'] = $nature;
+                $params[':t'] = $nature !== null ? CostNature::defaultTreatment($nature) : null;
+                $log['natura_cost'] = ['de_la' => $existing['natura_cost'] ?? null, 'la' => $nature];
+            }
+        }
+        if (array_key_exists('proiect_investitie_id', $fields)) {
+            $project = (int) $fields['proiect_investitie_id'];
+            if ($project > 0) {
+                $owner = $this->db->prepare('SELECT vehicle_id FROM investitii_proiecte WHERE id = :p');
+                $owner->execute([':p' => $project]);
+                $vehicle = $owner->fetchColumn();
+                if ($vehicle === false || (int) $vehicle !== (int) $existing['vehicle_id']) {
+                    throw new InvalidArgumentException('Proiectul de investiții nu aparține vehiculului intervenției.');
+                }
+            }
+            $sets[] = 'proiect_investitie_id = :p';
+            $params[':p'] = $project > 0 ? $project : null;
+            $log['proiect_investitie_id'] = ['de_la' => $existing['proiect_investitie_id'] ?? null, 'la' => $project > 0 ? $project : null];
+        }
+        if ($sets === []) {
+            return;
+        }
+        $this->db->prepare('UPDATE mentenanta_interventii_programate SET ' . implode(', ', $sets) . ' WHERE id = :id')->execute($params);
+        $this->logEvent($id, 'clasificare', 'Clasificare financiară actualizată', $log, $userId);
+    }
+
     public function updateFromPanel(int $id, array $fields, ?int $userId, bool $canCosts): array
     {
         $existing = $this->getIntervention($id);
@@ -1419,6 +1477,10 @@ class InterventionWorkflowModel extends BaseModel
         $currentKey = self::statusKey((string) $existing['status_interventie']);
         if (in_array($currentKey, ['finalizata', 'anulata'], true) && !(($fields['status'] ?? '') === 'de_verificat' && $currentKey === 'anulata')) {
             throw new InvalidArgumentException('Intervenția este ' . mb_strtolower(self::STATUS_LABELS[$currentKey], 'UTF-8') . ' și nu mai poate fi modificată.');
+        }
+
+        if ($canCosts && (array_key_exists('natura_cost', $fields) || array_key_exists('proiect_investitie_id', $fields))) {
+            $this->setFinancialClassification($existing, $fields, $userId);
         }
 
         $values = [];
@@ -1738,6 +1800,30 @@ class InterventionWorkflowModel extends BaseModel
             'garantie_luni' => $warrantyMonths !== '' && is_numeric($warrantyMonths) && (int) $warrantyMonths > 0 ? min(600, (int) $warrantyMonths) : null,
             'garantie_pana_la' => $this->isDate($warrantyDate) ? $warrantyDate : null,
             'observatii' => $this->nullIfEmpty((string) ($pick('observatii', '') ?? ''), 5000),
+        ] + $this->itemFinancialValues($pick);
+    }
+
+    /**
+     * Campurile financiare ale lucrarii (doar cand schema financiara exista): natura costului (NULL =
+     * mosteneste interventia), proiectul, sursa piesei (stoc / achizitie directa / atelier / transfer).
+     */
+    private function itemFinancialValues(callable $pick): array
+    {
+        if (!FinancialFoundationSchema::isReady($this->db)) {
+            return [];
+        }
+        $source = (string) ($pick('sursa_piesa', '') ?? '');
+        $quantity = (string) ($pick('cantitate_piesa', '') ?? '');
+        $stockPart = (int) ($pick('stock_part_id', 0) ?? 0);
+        $transfer = (int) ($pick('transfer_usage_id', 0) ?? 0);
+        $project = (int) ($pick('proiect_investitie_id', 0) ?? 0);
+        return [
+            'natura_cost' => CostNature::normalize((string) ($pick('natura_cost', '') ?? '')),
+            'proiect_investitie_id' => $project > 0 ? $project : null,
+            'sursa_piesa' => isset(CostNature::PART_SOURCES[$source]) ? $source : null,
+            'stock_part_id' => $stockPart > 0 ? $stockPart : null,
+            'cantitate_piesa' => $quantity !== '' && is_numeric($quantity) && (float) $quantity > 0 ? round((float) $quantity, 2) : null,
+            'transfer_usage_id' => $transfer > 0 ? $transfer : null,
         ];
     }
 
@@ -1807,6 +1893,9 @@ class InterventionWorkflowModel extends BaseModel
         $executionKm = (string) ($options['km'] ?? '');
         $executionKm = $executionKm !== '' && is_numeric($executionKm) ? max(0, (int) $executionKm) : null;
 
+        $financial = FinancialFoundationSchema::isReady($this->db);
+        $inventory = new PartsInventoryService($this->db);
+
         $this->db->beginTransaction();
         try {
             $stmt = $this->db->prepare('SELECT * FROM mentenanta_interventii_programate WHERE id = :id FOR UPDATE');
@@ -1872,6 +1961,12 @@ class InterventionWorkflowModel extends BaseModel
                         $update[$field] = $this->isDate((string) $outcome[$field]) ? (string) $outcome[$field] : null;
                     }
                 }
+                if ($financial) {
+                    $financialOutcome = array_intersect_key($outcome, array_flip(['natura_cost', 'proiect_investitie_id', 'sursa_piesa', 'stock_part_id', 'cantitate_piesa', 'transfer_usage_id']));
+                    if ($financialOutcome !== []) {
+                        $update += $this->itemFinancialValues(static fn (string $key, mixed $default = null) => array_key_exists($key, $financialOutcome) ? $financialOutcome[$key] : ($item[$key] ?? $default));
+                    }
+                }
                 $item = array_merge($item, $update);
 
                 $isReplacement = $item['operatiune'] === 'inlocuire' && $result === 'executata';
@@ -1913,11 +2008,119 @@ class InterventionWorkflowModel extends BaseModel
             }
             unset($item);
 
-            // 2. Inregistrarea finala in Intretinere / Reparatii (o singura data).
+            // 2. Piesele lucrarilor executate: din stoc (consum FIFO pe receptii, o singura data pe lucrare),
+            //    transfer de pe alt vehicul (cost istoric, fara achizitie noua) sau achizitie directa / atelier
+            //    (stocul nu se atinge). Costul piesei din stoc = costul receptiilor, nu cel scris manual.
+            $byId = array_column($items, null, 'id');
+            $stockUsages = []; // itemId => usage_id (consum / transfer facut aici)
+            $partsByItem = [];
+            foreach ($items as $item) {
+                if ($item['stare_evaluare'] === 'exclusa' || ($item['rezultat'] ?? null) !== 'executata') {
+                    continue;
+                }
+                $itemId = (int) $item['id'];
+                $partsByItem[$itemId] = (float) $item['cost_piese'];
+                $source = $financial ? ($item['sursa_piesa'] ?? null) : null;
+                if ($source === null || !empty($item['usage_id'])) {
+                    continue;
+                }
+                $targetVehicle = !empty($item['vehicle_id']) ? (int) $item['vehicle_id'] : (int) $intervention['vehicle_id'];
+                $isReplacement = in_array($itemId, $replacements, true);
+                $mountDate = (string) ($item['data_montare'] ?: $executionDate);
+                if ($source === 'stoc') {
+                    $part = !empty($item['stock_part_id'])
+                        ? ['id' => (int) $item['stock_part_id']]
+                        : (!empty($item['component_key']) ? $this->stockPartFor($partIndex, $components, (string) $item['component_key']) : null);
+                    if ($part === null) {
+                        throw new InvalidArgumentException('„' . $this->itemLabel($itemId) . '”: alege piesa din Stoc piese (sursa „Din stoc”).');
+                    }
+                    $consumed = $inventory->consume((int) $part['id'], (float) ($item['cantitate_piesa'] ?? 1) ?: 1.0, [
+                        'vehicle_id' => $targetVehicle,
+                        'scheduled_intervention_id' => $id,
+                        'data_montare' => $mountDate,
+                        'km_montare' => $item['km_montare'] ?? $executionKm,
+                        'montata_de' => $intervention['furnizor'] ?? null,
+                        'observatii' => 'Intervenția #' . $id . ': ' . $this->itemLabel($itemId) . ' (din stoc)',
+                        'component_key' => $isReplacement ? $item['component_key'] : null,
+                    ], 'interventie-lucrare-' . $itemId);
+                    $stockUsages[$itemId] = $consumed['usage_id'];
+                    $partsByItem[$itemId] = (float) $consumed['cost_total'];
+                    $this->db->prepare('UPDATE mentenanta_interventii_lucrari SET cost_piese_evaluat = :c WHERE id = :id')
+                        ->execute([':c' => $consumed['cost_total'], ':id' => $itemId]);
+                } elseif ($source === 'transfer_vehicul') {
+                    if (empty($item['transfer_usage_id'])) {
+                        throw new InvalidArgumentException('„' . $this->itemLabel($itemId) . '”: alege componenta montată de pe care se face transferul.');
+                    }
+                    $moved = $inventory->transfer((int) $item['transfer_usage_id'], $targetVehicle, [
+                        'scheduled_intervention_id' => $id,
+                        'data_montare' => $mountDate,
+                        'km_montare' => $item['km_montare'] ?? $executionKm,
+                        'montata_de' => $intervention['furnizor'] ?? null,
+                        'observatii' => 'Intervenția #' . $id . ': ' . $this->itemLabel($itemId) . ' (transfer)',
+                        'component_key' => $item['component_key'] ?? null,
+                    ], 'interventie-lucrare-' . $itemId);
+                    $stockUsages[$itemId] = $moved['usage_id'];
+                    $partsByItem[$itemId] = 0.0; // costul componentei a fost recunoscut la prima montare
+                    $this->db->prepare('UPDATE mentenanta_interventii_lucrari SET cost_piese_evaluat = 0 WHERE id = :id')->execute([':id' => $itemId]);
+                }
+            }
+
+            // 3. Inregistrarile finale in Intretinere / Reparatii, o singura data. O interventie cu lucrari de
+            //    naturi diferite (ex. reparatie + investitie) nu se forteaza intr-o singura clasificare: un rand
+            //    per natura x proiect; randul naturii interventiei (cu costul suplimentar) ramane cel principal.
+            $baseNature = CostNature::normalize($intervention['natura_cost'] ?? null) ?? CostNature::fromRecordType((string) $intervention['tip_interventie']);
+            $baseProject = !empty($intervention['proiect_investitie_id']) ? (int) $intervention['proiect_investitie_id'] : null;
+            $baseKey = $baseNature . '|' . (int) $baseProject;
+            $groups = [$baseKey => ['natura' => $baseNature, 'proiect' => $baseProject, 'labor' => 0.0, 'parts' => 0.0, 'lines' => [], 'items' => []]];
+            foreach ($items as $item) {
+                if ($item['stare_evaluare'] === 'exclusa' || ($item['rezultat'] ?? null) !== 'executata') {
+                    continue;
+                }
+                $itemId = (int) $item['id'];
+                $nature = $financial ? (CostNature::normalize($item['natura_cost'] ?? null) ?? $baseNature) : $baseNature;
+                $project = $financial && !empty($item['proiect_investitie_id']) ? (int) $item['proiect_investitie_id'] : $baseProject;
+                $key = $nature . '|' . (int) $project;
+                $groups[$key] ??= ['natura' => $nature, 'proiect' => $project, 'labor' => 0.0, 'parts' => 0.0, 'lines' => [], 'items' => []];
+                $groups[$key]['labor'] += (float) $item['cost_manopera'];
+                $groups[$key]['parts'] += $partsByItem[$itemId] ?? (float) $item['cost_piese'];
+                $groups[$key]['lines'][] = $this->itemLabel($itemId) . ' — ' . self::OPERATION_LABELS[(string) $item['operatiune']];
+                $groups[$key]['items'][] = $itemId;
+            }
+
             $maintenanceId = !empty($intervention['converted_maintenance_id']) ? (int) $intervention['converted_maintenance_id'] : 0;
             $extra = (float) $intervention['cost_suplimentar'];
-            if ($maintenanceId <= 0) {
-                $diagnosis = trim((string) ($intervention['diagnostic_tehnic'] ?? ''));
+            $diagnosis = trim((string) ($intervention['diagnostic_tehnic'] ?? ''));
+            $groupMaintenance = [];
+            foreach ($groups as $key => $group) {
+                $isBase = $key === $baseKey;
+                if (!$isBase && $group['items'] === []) {
+                    continue;
+                }
+                if ($isBase && $maintenanceId > 0) {
+                    $groupMaintenance[$key] = $maintenanceId;
+                    continue;
+                }
+                if (!$isBase) {
+                    // Reluare dupa o finalizare partiala: randul acestei naturi exista deja.
+                    $existing = $this->db->prepare('SELECT id FROM mentenanta WHERE source_intervention_id = :s AND natura_cost = :n AND proiect_investitie_id <=> :p AND id <> :m LIMIT 1');
+                    $existing->execute([':s' => $id, ':n' => $group['natura'], ':p' => $group['proiect'], ':m' => $maintenanceId]);
+                    $found = (int) ($existing->fetchColumn() ?: 0);
+                    if ($found > 0) {
+                        $groupMaintenance[$key] = $found;
+                        continue;
+                    }
+                }
+                // record_type ca pana acum pentru randul principal fara natura explicita; altfel din natura.
+                $recordType = $financial && !($isBase && empty($intervention['natura_cost']))
+                    ? CostNature::recordTypeFor($group['natura'])
+                    : ($intervention['tip_interventie'] === 'reparatie' ? 'reparatie' : 'intretinere');
+                $groupExtra = $isBase ? $extra : 0.0;
+                $replacedNames = [];
+                foreach ($group['items'] as $itemId) {
+                    if (in_array($itemId, $replacements, true)) {
+                        $replacedNames[] = trim((string) ($byId[$itemId]['piesa_montata'] ?: $this->itemLabel($itemId)));
+                    }
+                }
                 $this->db->prepare(
                     "INSERT INTO mentenanta
                         (vehicle_id, tip_interventie, record_type, centru_cost, descriere, status_interventie,
@@ -1929,31 +2132,73 @@ class InterventionWorkflowModel extends BaseModel
                          :parts_used, :notes, :source_id, :created_at, :updated_at)"
                 )->execute([
                     ':vehicle_id' => (int) $intervention['vehicle_id'],
-                    ':tip' => mb_substr(trim((string) $intervention['descriere']) ?: 'Intervenție programată', 0, 190),
-                    ':record_type' => $intervention['tip_interventie'] === 'reparatie' ? 'reparatie' : 'intretinere',
+                    ':tip' => mb_substr((trim((string) $intervention['descriere']) ?: 'Intervenție programată') . ($isBase ? '' : ' — ' . CostNature::NATURES[$group['natura']]), 0, 190),
+                    ':record_type' => $recordType,
                     ':center' => $this->nullIfEmpty((string) ($intervention['centru_cost'] ?? ''), 80),
                     ':description' => mb_substr(trim($diagnosis !== '' ? $diagnosis : (string) $intervention['descriere']), 0, 5000),
                     ':date' => $executionDate,
                     ':km' => $executionKm,
-                    ':cost_total' => round($labor + $parts + $extra, 2),
-                    ':cost_labor' => round($labor, 2),
-                    ':cost_parts' => round($parts, 2),
+                    ':cost_total' => round($group['labor'] + $group['parts'] + $groupExtra, 2),
+                    ':cost_labor' => round($group['labor'], 2),
+                    ':cost_parts' => round($group['parts'], 2),
                     ':supplier' => $this->nullIfEmpty((string) ($intervention['furnizor'] ?? ''), 190),
                     ':parts_used' => $replacedNames !== [] ? mb_substr(implode(', ', $replacedNames), 0, 2000) : null,
-                    ':notes' => mb_substr('Din intervenția #' . $id . ($lines !== [] ? ': ' . implode('; ', $lines) : ''), 0, 5000),
+                    ':notes' => mb_substr('Din intervenția #' . $id . ($group['lines'] !== [] ? ': ' . implode('; ', $group['lines']) : ''), 0, 5000),
                     ':source_id' => $id,
                     ':created_at' => $now,
                     ':updated_at' => $now,
                 ]);
-                $maintenanceId = (int) $this->db->lastInsertId();
+                $newId = (int) $this->db->lastInsertId();
+                if ($financial) {
+                    // Tratamentul confirmat pe interventie se propaga doar randului cu aceeasi natura.
+                    $treatment = CostNature::defaultTreatment($group['natura']);
+                    if ($group['natura'] === ($intervention['natura_cost'] ?? null) && !empty($intervention['tratament_contabil'])) {
+                        $treatment = (string) $intervention['tratament_contabil'];
+                    }
+                    $this->db->prepare(
+                        "UPDATE mentenanta SET natura_cost = :n, natura_cost_origine = :o, tratament_contabil = :t,
+                            proiect_investitie_id = :p, sursa_tip = 'interventie', sursa_id = :s WHERE id = :id"
+                    )->execute([
+                        ':n' => $group['natura'],
+                        ':o' => ($isBase && $intervention['natura_cost'] === null) ? 'derivat' : 'explicit',
+                        ':t' => $treatment,
+                        ':p' => $group['proiect'],
+                        ':s' => $id,
+                        ':id' => $newId,
+                    ]);
+                }
+                $groupMaintenance[$key] = $newId;
+                if ($isBase) {
+                    $maintenanceId = $newId;
+                }
+            }
+            $maintenanceFor = static function (int $itemId) use ($groups, $groupMaintenance, $maintenanceId): int {
+                foreach ($groups as $key => $group) {
+                    if (in_array($itemId, $group['items'], true)) {
+                        return $groupMaintenance[$key] ?? $maintenanceId;
+                    }
+                }
+                return $maintenanceId;
+            };
+
+            // Consumurile / transferurile facute la pasul 2 se leaga de inregistrarea lor.
+            foreach ($stockUsages as $itemId => $usageId) {
+                $itemMaintenance = $maintenanceFor($itemId);
+                $this->db->prepare('UPDATE mentenanta_piese_utilizari SET maintenance_id = :m WHERE id = :u')->execute([':m' => $itemMaintenance, ':u' => $usageId]);
+                if (in_array($itemId, $replacements, true)) {
+                    $this->db->prepare('UPDATE mentenanta_interventii_lucrari SET usage_id = :u, maintenance_id = :m WHERE id = :id')
+                        ->execute([':u' => $usageId, ':m' => $itemMaintenance, ':id' => $itemId]);
+                    $mounts = ($mounts ?? 0) + 1;
+                    $this->logEvent($id, 'inlocuire', 'Înlocuire înregistrată în istoricul componentei: ' . $this->itemLabel($itemId)
+                        . ' (' . CostNature::PART_SOURCES[(string) $byId[$itemId]['sursa_piesa']] . ')', ['usage_id' => $usageId], $userId);
+                }
             }
 
-            // 3. Inlocuirile confirmate -> istoricul componentei (montare), o singura data pe lucrare.
-            $mounts = 0;
-            $byId = array_column($items, null, 'id');
+            // 4'. Inlocuirile confirmate fara stoc -> istoricul componentei (montare directa), o singura data pe lucrare.
+            $mounts = $mounts ?? 0;
             foreach ($replacements as $itemId) {
                 $item = $byId[$itemId];
-                if (!empty($item['usage_id'])) {
+                if (!empty($item['usage_id']) || isset($stockUsages[$itemId])) {
                     continue;
                 }
                 $part = $this->stockPartFor($partIndex, $components, (string) $item['component_key']);
@@ -1972,7 +2217,8 @@ class InterventionWorkflowModel extends BaseModel
                     . ($item['piesa_montata'] ? '; montat: ' . $item['piesa_montata'] : '')
                     . ($item['piesa_demontata'] ? '; demontat: ' . $item['piesa_demontata'] : '')
                     . ($warranty !== [] ? '; garanție ' . implode(', ', $warranty) : '');
-                // Montare directa (piesa adusa de service): stocul nu scade, ca la Registrul de piese.
+                $itemMaintenance = $maintenanceFor($itemId);
+                // Montare directa (piesa adusa de service / cumparata direct): stocul nu scade.
                 $this->db->prepare(
                     'INSERT INTO mentenanta_piese_utilizari
                         (part_id, maintenance_id, scheduled_intervention_id, vehicle_id, cantitate,
@@ -1980,7 +2226,7 @@ class InterventionWorkflowModel extends BaseModel
                      VALUES (:part, :maintenance, :scheduled, :vehicle, 1, :cost, :date, :km, :by, :notes, 1, :created_at)'
                 )->execute([
                     ':part' => (int) $part['id'],
-                    ':maintenance' => $maintenanceId,
+                    ':maintenance' => $itemMaintenance,
                     ':scheduled' => $id,
                     // Componenta de pe semiremorca cuplata se monteaza pe semiremorca.
                     ':vehicle' => !empty($item['vehicle_id']) ? (int) $item['vehicle_id'] : (int) $intervention['vehicle_id'],
@@ -1992,14 +2238,25 @@ class InterventionWorkflowModel extends BaseModel
                     ':created_at' => $now,
                 ]);
                 $usageId = (int) $this->db->lastInsertId();
+                if ($financial) {
+                    $this->db->prepare('UPDATE mentenanta_piese_utilizari SET sursa_piesa = :s, idempotency_key = :k WHERE id = :id')->execute([
+                        ':s' => ($item['sursa_piesa'] ?? null) === 'atelier_extern' ? 'atelier_extern' : 'achizitie_directa',
+                        ':k' => 'interventie-lucrare-' . $itemId,
+                        ':id' => $usageId,
+                    ]);
+                }
                 $this->db->prepare('UPDATE mentenanta_interventii_lucrari SET usage_id = :u, maintenance_id = :m WHERE id = :id')
-                    ->execute([':u' => $usageId, ':m' => $maintenanceId, ':id' => $itemId]);
+                    ->execute([':u' => $usageId, ':m' => $itemMaintenance, ':id' => $itemId]);
                 $mounts++;
                 $this->logEvent($id, 'inlocuire', 'Înlocuire înregistrată în istoricul componentei: ' . $this->itemLabel($itemId)
                     . ($item['km_montare'] !== null ? ' la ' . number_format((int) $item['km_montare'], 0, ',', '.') . ' km' : ''), ['usage_id' => $usageId], $userId);
             }
-            $this->db->prepare('UPDATE mentenanta_interventii_lucrari SET maintenance_id = :m WHERE intervention_id = :i AND rezultat = \'executata\' AND maintenance_id IS NULL')
-                ->execute([':m' => $maintenanceId, ':i' => $id]);
+            foreach ($groups as $key => $group) {
+                foreach ($group['items'] as $itemId) {
+                    $this->db->prepare('UPDATE mentenanta_interventii_lucrari SET maintenance_id = :m WHERE id = :id AND maintenance_id IS NULL')
+                        ->execute([':m' => $groupMaintenance[$key] ?? $maintenanceId, ':id' => $itemId]);
+                }
+            }
 
             // 4. Lucrarile amanate: raman nerezolvate aici si, la cerere, devin o interventie noua.
             $followUpId = null;

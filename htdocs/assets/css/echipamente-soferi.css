@@ -1332,3 +1332,58 @@ mark.des-mark {
     .des-header-actions { width: 100%; }
     .des-header-actions .des-btn { flex: 1 1 auto; justify-content: center; }
 }
+
+/* ------------------------------------------------ Fotografia articolului -- */
+
+.des-photo-field {
+    align-items: flex-start;
+    display: flex;
+    gap: .9rem;
+}
+
+.des-photo-preview {
+    align-items: center;
+    background: #f1f5fb;
+    border: 1px dashed #cbd5e1;
+    border-radius: 14px;
+    color: #94a3b8;
+    display: inline-flex;
+    flex: 0 0 auto;
+    font-size: 1.6rem;
+    height: 88px;
+    justify-content: center;
+    overflow: hidden;
+    width: 88px;
+}
+
+.des-photo-preview.has-photo {
+    background: #fff;
+    border-style: solid;
+}
+
+.des-photo-preview img {
+    height: 100%;
+    object-fit: contain;
+    width: 100%;
+}
+
+.des-photo-preview.is-removed img {
+    filter: grayscale(1);
+    opacity: .35;
+}
+
+.des-photo-controls {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.des-photo-thumb {
+    background: #fff;
+    border: 1px solid var(--des-border);
+    border-radius: 8px;
+    height: 32px;
+    margin-right: .5rem;
+    object-fit: contain;
+    vertical-align: middle;
+    width: 32px;
+}

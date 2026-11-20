@@ -749,7 +749,7 @@
             returnabil: 0, urmareste_stare: 1, inlocuire_periodica: 0, durata_standard_luni: 0,
             urmareste_expirare: 0, necesita_marime: 0, necesita_identificator: 0, serializat: 0,
             cost_implicit: 0, cost_lunar: '', prag_minim_stoc: 0,
-            locatie_implicita: 'Depozit principal', activ: 1
+            locatie_implicita: 'Depozit principal', activ: 1, observatii: ''
         };
 
         function fill(values) {
@@ -767,6 +767,62 @@
                 }
             });
             setText(catalogModal, 'titlu', values.id ? 'Editează articolul' : 'Articol nou');
+            showPhoto(values.imagine_url || '');
+        }
+
+        // Fotografia articolului: previzualizare din fișierul ales sau din cea salvată.
+        const photoInput = catalogModal.querySelector('[data-des-photo-input]');
+        const photoPreview = catalogModal.querySelector('[data-des-photo-preview]');
+        const photoRemove = catalogModal.querySelector('[data-des-photo-remove]');
+        let previewUrl = null;
+
+        function showPhoto(url) {
+            if (!photoPreview) {
+                return;
+            }
+            if (previewUrl) {
+                URL.revokeObjectURL(previewUrl);
+                previewUrl = null;
+            }
+            if (photoInput) {
+                photoInput.value = '';
+            }
+            if (photoRemove) {
+                photoRemove.checked = false;
+                photoRemove.closest('[data-des-photo-remove-wrap]').hidden = !url;
+            }
+            photoPreview.innerHTML = url
+                ? '<img alt="" src="' + url.replace(/"/g, '&quot;') + '">'
+                : '<i class="bi bi-image" aria-hidden="true"></i>';
+            photoPreview.classList.toggle('has-photo', !!url);
+        }
+
+        if (photoInput) {
+            photoInput.addEventListener('change', function () {
+                const file = photoInput.files && photoInput.files[0];
+                if (!file) {
+                    return;
+                }
+                if (file.size > 5 * 1024 * 1024) {
+                    window.alert('Fotografia depășește limita de 5 MB.');
+                    photoInput.value = '';
+                    return;
+                }
+                if (previewUrl) {
+                    URL.revokeObjectURL(previewUrl);
+                }
+                previewUrl = URL.createObjectURL(file);
+                photoPreview.innerHTML = '<img alt="" src="' + previewUrl + '">';
+                photoPreview.classList.add('has-photo');
+                if (photoRemove) {
+                    photoRemove.checked = false;
+                }
+            });
+        }
+        if (photoRemove) {
+            photoRemove.addEventListener('change', function () {
+                photoPreview.classList.toggle('is-removed', photoRemove.checked);
+            });
         }
 
         document.addEventListener('click', function (event) {

@@ -521,7 +521,7 @@ class DriverEquipmentModel extends BaseModel
                 c.denumire, c.categorie, c.grupa, c.tip_logic, c.returnabil, c.destinatie,
                 c.urmareste_stare, c.inlocuire_periodica, c.durata_standard_luni,
                 c.urmareste_expirare, c.necesita_marime, c.necesita_identificator,
-                c.locatie_implicita,
+                c.locatie_implicita, c.imagine,
                 COALESCE(s.nume, sm.nume_complet) AS detinator_nume,
                 COALESCE(a.driver_id, a.staff_id) AS detinator_id,
                 sm.functie AS detinator_functie,
@@ -885,7 +885,7 @@ class DriverEquipmentModel extends BaseModel
         $statement = $this->db->prepare("
             SELECT st.*, c.denumire, c.categorie, c.grupa, c.tip_logic, c.returnabil,
                    c.serializat, c.necesita_marime, c.cost_lunar, c.durata_standard_luni,
-                   c.prag_minim_stoc
+                   c.prag_minim_stoc, c.imagine
             FROM echipamente_stoc st
             INNER JOIN echipamente_catalog c ON c.id = st.catalog_id
             WHERE " . implode(' AND ', $conditions) . "
@@ -2001,6 +2001,12 @@ class DriverEquipmentModel extends BaseModel
             throw new InvalidArgumentException('Denumirea articolului este obligatorie.');
         }
 
+        // Observațiile se rescriu doar dacă formularul le trimite: un formular fără
+        // acest câmp nu trebuie să șteargă notițele existente ale articolului.
+        if ($id > 0 && !array_key_exists('observatii', $data)) {
+            unset($fields['observatii']);
+        }
+
         if ($id > 0) {
             $sets = [];
             foreach (array_keys($fields) as $key) {
@@ -2030,6 +2036,47 @@ class DriverEquipmentModel extends BaseModel
     }
 
     /** Articolul folosit deja într-o alocare se dezactivează, nu se șterge. */
+    /**
+     * Coloana `imagine` (fotografia articolului) — adăugată la nevoie, o dată pe
+     * cerere, ca pagina să meargă și pe un server unde migrarea nu a rulat.
+     * Vezi database/update_echipamente_catalog_imagine.sql.
+     */
+    public function ensurePhotoColumn(): void
+    {
+        static $checked = false;
+        if ($checked) {
+            return;
+        }
+        $checked = true;
+        $exists = $this->db->query("SHOW COLUMNS FROM echipamente_catalog LIKE 'imagine'")->fetch();
+        if (!$exists) {
+            $this->db->exec('ALTER TABLE echipamente_catalog ADD COLUMN imagine VARCHAR(64) DEFAULT NULL AFTER observatii');
+        }
+    }
+
+    public function getCatalogPhoto(int $id): ?string
+    {
+        $statement = $this->db->prepare('SELECT imagine FROM echipamente_catalog WHERE id = :id');
+        $statement->execute(['id' => $id]);
+        $value = $statement->fetchColumn();
+
+        return is_string($value) && $value !== '' ? $value : null;
+    }
+
+    public function setCatalogPhoto(int $id, ?string $filename): void
+    {
+        $statement = $this->db->prepare('UPDATE echipamente_catalog SET imagine = :imagine, updated_at = NOW() WHERE id = :id');
+        $statement->execute(['imagine' => $filename, 'id' => $id]);
+    }
+
+    public function catalogItemExists(int $id): bool
+    {
+        $statement = $this->db->prepare('SELECT 1 FROM echipamente_catalog WHERE id = :id');
+        $statement->execute(['id' => $id]);
+
+        return (bool) $statement->fetchColumn();
+    }
+
     public function deleteCatalogItem(int $id): void
     {
         $statement = $this->db->prepare('SELECT COUNT(*) FROM echipamente_alocari WHERE catalog_id = :id');
@@ -2832,6 +2879,8 @@ class DriverEquipmentModel extends BaseModel
                     'valoare' => $lineValue,
                     'status' => self::STATUSES[(string) $item['status']] ?? (string) $item['status'],
                     'de_inlocuit' => in_array((string) $item['status'], self::REPLACEMENT_STATUSES, true),
+                    'catalog_id' => (int) $item['catalog_id'],
+                    'imagine' => $item['imagine'] ?? null,
                 ];
 
                 if (!isset($categories[$key])) {
@@ -3008,7 +3057,7 @@ class DriverEquipmentModel extends BaseModel
 
         $rows = $this->prepared("
             SELECT a.id, a.catalog_id, a.cantitate, a.marime, a.cost_unitar, a.data_predarii, a.status, a.stare,
-                   c.denumire, c.categorie, c.grupa, c.returnabil,
+                   c.denumire, c.categorie, c.grupa, c.returnabil, c.imagine,
                    COALESCE(a.driver_id, a.staff_id) AS detinator_id,
                    COALESCE(s.nume, sm.nume_complet) AS detinator_nume,
                    COALESCE(s.status, sm.status) AS detinator_status,
@@ -3078,6 +3127,7 @@ class DriverEquipmentModel extends BaseModel
                 'returnabil' => (int) $row['returnabil'],
                 'status_raw' => (string) $row['status'],
                 'stare_raw' => (string) $row['stare'],
+                'imagine' => $row['imagine'] ?? null,
             ];
             if (!isset($owner['categorii'][$visual['slug']])) {
                 $owner['categorii'][$visual['slug']] = [
@@ -3210,6 +3260,7 @@ class DriverEquipmentModel extends BaseModel
                 'status' => self::STATUSES[(string) $item['status']] ?? (string) $item['status'],
                 'stoc' => $inStock,
                 'stoc_ok' => $inStock >= $qty,
+                'imagine' => $item['imagine'] ?? null,
             ];
             if (!isset($owner['categorii'][$visual['slug']])) {
                 $owner['categorii'][$visual['slug']] = [
@@ -3249,5 +3300,43 @@ class DriverEquipmentModel extends BaseModel
         $totals['articole'] = count($articleIds);
 
         return ['owners' => $owners, 'totals' => $totals];
+    }
+
+    /**
+     * Galeria pe categorii (clic pe un punct de pe siluetă): toate articolele din
+     * catalog grupate după aceeași cheie de categorie ca punctele și casetele.
+     * Prețul = costul implicit din catalog, stocul = bucățile disponibile (stoc_total
+     * din getCatalog). URL-ul fotografiei se rezolvă în view (EquipmentPhotoService).
+     *
+     * @param array<int, array<string, mixed>> $catalogItems rânduri din getCatalog()
+     * @return array<string, array{name: string, icon: string, items: array<int, array<string, mixed>>}>
+     */
+    public function buildCategoryGallery(array $catalogItems): array
+    {
+        $gallery = [];
+        foreach ($catalogItems as $item) {
+            $name = trim((string) $item['categorie']) !== '' ? trim((string) $item['categorie']) : 'Fără categorie';
+            $visual = $this->categoryVisual($name);
+            $key = $visual['slug'];
+            if (!isset($gallery[$key])) {
+                $gallery[$key] = ['name' => $name, 'icon' => $visual['icon'], 'items' => []];
+            }
+            $gallery[$key]['items'][] = [
+                'id' => (int) $item['id'],
+                'denumire' => (string) $item['denumire'],
+                'imagine' => $item['imagine'] ?? null,
+                'pret' => (float) $item['cost_implicit'] > 0 ? (float) $item['cost_implicit'] : null,
+                'stoc' => (int) ($item['stoc_total'] ?? 0),
+                'destinatie' => (string) ($item['destinatie'] ?? 'ambele'),
+                'activ' => (int) $item['activ'] === 1,
+                'marime' => (int) $item['necesita_marime'] === 1,
+            ];
+        }
+        foreach ($gallery as &$category) {
+            usort($category['items'], static fn(array $a, array $b): int => ($b['imagine'] !== null) <=> ($a['imagine'] !== null) ?: strcoll($a['denumire'], $b['denumire']));
+        }
+        unset($category);
+
+        return $gallery;
     }
 }

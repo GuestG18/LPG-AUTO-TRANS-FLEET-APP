@@ -1159,3 +1159,28 @@
 .dcx-nav-cat .dcx-thumb {
     background-color: #f1f5fb;
 }
+
+/* Rândul deschis din carusel („Vezi în tabel”) clipește scurt. */
+.dcx-row.is-flash > td {
+    animation: dcxFlash 1.6s ease;
+}
+
+@keyframes dcxFlash {
+    0%, 40% { background: #dbeafe; }
+    100% { background: transparent; }
+}
+
+@media (max-width: 559.98px) {
+    .dcx-stage-foot {
+        flex-wrap: wrap;
+        gap: .4rem .7rem;
+    }
+
+    .dcx-foot-label {
+        flex-basis: calc(100% - 2.2rem);
+    }
+
+    .dcx-foot-label strong {
+        white-space: nowrap;
+    }
+}

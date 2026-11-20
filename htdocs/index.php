@@ -456,6 +456,8 @@ require_once __DIR__ . '/controllers/LeasingSchedulerController.php';
 require_once __DIR__ . '/controllers/TransportTariffController.php';
 require_once __DIR__ . '/controllers/FuelFxAdjustmentController.php';
 require_once __DIR__ . '/controllers/OperationalCostController.php';
+require_once __DIR__ . '/controllers/VehicleFinancialHistoryController.php';
+require_once __DIR__ . '/controllers/ProfitabilityController.php';
 require_once __DIR__ . '/controllers/DevOcrTestController.php';
 require_once __DIR__ . '/controllers/OcrPartsController.php';
 
@@ -850,6 +852,16 @@ try {
         case 'cost_operational':
             require_auth();
             (new OperationalCostController($db))->handle($action);
+            break;
+
+        case 'istoric_financiar':
+            require_auth();
+            (new VehicleFinancialHistoryController($db))->handle($action);
+            break;
+
+        case 'rentabilitate':
+            require_auth();
+            (new ProfitabilityController($db))->handle($action);
             break;
 
         case 'notificari':

@@ -491,6 +491,22 @@
         // Alte fise in acelasi panou (ex. Km service): URL-ul fisei, fara marcajul "vazuta" al cursei.
         openUrl: function (url, originEl) {
             open(url, originEl, '');
+        },
+        // Inchide panoul deschis (animatia de strangere); onClosed dupa ce a disparut din pagina.
+        close: function (onClosed) {
+            var state = active;
+            if (state === null) {
+                if (typeof onClosed === 'function') { onClosed(); }
+                return;
+            }
+            close();
+            if (typeof onClosed === 'function') {
+                var waitClosed = function () {
+                    if (state.overlay.isConnected) { window.setTimeout(waitClosed, 40); return; }
+                    onClosed();
+                };
+                waitClosed();
+            }
         }
     };
 

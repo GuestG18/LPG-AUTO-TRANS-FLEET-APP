@@ -20,6 +20,7 @@ return [
         'configurare' => 'Configurare',
         'export'      => 'Export & rapoarte',
         'stoc'        => 'Stocuri',
+        'financiar'   => 'Financiar',
     ],
     'actions'     => [
         'view'          => ['label' => 'Prezentare generală'],
@@ -39,8 +40,11 @@ return [
         // Schema vehiculului din Reparatii Auto: montare / inlocuire / demontare pe loc, inspectii, atribute axe.
         'components_manage' => ['label' => 'Componente vehicul (montare, inspecție, atribute axe)', 'group' => 'stoc'],
         'export'        => ['label' => 'Export CSV', 'group' => 'export'],
+        // Natura costului si tratamentul contabil (capitalizabil / cheltuiala), cu istoric in financiar_audit.
+        'financial_classification' => ['label' => 'Clasificare financiară (natură cost, tratament contabil)', 'group' => 'financiar', 'default_admin' => true, 'sensitive' => true],
     ],
     'endpoints'   => [
+        'financial_classify'         => 'financial_classification',
         'save_intervention'          => 'interventions',
         'delete_intervention'        => 'interventions',
         'intervention_list'          => 'interventions',

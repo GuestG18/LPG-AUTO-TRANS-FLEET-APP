@@ -24,7 +24,7 @@ foreach ($rOwners as $owner) {
     $jsReturnOwners[(string) $owner['id']] = [
         'nume' => $owner['nume'], 'initiale' => $owner['initiale'], 'meta' => $owner['meta'], 'inactiv' => $owner['inactiv'],
         'articole' => $owner['articole'], 'bucati' => $owner['bucati'], 'valoare' => round($owner['valoare'], 2),
-        'linii' => count($owner['linii']), 'pretLipsa' => $owner['pret_lipsa'],
+        'linii' => count($owner['linii']), 'pretLipsa' => $owner['pret_lipsa'], 'foto' => $personPhotos($owner['linii']), 'catalogIds' => $ownedIds($owner['linii']),
         'categorii' => array_map(static fn(array $c): array => [
             'key' => $c['key'], 'name' => $c['name'], 'icon' => $c['icon'], 'anchor' => $c['anchor'],
             'articole' => $c['articole'], 'bucati' => $c['bucati'], 'valoare' => round($c['valoare'], 2),
@@ -124,6 +124,9 @@ foreach ($rOwners as $owner) {
                     <img class="dcv-figure-img <?= $defaultVariant === 'm' ? 'is-active' : '' ?>" data-variant="m" src="<?= e($img($role, 'm')) ?>" alt="" draggable="false">
                     <img class="dcv-figure-img <?= $defaultVariant === 'f' ? 'is-active' : '' ?>" data-variant="f" src="<?= e($img($role, 'f')) ?>" alt="" draggable="false">
                     <div class="dcv-dots" data-dcr-dots></div>
+                    </div>
+                    <svg class="dcv-bubble-links" data-bubble-links aria-hidden="true" focusable="false"></svg>
+                    <div class="dcv-bubbles" data-bubbles>
                 </div>
             </div>
 
@@ -179,7 +182,8 @@ foreach ($rOwners as $owner) {
                                     <tr class="dcr-line" data-owner="<?= e((string) $owner['id']) ?>" data-cat="<?= e($line['cat']) ?>" data-line="<?= e((string) $line['id']) ?>" hidden tabindex="0">
                                         <td>
                                             <div class="dcv-item-name">
-                                                <span class="dcv-item-ico" aria-hidden="true"><i class="bi <?= e($line['icon']) ?>"></i></span>
+                                                <?php $photo = $linePhoto($line); ?>
+                                                <?php if ($photo !== null): ?><span class="dcv-item-ico is-photo" aria-hidden="true"><img src="<?= e($photo) ?>" alt="" loading="lazy"></span><?php else: ?><span class="dcv-item-ico" aria-hidden="true"><i class="bi <?= e($line['icon']) ?>"></i></span><?php endif; ?>
                                                 <div>
                                                     <strong><?= e($line['denumire']) ?><?= $line['marime'] !== '' ? ' <small>' . e($line['marime']) . '</small>' : '' ?></strong>
                                                     <span>stare: <?= e($line['stare']) ?></span>

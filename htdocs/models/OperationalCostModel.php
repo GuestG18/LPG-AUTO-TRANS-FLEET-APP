@@ -13,6 +13,9 @@ declare(strict_types=1);
  *
  * NU scrie niciodată în datele tranzacționale. Simularea nu trece pe aici.
  */
+require_once dirname(__DIR__) . '/services/FinancialFoundationSchema.php';
+require_once dirname(__DIR__) . '/services/CostNature.php';
+
 class OperationalCostModel extends BaseModel
 {
     /** Tipurile de vehicule considerate operaționale (grele) în modelul de cost. */
@@ -373,8 +376,11 @@ class OperationalCostModel extends BaseModel
      *
      * @return array<int,array<string,mixed>>
      */
-    public function getActiveDriversWithSalary(string $monthEnd): array
+    public function getActiveDriversWithSalary(string $monthEnd, array $alsoDriverIds = []): array
     {
+        // $alsoDriverIds: soferi azi inactivi, dar cu activitate in perioada analizata (mod istoric).
+        $also = array_values(array_filter(array_map('intval', $alsoDriverIds)));
+        $alsoSql = $also !== [] ? ' OR s.id IN (' . implode(',', $also) . ')' : '';
         $stmt = $this->db->prepare(
             'SELECT s.id, s.nume, s.vehicle_id,
                     (SELECT sv.vehicle_id FROM soferi_vehicule sv
@@ -387,7 +393,7 @@ class OperationalCostModel extends BaseModel
                         s.salariu
                     ) AS salariu_luna
                FROM soferi s
-              WHERE s.status = "activ"
+              WHERE (s.status = "activ"' . $alsoSql . ')
               ORDER BY s.nume ASC'
         );
         $stmt->execute(['me' => $monthEnd]);
@@ -713,24 +719,87 @@ class OperationalCostModel extends BaseModel
      */
     public function getMaintenancePeriodCosts(string $dateStart, string $dateEnd, string $recordType): array
     {
+        if (!FinancialFoundationSchema::isReady($this->db)) {
+            $stmt = $this->db->prepare(
+                'SELECT m.vehicle_id,
+                        COUNT(*) AS items,
+                        COALESCE(SUM(m.cost), 0) AS total
+                   FROM mentenanta m
+                  WHERE m.record_type = :rt
+                    AND m.tip_interventie NOT LIKE "Anvelopa - %"
+                    AND (m.status_interventie IS NULL OR m.status_interventie <> "anulata")
+                    AND m.data_interventie BETWEEN :ds AND :de
+                  GROUP BY m.vehicle_id'
+            );
+            $stmt->execute(['rt' => $recordType, 'ds' => $dateStart, 'de' => $dateEnd]);
+            $out = [];
+            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
+                $out[(int) $row['vehicle_id']] = ['total' => (float) $row['total'], 'items' => (int) $row['items'],
+                    'capitalizat_exclus' => 0.0, 'capitalizat_items' => 0, 'investitii_neconfirmate' => 0.0];
+            }
+            return $out;
+        }
+
+        // Natura efectiva: revizii = mentenanta; reparatii = reparatie + investitii / echipari NEcapitalizate
+        // (de_confirmat / cheltuiala raman cost operational, ca pana acum). Doar investitiile confirmate
+        // capitalizabile ies din costul operational si se raporteaza separat (fara amortizare inventata).
+        $nature = CostNature::sqlEffectiveNature('m');
+        $capitalized = CostNature::sqlIsCapitalized('m');
+        $natureFilter = $recordType === 'intretinere' ? "$nature = 'mentenanta'" : "$nature <> 'mentenanta'";
         $stmt = $this->db->prepare(
-            'SELECT m.vehicle_id,
-                    COUNT(*) AS items,
-                    COALESCE(SUM(m.cost), 0) AS total
+            "SELECT m.vehicle_id,
+                    SUM(CASE WHEN $capitalized THEN 0 ELSE 1 END) AS items,
+                    COALESCE(SUM(CASE WHEN $capitalized THEN 0 ELSE m.cost END), 0) AS total,
+                    COALESCE(SUM(CASE WHEN $capitalized THEN m.cost ELSE 0 END), 0) AS capitalizat_exclus,
+                    SUM(CASE WHEN $capitalized THEN 1 ELSE 0 END) AS capitalizat_items,
+                    COALESCE(SUM(CASE WHEN m.natura_cost IN ('investitie','echipare_initiala') AND m.tratament_contabil = 'de_confirmat' THEN m.cost ELSE 0 END), 0) AS investitii_neconfirmate
                FROM mentenanta m
-              WHERE m.record_type = :rt
-                AND m.tip_interventie NOT LIKE "Anvelopa - %"
-                AND (m.status_interventie IS NULL OR m.status_interventie <> "anulata")
+              WHERE $natureFilter
+                AND m.tip_interventie NOT LIKE 'Anvelopa - %'
+                AND (m.status_interventie IS NULL OR m.status_interventie <> 'anulata')
                 AND m.data_interventie BETWEEN :ds AND :de
-              GROUP BY m.vehicle_id'
+              GROUP BY m.vehicle_id"
         );
-        $stmt->execute(['rt' => $recordType, 'ds' => $dateStart, 'de' => $dateEnd]);
+        $stmt->execute(['ds' => $dateStart, 'de' => $dateEnd]);
         $out = [];
         foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
             $out[(int) $row['vehicle_id']] = [
                 'total' => (float) $row['total'],
                 'items' => (int) $row['items'],
+                'capitalizat_exclus' => (float) $row['capitalizat_exclus'],
+                'capitalizat_items' => (int) $row['capitalizat_items'],
+                'investitii_neconfirmate' => (float) $row['investitii_neconfirmate'],
             ];
+        }
+        return $out;
+    }
+
+    /**
+     * Costuri de capital confirmate (investitii / echipari capitalizabile), per vehicul, in perioada —
+     * separat de costul operational. NU sunt amortizate aici: lipseste valoarea/durata per activ aprobata.
+     *
+     * @return array<int,array{total:float,items:int,fara_durata_utila:int}>
+     */
+    public function getCapitalizedInvestmentCosts(string $dateStart, string $dateEnd): array
+    {
+        if (!FinancialFoundationSchema::isReady($this->db)) {
+            return [];
+        }
+        $capitalized = CostNature::sqlIsCapitalized('m');
+        $stmt = $this->db->prepare(
+            "SELECT m.vehicle_id, COUNT(*) AS items, COALESCE(SUM(m.cost), 0) AS total,
+                    SUM(CASE WHEN p.durata_utila_luni IS NULL THEN 1 ELSE 0 END) AS fara_durata_utila
+               FROM mentenanta m
+               LEFT JOIN investitii_proiecte p ON p.id = m.proiect_investitie_id
+              WHERE $capitalized
+                AND (m.status_interventie IS NULL OR m.status_interventie <> 'anulata')
+                AND m.data_interventie BETWEEN :ds AND :de
+              GROUP BY m.vehicle_id"
+        );
+        $stmt->execute(['ds' => $dateStart, 'de' => $dateEnd]);
+        $out = [];
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
+            $out[(int) $row['vehicle_id']] = ['total' => (float) $row['total'], 'items' => (int) $row['items'], 'fara_durata_utila' => (int) $row['fara_durata_utila']];
         }
         return $out;
     }

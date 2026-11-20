@@ -12,6 +12,8 @@ $locations = is_array($locations ?? null) ? $locations : [DriverEquipmentModel::
 $filters = is_array($filters ?? null) ? $filters : [];
 $search = trim((string) ($filters['q'] ?? ''));
 $canCatalog = !function_exists('can') || can('echipamente_soferi', 'manage_catalog');
+$photoService = new EquipmentPhotoService();
+$photoUrl = static fn(mixed $file): ?string => $photoService->publicUrl(is_string($file) ? $file : null);
 
 $money = static fn(mixed $value): string => format_number_ro((float) ($value ?? 0), 2) . ' lei';
 $dash = static fn(mixed $value): string => trim((string) ($value ?? '')) !== '' ? trim((string) $value) : '—';
@@ -91,13 +93,14 @@ $yes = static fn(mixed $value): string => (int) $value === 1
     ?>
 
     <?php include __DIR__ . '/_catalog_overview.php'; ?>
+    <?php include __DIR__ . '/_gallery_data.php'; ?>
 
     <?php if ($canCatalog): ?>
     <!-- Formular articol -->
     <div class="modal fade des-modal" id="desCatalogModal" tabindex="-1" aria-hidden="true">
         <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
             <div class="modal-content">
-                <form method="post" action="<?= e(build_query_url(['page' => 'echipamente_soferi', 'action' => 'save_catalog'])) ?>">
+                <form method="post" action="<?= e(build_query_url(['page' => 'echipamente_soferi', 'action' => 'save_catalog'])) ?>" enctype="multipart/form-data">
                     <?= csrf_field() ?>
                     <input type="hidden" name="id" data-des-field="id" value="">
                     <div class="modal-header">
@@ -178,6 +181,27 @@ $yes = static fn(mixed $value): string => (int) $value === 1
                                         <option value="<?= e((string) $location) ?>"></option>
                                     <?php endforeach; ?>
                                 </datalist>
+                            </div>
+
+                            <div class="col-12">
+                                <label class="form-label" for="desCatalogNotes">Observații</label>
+                                <input class="form-control" id="desCatalogNotes" type="text" name="observatii" maxlength="255"
+                                       placeholder="ex. furnizor, model, cod intern" data-des-field="observatii">
+                            </div>
+
+                            <div class="col-12">
+                                <label class="form-label" for="desCatalogPhoto">Fotografie</label>
+                                <div class="des-photo-field">
+                                    <span class="des-photo-preview" data-des-photo-preview><i class="bi bi-image" aria-hidden="true"></i></span>
+                                    <div class="des-photo-controls">
+                                        <input class="form-control" id="desCatalogPhoto" type="file" name="imagine" accept="image/jpeg,image/png,image/webp" data-des-photo-input>
+                                        <span class="des-note">JPG, PNG sau WEBP, max. 5 MB. Ideal: articolul pe fundal transparent (PNG). Apare lângă punctul de pe siluetă.</span>
+                                        <label class="form-check mt-1" data-des-photo-remove-wrap hidden>
+                                            <input class="form-check-input" type="checkbox" name="sterge_imagine" value="1" data-des-photo-remove>
+                                            <span class="form-check-label">Șterge fotografia actuală</span>
+                                        </label>
+                                    </div>
+                                </div>
                             </div>
 
                             <div class="col-12">

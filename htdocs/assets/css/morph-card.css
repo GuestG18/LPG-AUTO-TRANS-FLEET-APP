@@ -1,0 +1,52 @@
+/* MorphCard (assets/js/morph-card.js): navigarea interna a cardurilor cu dimensiuni fixe — stiluri comune.
+ * Culoarea cardului vine din variabile setate de consumator: --mc-c (accent), --mc-soft (fundal), --mc-line-c (contur). */
+.mc-stage { position: absolute; inset: 0; }
+.mc-view {
+    --mc-ink: #101828; --mc-ink-2: #344054; --mc-muted: #667085; --mc-line: #e4e7ec; --mc-line-2: #eef0f4;
+    position: absolute; inset: 0; display: flex; flex-direction: column; min-height: 0; background: inherit;
+    opacity: 1; transform: none; transition: opacity .22s ease, transform .22s cubic-bezier(.2, .8, .2, 1);
+}
+.mc-view.mc-from-right { opacity: 0; transform: translateX(16px); }
+.mc-view.mc-from-left { opacity: 0; transform: translateX(-16px); }
+.mc-view.mc-to-left { opacity: 0; transform: translateX(-16px); pointer-events: none; }
+.mc-view.mc-to-right { opacity: 0; transform: translateX(16px); pointer-events: none; }
+
+.mc-head { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; min-width: 0; }
+.mc-back { width: 26px; height: 26px; flex: 0 0 26px; border: 1px solid var(--mc-line); border-radius: 8px; background: #fff; display: grid; place-items: center; color: var(--mc-ink-2); cursor: pointer; padding: 0; font-size: 13px; }
+.mc-back:hover { border-color: var(--mc-line-c, #c7d0fb); color: var(--mc-c, #2f4fd8); }
+.mc-back:focus-visible, .mc-row:focus-visible, .mc-crumb:focus-visible { outline: 2px solid var(--mc-line-c, #c7d0fb); outline-offset: 1px; }
+
+.mc-crumbs { display: flex; align-items: center; gap: 3px; font-size: 11.5px; color: var(--mc-muted); white-space: nowrap; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; min-width: 0; }
+.mc-crumbs::-webkit-scrollbar { display: none; }
+.mc-crumbs i { font-size: 9px; color: #98a2b3; }
+.mc-crumb { border: 0; background: none; padding: 1px 3px; border-radius: 5px; color: var(--mc-ink-2); font-size: 11.5px; cursor: pointer; white-space: nowrap; }
+button.mc-crumb:hover { background: var(--mc-soft, #eef2ff); color: var(--mc-c, #2f4fd8); }
+.mc-crumb.is-current { color: var(--mc-c, #2f4fd8); font-weight: 700; cursor: default; }
+
+.mc-seg { display: inline-flex; align-self: flex-start; padding: 2px; border-radius: 7px; background: #f2f4f7; flex: 0 0 auto; }
+.mc-seg button { border: 0; background: transparent; padding: 2px 9px; border-radius: 5px; font-size: 11.5px; color: var(--mc-ink-2); cursor: pointer; }
+.mc-seg button.is-on { background: #fff; color: var(--mc-c, #2f4fd8); font-weight: 600; box-shadow: 0 1px 2px rgba(16, 24, 40, .08); }
+
+/* lista: singura zona care se deruleaza; cardul ramane la aceleasi dimensiuni */
+.mc-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; transition: opacity .18s ease; scrollbar-width: thin; }
+.mc-list.mc-swapping { opacity: 0; transition: none; }
+.mc-row {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto auto 12px; column-gap: 8px; align-items: center;
+    width: 100%; height: 27px; padding: 0 6px; border: 0; border-bottom: 1px solid var(--mc-line-2); background: transparent; text-align: left; cursor: pointer; border-radius: 0; color: inherit;
+}
+.mc-row:last-child { border-bottom: 0; }
+.mc-row:hover { background: var(--mc-soft, #eef2ff); }
+.mc-row-name { font-size: 12.5px; font-weight: 600; color: var(--mc-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mc-row-meta { font-size: 11px; color: var(--mc-muted); white-space: nowrap; }
+.mc-row-meta i { color: #d97706; }
+.mc-row-val { min-width: 44px; text-align: right; font-size: 12.5px; font-weight: 700; color: var(--mc-ink); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.mc-row-val.is-neg { color: #d42a2a; }
+.mc-row-val.is-pos { color: #157a3d; }
+.mc-row-go { font-size: 10px; color: #98a2b3; }
+.mc-empty { padding: 10px 4px; font-size: 12px; color: var(--mc-muted); }
+.mc-loading span { display: block; height: 20px; margin: 5px 4px; border-radius: 6px; background: linear-gradient(90deg, #f2f4f7, #e9ecf2, #f2f4f7); background-size: 200% 100%; animation: mc-shimmer 1s linear infinite; }
+@keyframes mc-shimmer { from { background-position: 200% 0; } to { background-position: 0 0; } }
+
+@media (prefers-reduced-motion: reduce) {
+    .mc-view, .mc-list, .mc-loading span { transition: none !important; animation: none !important; }
+}

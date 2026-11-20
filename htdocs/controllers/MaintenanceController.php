@@ -66,6 +66,9 @@ class MaintenanceController
             case 'intervention_finalize':
                 $this->interventionFinalize();
                 return;
+            case 'financial_classify':
+                $this->financialClassify();
+                return;
             case 'intervention_document':
                 $this->interventionDocument();
                 return;
@@ -988,6 +991,32 @@ class MaintenanceController
         }
         $detail = $interventionId > 0 ? $this->workflow()->detail($interventionId, can('mentenanta', 'interventions_costs')) : null;
         $this->json(['ok' => true, 'result' => $result, 'can' => $this->interventionPermissions()] + ($detail ?? []));
+    }
+
+    /**
+     * Natura costului / tratamentul contabil (POST JSON: entity, id, field, value, motiv). Doar cu dreptul
+     * mentenanta.financial_classification; fiecare schimbare intra in financiar_audit (cine, cand, de ce).
+     */
+    private function financialClassify(): void
+    {
+        $this->requireJsonPost();
+        if (!can('mentenanta', 'financial_classification')) {
+            $this->json(['ok' => false, 'message' => 'Nu aveți dreptul de a modifica clasificarea financiară.'], 403);
+        }
+        $entity = (string) ($_POST['entity'] ?? '');
+        $id = (int) ($_POST['id'] ?? 0);
+        $this->runJson(function () use ($entity, $id): array {
+            $service = new FinancialClassificationService($this->db);
+            $field = (string) ($_POST['field'] ?? '');
+            $value = (string) ($_POST['value'] ?? '');
+            $reason = trim((string) ($_POST['motiv'] ?? ''));
+            match ($field) {
+                'tratament_contabil' => $service->setTreatment($entity, $id, $value, $this->userId(), $reason),
+                'natura_cost' => $service->setNature($entity, $id, $value, $this->userId(), $reason),
+                default => throw new InvalidArgumentException('Câmp necunoscut.'),
+            };
+            return ['istoric' => FinancialAuditLog::history($this->db, $entity, $id)];
+        }, $entity === 'interventie' ? $id : 0);
     }
 
     private function requireJsonPost(): void

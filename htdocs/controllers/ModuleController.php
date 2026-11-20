@@ -3908,7 +3908,10 @@ class ModuleController
                 'vehicle_id' => $vehicleId,
                 'part_id' => (int) ($part['id'] ?? 0),
                 'component_key' => $componentKey,
-                'source' => ($_POST['source'] ?? '') === 'stoc' ? 'stoc' : 'direct',
+                // stoc | direct (achizitie directa) | atelier (piesa adusa de atelier) | transfer (de pe alt vehicul)
+                'source' => in_array($_POST['source'] ?? '', ['stoc', 'atelier', 'transfer'], true) ? (string) $_POST['source'] : 'direct',
+                'transfer_usage_id' => (int) ($_POST['transfer_usage_id'] ?? 0),
+                'idempotency_key' => preg_match('/^[A-Za-z0-9_-]{8,64}$/', (string) ($_POST['idempotency_key'] ?? '')) === 1 ? (string) $_POST['idempotency_key'] : null,
                 'quantity' => (float) str_replace(',', '.', (string) ($_POST['quantity'] ?? '1')),
                 'date' => (string) ($_POST['date'] ?? ''),
                 'km' => $readKm('km'),

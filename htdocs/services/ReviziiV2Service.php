@@ -1,6 +1,8 @@
 <?php
 declare(strict_types=1);
 
+require_once __DIR__ . '/PartsInventoryService.php';
+
 require_once __DIR__ . '/ReviziiV2Engine.php';
 require_once dirname(__DIR__) . '/models/ReviziiV2Model.php';
 require_once __DIR__ . '/SasFleetClient.php';
@@ -1701,6 +1703,24 @@ final class ReviziiV2Service
                     $part = $parts[(int) $item['piesa_id']];
                     $quantity = $item['piesa_cantitate'] !== null ? (float) $item['piesa_cantitate'] : 1.0;
                     $fromStock = $partSource === 'stoc' && (string) $part['mod_utilizare'] === 'stoc';
+                    $inventory = new PartsInventoryService($this->db);
+                    $revisionNote = mb_substr('Revizia ' . ReviziiV2Engine::revisionLabel((string) $order['tip'], (int) $order['nr_x']) . ' #' . $orderId . ': ' . $item['operatie'], 0, 1000);
+                    if ($fromStock && $inventory->ready()) {
+                        // Consum FIFO pe receptii: costul original al piesei, o singura data pe linie.
+                        $consumed = $inventory->consume((int) $part['id'], $quantity, [
+                            'vehicle_id' => (int) $order['vehicle_id'],
+                            'data_montare' => substr($at, 0, 10),
+                            'km_montare' => $order['km_executie'] !== null ? (int) round((float) $order['km_executie']) : null,
+                            'montata_de' => $order['tehnician'],
+                            'observatii' => $revisionNote,
+                            'created_by' => $userId,
+                        ], 'rv2-piesa-' . $item['id']);
+                        $usageId = (int) $consumed['usage_id'];
+                        $this->db->prepare('UPDATE revizii_v2_lucrari_operatii SET piesa_utilizare_id = :u WHERE id = :id')->execute([':u' => $usageId, ':id' => (int) $item['id']]);
+                        if (!$userCost && (float) $consumed['cost_total'] > 0) {
+                            $cost = round(($cost ?? 0.0) + (float) $consumed['cost_total'], 2);
+                        }
+                    } else {
                     if ($fromStock) {
                         $this->db->prepare('UPDATE mentenanta_piese SET stoc_curent = stoc_curent - :q, updated_at = :u WHERE id = :id')
                             ->execute([':q' => $quantity, ':u' => date('Y-m-d H:i:s'), ':id' => (int) $part['id']]);
@@ -1716,10 +1736,16 @@ final class ReviziiV2Service
                         ':dm' => $fromStock ? 0 : 1, ':u' => $userId, ':at' => date('Y-m-d H:i:s'),
                     ]);
                     $usageId = (int) $this->db->lastInsertId();
+                    if ($inventory->ready()) {
+                        // Achizitie directa: stocul nu se atinge.
+                        $this->db->prepare("UPDATE mentenanta_piese_utilizari SET sursa_piesa = 'achizitie_directa', idempotency_key = :k WHERE id = :id")
+                            ->execute([':k' => 'rv2-piesa-' . $item['id'], ':id' => $usageId]);
+                    }
                     $this->db->prepare('UPDATE revizii_v2_lucrari_operatii SET piesa_utilizare_id = :u WHERE id = :id')->execute([':u' => $usageId, ':id' => (int) $item['id']]);
                     // Costul piesei din stoc intra in materiale doar daca operatorul nu a completat costul manual.
                     if (!$userCost && $fromStock && $unit > 0) {
                         $cost = round(($cost ?? 0.0) + $unit * $quantity, 2);
+                    }
                     }
                 }
                 $executionId = $this->model->insertExecution([

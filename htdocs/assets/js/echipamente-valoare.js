@@ -103,7 +103,145 @@
         root.classList.toggle('has-open', open);
     }
 
+    // ------------------------------------------------------------------
+    // Bulele cu fotografii lângă punctele de pe siluetă (cele 3 siluete de
+    // persoană). Fiecare bulă = un articol cu fotografie din catalog; linia o
+    // leagă de punctul categoriei. Bula poartă atributul categoriei, deci un
+    // click pe ea filtrează exact ca o casetă de categorie.
+    // ------------------------------------------------------------------
+
+    const BUBBLE = 52;
+    const BUBBLE_GAP = 6;
+
+    function renderBubbles(wrap, photos, catAttr) {
+        const box = wrap.querySelector('[data-bubbles]');
+        if (!box) {
+            return;
+        }
+        box.innerHTML = '';
+        (photos || []).forEach(function (photo) {
+            const bubble = document.createElement('button');
+            bubble.type = 'button';
+            bubble.className = 'dcv-bubble';
+            bubble.setAttribute(catAttr, photo.cat);
+            bubble.title = photo.nume;
+            bubble.setAttribute('aria-label', photo.nume);
+            const image = document.createElement('img');
+            image.src = photo.url;
+            image.alt = '';
+            image.loading = 'lazy';
+            bubble.appendChild(image);
+            box.appendChild(bubble);
+        });
+        layoutBubbles(wrap, catAttr);
+        // Punctele se mută cu o tranziție scurtă; a doua trecere prinde poziția finală.
+        window.setTimeout(function () { layoutBubbles(wrap, catAttr); }, 360);
+    }
+
+    function layoutBubbles(wrap, catAttr) {
+        const box = wrap.querySelector('[data-bubbles]');
+        const svg = wrap.querySelector('[data-bubble-links]');
+        const figureNode = wrap.querySelector('.dcv-figure');
+        if (!box || !svg || !figureNode || wrap.offsetParent === null) {
+            return;
+        }
+        const w = wrap.getBoundingClientRect();
+        const f = figureNode.getBoundingClientRect();
+        const figLeft = f.left - w.left;
+        const figRight = f.right - w.left;
+        const figMid = (figLeft + figRight) / 2;
+        const height = Math.max(f.bottom - w.top, BUBBLE);
+        svg.setAttribute('viewBox', '0 0 ' + w.width + ' ' + w.height);
+
+        const sides = { L: [], R: [] };
+        box.querySelectorAll('.dcv-bubble').forEach(function (bubble) {
+            const key = bubble.getAttribute(catAttr);
+            const dot = figureNode.querySelector('.dcv-dot[' + catAttr + '="' + key + '"]');
+            if (!dot) {
+                bubble.hidden = true;
+                return;
+            }
+            const d = dot.getBoundingClientRect();
+            const dx = d.left + d.width / 2 - w.left;
+            const dy = d.top + d.height / 2 - w.top;
+            sides[dx < figMid ? 'L' : 'R'].push({ bubble: bubble, dx: dx, dy: dy });
+        });
+
+        const paths = [];
+        ['L', 'R'].forEach(function (side) {
+            const list = sides[side].sort(function (a, b) { return a.dy - b.dy; });
+            const capacity = Math.max(1, Math.floor(height / (BUBBLE + BUBBLE_GAP)));
+            const x = side === 'L'
+                ? Math.max(BUBBLE / 2 + 2, figLeft - 16 - BUBBLE / 2)
+                : Math.min(w.width - BUBBLE / 2 - 2, figRight + 16 + BUBBLE / 2);
+            // Fără suprapuneri: de sus în jos cu pas minim, apoi împins înapoi în cadru.
+            let prev = -Infinity;
+            list.forEach(function (it, i) {
+                it.y = Math.max(it.dy, prev + BUBBLE + BUBBLE_GAP, BUBBLE / 2);
+                prev = it.y;
+                it.bubble.hidden = i >= capacity;
+            });
+            const visible = list.slice(0, capacity);
+            let limit = height - BUBBLE / 2;
+            for (let i = visible.length - 1; i >= 0; i--) {
+                visible[i].y = Math.min(visible[i].y, limit);
+                limit = visible[i].y - BUBBLE - BUBBLE_GAP;
+            }
+            if (list.length > capacity) {
+                const last = visible[visible.length - 1];
+                last.bubble.setAttribute('data-more', '+' + (list.length - capacity + 1));
+            }
+            visible.forEach(function (it) {
+                it.bubble.style.left = (x - BUBBLE / 2) + 'px';
+                it.bubble.style.top = (it.y - BUBBLE / 2) + 'px';
+                const edge = side === 'L' ? x + BUBBLE / 2 : x - BUBBLE / 2;
+                paths.push('<path class="dcv-bubble-link" ' + catAttr + '="' + it.bubble.getAttribute(catAttr)
+                    + '" d="M' + edge.toFixed(1) + ',' + it.y.toFixed(1) + ' L' + it.dx.toFixed(1) + ',' + it.dy.toFixed(1) + '"/>');
+            });
+        });
+        svg.innerHTML = paths.join('');
+    }
+
+    /** Evidențierea bulelor și a liniilor urmează categoria aleasă. */
+    function syncBubbles(wrap, catAttr, key) {
+        if (!wrap) {
+            return;
+        }
+        wrap.querySelectorAll('.dcv-bubble, .dcv-bubble-link').forEach(function (node) {
+            const match = node.getAttribute(catAttr) === key;
+            node.classList.toggle('is-hot', key !== '' && match);
+            node.classList.toggle('is-dim', key !== '' && !match);
+        });
+    }
+
+    if ('ResizeObserver' in window) {
+        const bubbleObserver = new ResizeObserver(function (entries) {
+            entries.forEach(function (entry) {
+                const attr = entry.target.getAttribute('data-bubble-attr');
+                if (attr) {
+                    layoutBubbles(entry.target, attr);
+                }
+            });
+        });
+        root.querySelectorAll('.dcv-figure-wrap').forEach(function (wrap) { bubbleObserver.observe(wrap); });
+    }
+
+    root.addEventListener('click', function (event) {
+        const node = event.target.closest('.dcv-figure-wrap .dcv-dot, .dcv-figure-wrap .dcv-bubble');
+        if (!node || !window.EquipmentGallery) {
+            return;
+        }
+        const wrap = node.closest('.dcv-figure-wrap');
+        const catAttr = wrap.getAttribute('data-bubble-attr') || 'data-dcv-cat';
+        const owned = new Set((wrap.getAttribute('data-owned') || '').split(',').filter(Boolean).map(Number));
+        const accent = wrap.closest('.dcr-card') ? 'orange' : (wrap.closest('.dci-card') ? 'red' : '');
+        window.EquipmentGallery.open(wrap, node.getAttribute(catAttr), { role: role, owned: owned, accent: accent, returnFocus: node });
+    }, true);
+
     function morphCard(el, prefix, next, quiet) {
+        if (window.EquipmentGallery) {
+            window.EquipmentGallery.close(null, true);
+        }
         captureLayout();
         el.querySelectorAll('[data-' + prefix + '-face]').forEach(function (node) {
             node.hidden = node.getAttribute('data-' + prefix + '-face') !== String(next);
@@ -203,6 +341,8 @@
 
     const l3 = face(3);
     const figure = l3.querySelector('.dcv-figure');
+    const valueWrap = l3.querySelector('.dcv-figure-wrap');
+    valueWrap.setAttribute('data-bubble-attr', 'data-dcv-cat');
     const dotsBox = l3.querySelector('[data-dcv-dots]');
     const catsBox = l3.querySelector('[data-dcv-cats]');
     const itemRows = Array.prototype.slice.call(l3.querySelectorAll('.dcv-item'));
@@ -241,6 +381,8 @@
             dot.style.left = (at[0] + (n - 1) * 5) + '%';
             dot.style.top = (at[1] + (n - 1) * 3) + '%';
         });
+        layoutBubbles(valueWrap, 'data-dcv-cat');
+        window.setTimeout(function () { layoutBubbles(valueWrap, 'data-dcv-cat'); }, 360);
     }
 
     function renderCats(owner) {
@@ -303,6 +445,7 @@
             dot.classList.toggle('is-hot', key !== '' && match);
             dot.classList.toggle('is-dim', key !== '' && !match);
         });
+        syncBubbles(valueWrap, 'data-dcv-cat', key);
         itemsEmpty.hidden = shown > 0;
         if (shown === 0) {
             l3.querySelector('[data-dcv-items-empty-text]').textContent = key === ''
@@ -356,6 +499,8 @@
         });
 
         go(3);
+        renderBubbles(valueWrap, owner.foto, 'data-dcv-cat');
+        valueWrap.setAttribute('data-owned', (owner.catalogIds || []).join(','));
     }
 
     // ------------------------------------------------------------------
@@ -553,6 +698,10 @@
         const lines = Array.prototype.slice.call(wsCard.querySelectorAll('.' + p + '-line'));
         const search = wsCard.querySelector(sel('search'));
         const figureEl = wsCard.querySelector('.' + p + '-figure');
+        const bubbleWrap = figureEl ? figureEl.closest('.dcv-figure-wrap') : null;
+        if (bubbleWrap) {
+            bubbleWrap.setAttribute('data-bubble-attr', attr('cat'));
+        }
         const dots = wsCard.querySelector(sel('dots'));
         const catsEl = wsCard.querySelector(sel('cats'));
         const action = wsCard.querySelector(sel('action'));
@@ -593,6 +742,9 @@
                 dot.style.left = (at[0] + (n - 1) * 5) + '%';
                 dot.style.top = (at[1] + (n - 1) * 3) + '%';
             });
+            if (bubbleWrap) {
+                layoutBubbles(bubbleWrap, attr('cat'));
+            }
         }
 
         function pick(line) {
@@ -624,6 +776,7 @@
                 dot.classList.toggle('is-hot', key !== '' && match);
                 dot.classList.toggle('is-dim', key !== '' && !match);
             });
+            syncBubbles(bubbleWrap, attr('cat'), key);
             if (!picked || picked.hidden) {
                 pick(first);
             }
@@ -679,6 +832,10 @@
             applyCat('');
             rows.forEach(function (r) { r.classList.toggle('is-selected', r.getAttribute(attr('owner')) === owner); });
             goWs(3);
+            if (bubbleWrap) {
+                renderBubbles(bubbleWrap, data.foto, attr('cat'));
+                bubbleWrap.setAttribute('data-owned', (data.catalogIds || []).join(','));
+            }
         }
 
         if (search) {

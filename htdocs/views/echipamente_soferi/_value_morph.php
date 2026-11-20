@@ -23,6 +23,32 @@ $defaultVariant = $isStaffPage ? 'f' : 'm';
 
 include __DIR__ . '/_silhouette_assets.php';
 
+// Fotografiile articolelor (Catalog echipamente -> Fotografie): bulele de lângă punctele de pe siluetă.
+$photoSvc = new EquipmentPhotoService();
+$ownedIds = static fn(array $lines): array => array_values(array_unique(array_filter(array_map(
+    static fn(array $line): int => (int) ($line['catalog_id'] ?? ($line['item']['catalog_id'] ?? 0)),
+    $lines
+))));
+$personPhotos = static function (array $lines) use ($photoSvc): array {
+    $out = [];
+    foreach ($lines as $line) {
+        $file = $line['imagine'] ?? ($line['item']['imagine'] ?? null);
+        $catalogId = (int) ($line['catalog_id'] ?? ($line['item']['catalog_id'] ?? 0));
+        $url = $photoSvc->publicUrl(is_string($file) ? $file : null);
+        if ($url === null || isset($out[$catalogId])) {
+            continue;
+        }
+        $out[$catalogId] = ['cat' => (string) $line['cat'], 'url' => $url, 'nume' => (string) ($line['denumire'] ?? ($line['item']['denumire'] ?? ''))];
+    }
+
+    return array_values($out);
+};
+$linePhoto = static function (array $line) use ($photoSvc): ?string {
+    $file = $line['imagine'] ?? ($line['item']['imagine'] ?? null);
+
+    return $photoSvc->publicUrl(is_string($file) ? $file : null);
+};
+
 $rowsById = [];
 foreach (is_array($valueRows ?? null) ? $valueRows : [] as $valueRow) {
     $rowsById[(int) $valueRow['id']] = $valueRow;
@@ -46,6 +72,8 @@ foreach ($vOwners as $owner) {
         'articole' => $owner['articole'],
         'bucati' => $owner['bucati'],
         'pretLipsa' => $owner['pret_lipsa'],
+        'foto' => $personPhotos($owner['linii']),
+        'catalogIds' => $ownedIds($owner['linii']),
         'categorii' => array_map(static fn(array $c): array => [
             'key' => $c['key'], 'name' => $c['name'], 'icon' => $c['icon'], 'anchor' => $c['anchor'],
             'valoare' => round($c['valoare'], 2), 'bucati' => $c['bucati'], 'procent' => $c['procent'],
@@ -54,6 +82,7 @@ foreach ($vOwners as $owner) {
 }
 ?>
 <?php $stockOverview = $stockOverview ?? null; ?>
+<?php include __DIR__ . '/_gallery_data.php'; ?>
 <link rel="stylesheet" href="<?= e(url('assets/css/echipamente-valoare.css?v=' . (string) @filemtime(BASE_PATH . '/assets/css/echipamente-valoare.css'))) ?>">
 
 <section class="dcv" data-dcv data-dcv-role="<?= e($role) ?>" data-dcv-default-variant="<?= e($defaultVariant) ?>" aria-label="Valoare echipamente alocate">
@@ -169,6 +198,9 @@ foreach ($vOwners as $owner) {
                         <img class="dcv-figure-img <?= $defaultVariant === 'f' ? 'is-active' : '' ?>" data-variant="f" src="<?= e($img($role, 'f')) ?>" alt="Siluetă <?= $isStaffPage ? 'TESA' : 'șofer' ?> — feminin" draggable="false">
                         <div class="dcv-dots" data-dcv-dots></div>
                     </div>
+                    <svg class="dcv-bubble-links" data-bubble-links aria-hidden="true" focusable="false"></svg>
+                    <div class="dcv-bubbles" data-bubbles>
+                    </div>
                     <div class="dcv-seg" role="radiogroup" aria-label="Siluetă">
                         <button type="button" role="radio" data-dcv-variant="m" title="Masculin" aria-label="Masculin"><i class="bi bi-gender-male"></i></button>
                         <button type="button" role="radio" data-dcv-variant="f" title="Feminin" aria-label="Feminin"><i class="bi bi-gender-female"></i></button>
@@ -218,7 +250,8 @@ foreach ($vOwners as $owner) {
                                         <tr class="dcv-item" data-owner="<?= e((string) $owner['id']) ?>" data-cat="<?= e($line['cat']) ?>" hidden>
                                             <td>
                                                 <div class="dcv-item-name">
-                                                    <span class="dcv-item-ico" data-cat-icon="<?= e($line['cat']) ?>" aria-hidden="true"></span>
+                                                    <?php $photo = $linePhoto($line); ?>
+                                                    <?php if ($photo !== null): ?><span class="dcv-item-ico is-photo" aria-hidden="true"><img src="<?= e($photo) ?>" alt="" loading="lazy"></span><?php else: ?><span class="dcv-item-ico" data-cat-icon="<?= e($line['cat']) ?>" aria-hidden="true"></span><?php endif; ?>
                                                     <div>
                                                         <strong><?= e($line['denumire']) ?><?= $line['marime'] !== '' ? ' <small>' . e($line['marime']) . '</small>' : '' ?></strong>
                                                         <span><?= e($line['categorie']) ?><?= $line['grupa'] !== '' && mb_strtolower($line['grupa']) !== mb_strtolower($line['categorie']) ? ' / ' . e($line['grupa']) : '' ?><?php if ($line['de_inlocuit']): ?> · <em class="dcv-flag"><?= e($line['status']) ?></em><?php endif; ?></span>
