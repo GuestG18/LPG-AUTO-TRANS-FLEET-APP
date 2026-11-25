@@ -1,0 +1,27 @@
+Cap tractor 2 axe {"load":{"wallMs":1997,"domContentLoaded":1508,"scripting":315.8,"styleLayout":463.8,"paint":74.4,"raster":498.5,"imageDecode":42.4,"parse":177,"layoutCount":34,"longestLayout":109.3},"sel":{"n":6,"median":59.7,"avg":53.7,"worst":70.5},"zoom":{"avg":17.3,"worst":66.6,"dropped":26},"mem":[2.9,3.4],"nodes":134}
+Camion 4 axe {"load":{"wallMs":1381,"domContentLoaded":1138,"scripting":344.2,"styleLayout":277.4,"paint":33.6,"raster":229,"imageDecode":60.6,"parse":225.1,"layoutCount":17,"longestLayout":102.5},"sel":{"n":6,"median":57.8,"avg":50.9,"worst":66.7},"zoom":{"avg":17.6,"worst":83.3,"dropped":41},"mem":[2.9,3.4],"nodes":195}
+Semiremorcă 6 axe {"load":{"wallMs":1569,"domContentLoaded":1288,"scripting":270.1,"styleLayout":363.6,"paint":46.3,"raster":296.1,"imageDecode":142,"parse":154.9,"layoutCount":25,"longestLayout":73.8},"sel":{"n":6,"median":59,"avg":60.5,"worst":85.2},"zoom":{"avg":18.1,"worst":66.8,"dropped":58},"mem":[2.9,3.4],"nodes":225}
+node:internal/process/promises:394
+    triggerUncaughtException(err, true /* fromPromise */);
+    ^
+
+page.click: Element is outside of the viewport
+Call log:
+[2m  - waiting for locator('.fx-cat[data-fx-cat="franare"]')[22m
+[2m    - locator resolved to <button type="button" class="fx-cat" aria-pressed="false" data-fx-cat="franare">…</button>[22m
+[2m  - attempting click action[22m
+[2m    - scrolling into view if needed[22m
+[2m    - done scrolling[22m
+
+    at C:\laragon\www\aplicatie_fleet\tools\vehicle-trace\perf\bench.js:243:52 {
+  log: [
+    `  - waiting for locator('.fx-cat[data-fx-cat="franare"]')`,
+    '    - locator resolved to <button type="button" class="fx-cat" aria-pressed="false" data-fx-cat="franare">…</button>',
+    '  - attempting click action',
+    '    - scrolling into view if needed',
+    '    - done scrolling'
+  ],
+  name: 'Error'
+}
+
+Node.js v24.13.0

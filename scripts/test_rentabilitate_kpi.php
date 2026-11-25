@@ -140,7 +140,7 @@ foreach ($out['optiuni']['vehicule'] as $v) {
 }
 if ($lonely !== null) {
     $x = $svc->list($base + ['tip' => $type, 'vehicle_id' => $lonely]);
-    check("vehicul fara activitate „{$type}”: scos din filtru si raportat (nu tabel gol)", $x['aplicat']['vehicle_id'] === 0 && $x['anulate'] === ['vehicle_id'] && $x['total'] === $tOut['total']);
+    check("vehicul fara activitate „{$type}”: scos din filtru si raportat (nu tabel gol)", $x['aplicat']['vehicle_id'] === '' && $x['anulate'] === ['vehicle_id'] && $x['total'] === $tOut['total']);
 } else {
     check('vehicul incompatibil cu tipul (nu exista in date — sarit)', true);
 }
@@ -154,8 +154,8 @@ foreach ($out['optiuni']['soferi'] as $s) {
 if ($otherDriver !== null) {
     $kd = $svc->list($base + ['vehicle_id' => $tractor['id'], 'driver_id' => $otherDriver, 'keep' => 'driver_id']);
     $kv = $svc->list($base + ['vehicle_id' => $tractor['id'], 'driver_id' => $otherDriver, 'keep' => 'vehicle_id']);
-    check('pereche vehicul + sofer fara activitate comuna: ramane filtrul ales ultimul (sofer)', $kd['aplicat']['driver_id'] === $otherDriver && $kd['aplicat']['vehicle_id'] === 0 && $kd['anulate'] === ['vehicle_id']);
-    check('pereche vehicul + sofer fara activitate comuna: ramane filtrul ales ultimul (vehicul)', $kv['aplicat']['vehicle_id'] === $tractor['id'] && $kv['aplicat']['driver_id'] === 0 && $kv['anulate'] === ['driver_id']);
+    check('pereche vehicul + sofer fara activitate comuna: ramane filtrul ales ultimul (sofer)', $kd['aplicat']['driver_id'] === (string) $otherDriver && $kd['aplicat']['vehicle_id'] === '' && $kd['anulate'] === ['vehicle_id']);
+    check('pereche vehicul + sofer fara activitate comuna: ramane filtrul ales ultimul (vehicul)', $kv['aplicat']['vehicle_id'] === (string) $tractor['id'] && $kv['aplicat']['driver_id'] === '' && $kv['anulate'] === ['driver_id']);
 }
 [$lRows, $lOut] = $allRows($base + ['status' => 'pierdere']);
 check('status „pe pierdere” + KPI din aceleasi randuri', $lRows !== [] && near($lOut['kpi']['cost'], $rowsCost($lRows)) && $lOut['kpi']['result'] < 0);

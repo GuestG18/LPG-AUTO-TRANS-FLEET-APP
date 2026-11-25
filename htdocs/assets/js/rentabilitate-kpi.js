@@ -3,7 +3,10 @@
  * Grad acoperire costuri — o singură componentă, folosită în pagină și în Tablou de bord.
  *
  * Cardul NU își schimbă dimensiunea: conținutul lui navighează intern (stivă de vederi), cu tranziții scurte:
- *   Toată flota (indicatorul) → Beneficiari → Tip transport → Vehicule / Șoferi
+ *   Toată flota (indicatorul) → Beneficiari → Tip transport → Locații → Vehicule / Șoferi
+ * La Locații cardul comută între Loc încărcare (origine), Zonă distribuție (destinație) și Depozit; alegerea fixează
+ * filtrul de locație al paginii, deci tabelul Vehicule / Șoferi urmează. „Rută” = perechea Loc încărcare → Zonă distribuție
+ * (fixează ambele filtre). Pe fiecare nivel, primul rând („Toți beneficiarii”, „Toate tipurile”, „Toate locațiile”) sare nivelul.
  * Fiecare alegere din listă schimbă SCOPUL de analiză:
  *  - în pagina Rentabilitate (sync): scopul = filtrele paginii (onScope → pagina reîncarcă lista o singură dată,
  *    apoi update() pe toate cardurile; tabelul, bara de sus și rezumatul de completitudine urmează aceeași stare);
@@ -41,12 +44,23 @@
     ];
     // Nivelurile navigarii, in ordine; un nivel deja fixat (ex. tipul ales din bara de sus) se sare.
     var LEVELS = { beneficiar: { key: 'beneficiar', title: 'Beneficiari' }, tip: { key: 'tip', title: 'Tip transport' },
+        locatie: { key: null, title: 'Locații' },
         vehicul: { key: 'vehicle_id', title: 'Vehicule' }, sofer: { key: 'driver_id', title: 'Șoferi' } };
-    var SCOPE_KEYS = ['beneficiar', 'tip', 'vehicle_id', 'driver_id'];
+    // Nivelul Locatii: dimensiunea aleasa in card = filtrul paginii (origine / destinatie / depozit)
+    var LOC_DIMS = [{ dim: 'origine', label: 'Loc încărcare' }, { dim: 'destinatie', label: 'Zonă distribuție' }, { dim: 'depozit', label: 'Depozit' },
+        { dim: 'ruta', label: 'Rută' }];
+    // primul rand al fiecarui nivel: trece mai departe fara sa filtreze nivelul
+    var SKIP_LABELS = { beneficiar: 'Toți beneficiarii', tip: 'Toate tipurile de transport', locatie: 'Toate locațiile' };
+    var LOC_KEYS = ['origine', 'destinatie', 'depozit', 'ruta'];
+    var ORDER = ['beneficiar', 'tip', 'locatie', 'unit'];
+    var SCOPE_KEYS = ['beneficiar', 'tip', 'vehicle_id', 'driver_id'].concat(LOC_KEYS);
+    function dimLabel(dim) { return (LOC_DIMS.filter(function (d) { return d.dim === dim; })[0] || {}).label || dim; }
+    function levelKey(entry) { return entry.view === 'locatie' ? entry.dim : LEVELS[entry.view].key; }
+    function levelTitle(entry) { return entry.view === 'locatie' ? dimLabel(entry.dim) : LEVELS[entry.view].title; }
 
     function isSet(v) { return v !== undefined && v !== null && v !== '' && v !== 0 && v !== '0'; }
     function completeness(k, mode) {
-        var unit = mode === 'soferi' ? 'șoferi' : 'vehicule', short = [], long = [];
+        var unit = mode === 'soferi' ? 'șoferi' : (mode === 'locatii' ? 'locații' : 'vehicule'), short = [], long = [];
         if (k.unitati_incomplete > 0) {
             short.push(k.unitati_incomplete + '/' + k.unitati + ' ' + unit);
             long.push(k.unitati_incomplete + ' din ' + k.unitati + ' ' + unit + ' au date incomplete (cost estimat sau lipsă)');
@@ -66,6 +80,7 @@
         var activeCard = null;                // cardul care navigheaza (doar unul odata)
         var cards = {};
         var labels = {};                      // eticheta valorilor alese (pentru „firul” de navigare)
+        var lastDim = 'origine';              // ultima dimensiune de locatie aleasa in card
 
         root.classList.add('rop-kpis');
         root.innerHTML = CARDS.map(function (c) {
@@ -81,31 +96,49 @@
         function scope() {
             var a = (data && data.aplicat) || {};
             var s = { mode: data ? data.mode : 'vehicule', from: data ? data.from : '', to: data ? data.to : '' };
-            SCOPE_KEYS.concat(['status', 'q']).forEach(function (k) { if (isSet(a[k])) { s[k] = a[k]; } });
+            // + locatia (modul Locatii / filtrele Origine, Destinatie, Depozit): defalcarile raman in acelasi scop
+            SCOPE_KEYS.concat(['status', 'q', 'dim']).forEach(function (k) { if (isSet(a[k])) { s[k] = a[k]; } });
             return s;
         }
         function scopeLabel(key, value) {
             if (labels[key + ':' + value]) { return labels[key + ':' + value]; }
+            // selectie multipla (din bara de sus / bifele tabelului): „3 vehicule”
+            var many = String(value).split(',').filter(Boolean);
+            if (many.length > 1) {
+                return many.length + ' ' + ({ beneficiar: 'beneficiari', vehicle_id: 'vehicule', driver_id: 'șoferi', origine: 'locuri de încărcare', destinatie: 'zone', depozit: 'depozite', ruta: 'rute' }[key] || 'selectate');
+            }
             var o = (data && data.optiuni) || {};
             if (key === 'tip') { return (o.tipuri || {})[value] || value; }
             if (key === 'beneficiar') { return (o.beneficiari || {})[value] || ('#' + value); }
+            if (key === 'ruta') {
+                var r = (((o.locatii_filtru || {}).ruta) || []).filter(function (x) { return String(x.id) === String(value); })[0];
+                return r ? r.label : value;
+            }
+            if (LOC_KEYS.indexOf(key) >= 0) { return (o.locatii || {})[value] || ('#' + value); }
             var list = key === 'vehicle_id' ? o.vehicule : o.soferi;
             var hit = (list || []).filter(function (x) { return String(x.id) === String(value); })[0];
             return hit ? hit.label : '#' + value;
         }
         function scopePath() {
             var a = (data && data.aplicat) || {};
-            return ['beneficiar', 'tip', 'vehicle_id', 'driver_id'].filter(function (k) { return isSet(a[k]); })
+            return ['beneficiar', 'tip'].concat(LOC_KEYS, ['vehicle_id', 'driver_id']).filter(function (k) { return isSet(a[k]); })
                 .map(function (k) { return scopeLabel(k, a[k]); });
         }
-        // Urmatorul nivel de explorat din scopul curent (null = nu mai exista niveluri cu date).
-        function nextLevel() {
-            var a = (data && data.aplicat) || {};
-            if (!isSet(a.beneficiar)) { return 'beneficiar'; }
-            if (!isSet(a.tip)) { return 'tip'; }
-            if (!isSet(a.vehicle_id) && !isSet(a.driver_id)) { return data.mode === 'soferi' ? 'sofer' : 'vehicul'; }
+        // Urmatorul nivel de explorat dupa `after` (null = de la inceput), cu filtrele aplicate + cele din `patch`.
+        // null = nu mai exista niveluri (vehiculul / soferul e deja ales).
+        function nextLevel(after, patch) {
+            var a = Object.assign({}, (data && data.aplicat) || {}, patch || {});
+            var isLevelSet = {
+                beneficiar: isSet(a.beneficiar), tip: isSet(a.tip),
+                locatie: LOC_KEYS.some(function (k) { return isSet(a[k]); }),
+                unit: isSet(a.vehicle_id) || isSet(a.driver_id)
+            };
+            for (var i = after ? ORDER.indexOf(after === 'vehicul' || after === 'sofer' ? 'unit' : after) + 1 : 0; i < ORDER.length; i++) {
+                if (!isLevelSet[ORDER[i]]) { return ORDER[i] === 'unit' ? (data.mode === 'soferi' ? 'sofer' : 'vehicul') : ORDER[i]; }
+            }
             return null;
         }
+        function levelEntry(view) { return view === 'locatie' ? { view: view, dim: lastDim } : { view: view }; }
         function setScope(patch, key) {
             if (local) {
                 Object.keys(patch).forEach(function (k) { local.scope[k] = patch[k]; });
@@ -144,7 +177,7 @@
             card.stack.forEach(function (e, i) {
                 if (i === 0 || !e.set) { return; }
                 var k = Object.keys(e.set)[0];
-                parts.push({ label: scopeLabel(k, e.set[k]), goto: i });
+                parts.push({ label: e.label || scopeLabel(k, e.set[k]), goto: i });
             });
             if (extra) { parts.push({ label: extra }); }
             return MorphCard.crumbs(parts);
@@ -172,28 +205,35 @@
                 + '<div class="rop-kc-scope' + (path.length ? ' is-scoped' : '') + '">'
                 + (path.length ? '<span class="rop-kc-dot" aria-hidden="true"></span><span class="rop-kc-path" title="' + esc(path.join(' › ')) + '">' + esc(path.join(' › ')) + '</span>'
                     + '<button type="button" class="rop-kc-clear" data-clear title="Înapoi la toată flota" aria-label="Înapoi la toată flota"><i class="bi bi-x"></i></button>'
-                    : '<span class="rop-kc-path">' + (data && data.mode === 'soferi' ? 'Toți șoferii' : 'Toată flota') + (k ? ' · ' + k.unitati + (data.mode === 'soferi' ? ' șoferi' : ' vehicule') : '') + '</span>')
+                    : '<span class="rop-kc-path">' + (data && data.mode === 'soferi' ? 'Toți șoferii' : (data && data.mode === 'locatii' ? 'Toate locațiile' : 'Toată flota')) + (k ? ' · ' + k.unitati + (data.mode === 'soferi' ? ' șoferi' : (data.mode === 'locatii' ? ' locații' : ' vehicule')) : '') + '</span>')
                 + '</div>'
                 + (st ? '<div class="rop-kpi-state ' + (st.ok ? 'is-ok' : 'is-warn') + '" title="' + esc(st.title) + '"><i class="bi ' + (st.ok ? 'bi-check-circle' : 'bi-exclamation-triangle') + '"></i><span>' + esc(st.text) + '</span></div>' : '');
         }
         function listHtml(card, entry) {
-            var lvl = LEVELS[entry.view];
             var v = data && data.kpi ? card.def.num(data.kpi) : null;
             var canSwap = entry.view === 'vehicul' || entry.view === 'sofer';
             return headHtml(card, true)
                 + '<span class="rop-kc-now" title="Valoarea în scopul curent">' + (v === null || v === undefined ? '—' : esc(card.def.short(v))) + '</span></div>'
-                + '<nav class="mc-crumbs" aria-label="Navigare card">' + crumbsHtml(card, lvl.title) + '</nav>'
+                + '<nav class="mc-crumbs" aria-label="Navigare card">' + crumbsHtml(card, levelTitle(entry)) + '</nav>'
                 + (canSwap ? '<div class="mc-seg" role="group" aria-label="Detaliere"><button type="button" data-swap="vehicul" class="' + (entry.view === 'vehicul' ? 'is-on' : '') + '">Vehicule</button>'
                     + '<button type="button" data-swap="sofer" class="' + (entry.view === 'sofer' ? 'is-on' : '') + '">Șoferi</button></div>' : '')
+                + (entry.view === 'locatie' ? '<div class="mc-seg" role="group" aria-label="Locație după">' + LOC_DIMS.map(function (d) {
+                    return '<button type="button" data-loc-dim="' + d.dim + '" class="' + (entry.dim === d.dim ? 'is-on' : '') + '">' + esc(d.label) + '</button>';
+                }).join('') + '</div>' : '')
                 + '<div class="mc-list" data-list role="list">' + MorphCard.loadingHtml() + '</div>'
 ;
         }
         function rowsHtml(card, d) {
             var c = card.def;
             if (!d || !d.ok) { return '<div class="mc-empty">' + esc((d && d.message) || 'Defalcarea nu a putut fi încărcată.') + '</div>'; }
-            if (!d.rows.length) { return '<div class="mc-empty">Fără activitate de defalcat în scopul curent.</div>'; }
-            var unit = data && data.mode === 'soferi' ? 'șoferi' : 'vehicule';
-            return d.rows.map(function (r) {
+            var top = card.stack[card.stack.length - 1];
+            // primul rand sare nivelul (ex. fara tip de transport → direct la locatii / rute)
+            var skip = SKIP_LABELS[top.view] && nextLevel(top.view, {}) ? '<button type="button" class="mc-row rop-kc-skip" role="listitem" data-skip>'
+                + '<span class="mc-row-name">' + esc(SKIP_LABELS[top.view]) + '</span><span class="mc-row-meta">fără filtru</span><span class="mc-row-val"></span>'
+                + '<i class="bi bi-chevron-right mc-row-go"></i></button>' : '';
+            if (!d.rows.length) { return skip + '<div class="mc-empty">Fără activitate de defalcat în scopul curent.</div>'; }
+            var unit = data && data.mode === 'soferi' ? 'șoferi' : (data && data.mode === 'locatii' ? 'locații' : 'vehicule');
+            return skip + d.rows.map(function (r) {
                 var v = c.num(r.kpi), share = r[c.share];
                 var warn = r.kpi.unitati_incomplete > 0;
                 return '<button type="button" class="mc-row" role="listitem" data-pick="' + esc(r.value) + '" data-label="' + esc(r.label) + '">'
@@ -220,7 +260,7 @@
         }
         function fillList(card, entry, view) {
             var list = view.querySelector('[data-list]');
-            breakdown(entry.view).then(function (d) {
+            breakdown(entry.view === 'locatie' ? entry.dim : entry.view).then(function (d) {
                 if (card.shown === view) { MorphCard.refill(list, rowsHtml(card, d)); }
             }).catch(function () { if (card.shown === view) { MorphCard.refill(list, rowsHtml(card, null)); } });
         }
@@ -240,24 +280,35 @@
             if (!next) { return; }
             CARDS.forEach(function (c) { var o = cards[c.key]; if (o !== card && o.stack.length > 1) { o.stack = [{ view: 'overview' }]; show(o, -1); } });
             activeCard = card;
-            card.stack.push({ view: next });
+            card.stack.push(levelEntry(next));
             card.focusNext = true;
             show(card, 1);
         }
         function pick(card, value, label) {
-            var entry = card.stack[card.stack.length - 1], lvl = LEVELS[entry.view], patch = {};
-            patch[lvl.key] = value;
-            labels[lvl.key + ':' + value] = label;
+            var entry = card.stack[card.stack.length - 1], key = levelKey(entry), patch = {};
+            // ruta „origine:destinatie” = filtrul de rute exacte (acelasi ca lista „Rute” din pagina)
+            patch[key] = value;
+            labels[key + ':' + value] = label;
             // valoarea aleasa fixeaza scopul; cardul trece la urmatorul nivel cu date (sau la indicator, la capat)
-            if (lvl.key === 'vehicle_id') { patch.driver_id = ''; }
-            if (lvl.key === 'driver_id') { patch.vehicle_id = ''; }
-            var set = {}; set[lvl.key] = value;
-            var after = entry.view === 'beneficiar' ? (isSet(data.aplicat.tip) ? (data.mode === 'soferi' ? 'sofer' : 'vehicul') : 'tip')
-                : entry.view === 'tip' ? (data.mode === 'soferi' ? 'sofer' : 'vehicul') : null;
-            card.stack.push({ view: after || 'overview', set: set });
+            if (key === 'vehicle_id') { patch.driver_id = ''; }
+            if (key === 'driver_id') { patch.vehicle_id = ''; }
+            var set = Object.assign({}, patch);
+            delete set.driver_id; delete set.vehicle_id;
+            if (key === 'vehicle_id' || key === 'driver_id') { set[key] = value; }
+            var after = entry.view === 'vehicul' || entry.view === 'sofer' ? null : nextLevel(entry.view, patch);
+            card.stack.push(Object.assign(levelEntry(after || 'overview'), { set: set, label: label }));
             card.focusNext = true;
             show(card, 1, true); // lista urmatoare se umple cand vine scopul nou (update → refreshInPlace)
-            setScope(patch, lvl.key);
+            setScope(patch, key);
+        }
+        // „Toți beneficiarii” / „Toate tipurile” / „Toate locațiile”: nivelul urmator fara filtru pe acest nivel (scopul nu se schimba)
+        function skipLevel(card) {
+            var entry = card.stack[card.stack.length - 1];
+            var after = nextLevel(entry.view === 'locatie' ? 'locatie' : entry.view, {});
+            if (!after) { return; }
+            card.stack.push(levelEntry(after));
+            card.focusNext = true;
+            show(card, 1);
         }
         function goTo(card, index) {
             // inapoi la nivelul index: filtrele fixate dupa el se scot (fara resetarea celorlalte filtre)
@@ -274,7 +325,7 @@
         function clearScope(card) {
             CARDS.forEach(function (c) { cards[c.key].stack = [{ view: 'overview' }]; });
             activeCard = null;
-            setScope({ beneficiar: '', tip: '', vehicle_id: '', driver_id: '' }, '');
+            setScope({ beneficiar: '', tip: '', vehicle_id: '', driver_id: '', origine: '', destinatie: '', depozit: '', ruta: '' }, '');
             show(card, -1);
         }
 
@@ -290,6 +341,12 @@
                 if (top.view !== t.dataset.swap) { top.view = t.dataset.swap; show(card, 0); }
                 return;
             }
+            if ((t = e.target.closest('[data-loc-dim]'))) {
+                var cur = card.stack[card.stack.length - 1];
+                if (cur.view === 'locatie' && cur.dim !== t.dataset.locDim) { cur.dim = lastDim = t.dataset.locDim; show(card, 0); }
+                return;
+            }
+            if ((t = e.target.closest('[data-skip]'))) { skipLevel(card); return; }
             if ((t = e.target.closest('[data-pick]'))) { pick(card, t.dataset.pick, t.dataset.label); return; }
             if ((t = e.target.closest('[data-explore]'))) { startNav(card); }
         });
@@ -317,7 +374,7 @@
             var now = view.querySelector('.rop-kc-now');
             if (now) { now.textContent = v === null || v === undefined ? '—' : card.def.short(v); }
             var crumbs = view.querySelector('.mc-crumbs');
-            if (crumbs) { crumbs.innerHTML = crumbsHtml(card, LEVELS[entry.view].title); }
+            if (crumbs) { crumbs.innerHTML = crumbsHtml(card, levelTitle(entry)); }
             tweenValue(card);
             fillList(card, entry, view);
         }

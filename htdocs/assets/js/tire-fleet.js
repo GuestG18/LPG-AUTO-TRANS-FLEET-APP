@@ -145,6 +145,8 @@
     // La rotile duble anvelopa interioara sta langa cea exterioara, spre axul vehiculului; zona de
     // click se imparte la jumatatea spatiului dintre ele (gapAtStart / gapAtEnd).
     var tireRects = function (geo) {
+        // Vehicul desenat din macheta vectorizata (doar exploratorul): anvelopele stau exact pe desen.
+        if (geo.traced && geo.traced.tireRects) { return geo.traced.tireRects(); }
         var isCar = isCarType(geo.type);
         var tireLength = isCar ? 0.66 : 1.05;
         var singleWidth = isCar ? 0.24 : 0.36;
@@ -232,6 +234,10 @@
     // Frana pe anvelopa exterioara, butucul langa ea (roti duble) sau spre ax, suspensia langa axa,
     // diferentialul pe axa motoare, saua in spatele cabinei, pivotul in fata semiremorcii.
     var slotAnchor = function (slot, geo) {
+        if (geo.traced && geo.traced.anchor) {
+            var traced = geo.traced.anchor(slot);
+            if (traced) { return traced; }
+        }
         var hw = geo.halfWidth;
         var axle = geo.axles.filter(function (item) { return item.no === slot.axle; })[0] || null;
         var ax = axle ? axle.x : 0;

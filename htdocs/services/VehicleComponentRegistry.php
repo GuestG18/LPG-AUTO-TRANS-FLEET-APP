@@ -176,7 +176,9 @@ final class VehicleComponentRegistry
             $components = [];
             foreach ($catalogMap[$key] ?? [] as $componentKey) {
                 if (isset($catalog[$componentKey])) {
-                    $components[] = ['key' => $componentKey, 'name' => (string) $catalog[$componentKey]['name']];
+                    // group: categoria din catalogul Reparatii Auto (nivelul real de grupare; un sistem al schemei
+                    // poate aduna componente din mai multe, ex. Electrica = Electrica + alternator din Motor + ABS)
+                    $components[] = ['key' => $componentKey, 'name' => (string) $catalog[$componentKey]['name'], 'group' => (string) ($catalog[$componentKey]['category'] ?? '')];
                 }
             }
             $result[] = [
@@ -194,6 +196,22 @@ final class VehicleComponentRegistry
             ];
         }
         return $result;
+    }
+
+    /**
+     * Nota pe schema pentru o componenta pusa doar pe unele roti. Pe un capat de axa (o parte) conteaza
+     * doar exterior / interior; pe un loc al axei intregi se listeaza rotile.
+     */
+    public static function wheelNote(array $positions, bool $oneSide): string
+    {
+        if ($oneSide) {
+            $outer = count(array_filter($positions, static fn (string $p): bool => strlen($p) === 2 && $p[1] === 'O'));
+            $inner = count(array_filter($positions, static fn (string $p): bool => strlen($p) === 2 && $p[1] === 'I'));
+            return $outer > 0 && $inner === 0 ? 'doar exterior' : ($inner > 0 && $outer === 0 ? 'doar interior' : '');
+        }
+        $labels = ['L' => 'stânga', 'R' => 'dreapta', 'LO' => 'stânga ext.', 'LI' => 'stânga int.', 'RI' => 'dreapta int.', 'RO' => 'dreapta ext.'];
+
+        return 'doar ' . implode(', ', array_map(static fn (string $p): string => $labels[$p] ?? $p, $positions));
     }
 
     public static function roleForVehicleType(string $vehicleType): string
@@ -395,28 +413,52 @@ final class VehicleComponentRegistry
                 }
             }
             // Un sistem fara limitari (sau inca fara componente) sta pe toate axele.
-            $onAxle = static function (int $axleNo) use ($configured, $present): bool {
-                if ($configured === null || $present === []) {
+            // Componentele puse doar pe unele roti ale unei axe (cheie -> axa -> pozitii, ex. LO).
+            $partialWheels = $configured['wheels'] ?? [];
+            $onSide = static function (string $key, int $axleNo, ?string $side) use ($partialWheels): bool {
+                if ($side === null || !isset($partialWheels[$key][$axleNo])) {
                     return true;
                 }
-                foreach ($present as $allowed) {
-                    if ($allowed === null || in_array($axleNo, $allowed, true)) {
+                foreach ($partialWheels[$key][$axleNo] as $position) {
+                    if ($position[0] === $side) {
                         return true;
                     }
                 }
                 return false;
             };
-            $extraFor = static function (?int $axleNo) use ($configured, $present): array {
+            $onAxle = static function (int $axleNo, ?string $side = null) use ($configured, $present, $onSide): bool {
+                if ($configured === null || $present === []) {
+                    return true;
+                }
+                foreach ($present as $key => $allowed) {
+                    if (($allowed === null || in_array($axleNo, $allowed, true)) && $onSide((string) $key, $axleNo, $side)) {
+                        return true;
+                    }
+                }
+                return false;
+            };
+            $extraFor = static function (?int $axleNo, ?string $side = null) use ($configured, $present, $onSide, $partialWheels): array {
                 if ($configured === null) {
                     return [];
                 }
                 $keys = [];
+                $notes = [];
                 foreach ($present as $key => $allowed) {
-                    if ($axleNo === null || $allowed === null || in_array($axleNo, $allowed, true)) {
+                    $key = (string) $key;
+                    if ($axleNo === null || (($allowed === null || in_array($axleNo, $allowed, true)) && $onSide($key, $axleNo, $side))) {
                         $keys[] = $key;
+                        // Pe ce roti sta, cand nu sta pe toate rotile axei.
+                        $positions = $axleNo !== null ? ($partialWheels[$key][$axleNo] ?? []) : [];
+                        if ($side !== null) {
+                            $positions = array_values(array_filter($positions, static fn (string $position): bool => $position[0] === $side));
+                        }
+                        $note = $positions !== [] ? self::wheelNote($positions, $side !== null) : '';
+                        if ($note !== '') {
+                            $notes[$key] = $note;
+                        }
                     }
                 }
-                return ['components' => $keys];
+                return ['components' => $keys] + ($notes !== [] ? ['wheel_notes' => $notes] : []);
             };
             $slotCountBefore = count($slots);
             // Sistemele proprii: dupa locul ales la creare (un punct, pe axe sau pe roti).
@@ -424,11 +466,10 @@ final class VehicleComponentRegistry
             switch ($switchKey) {
                 case 'custom_wheel_end':
                     foreach ($axles as $axle) {
-                        if (!$onAxle($axle['no'])) {
-                            continue;
-                        }
                         foreach (['L' => 'stânga', 'R' => 'dreapta'] as $side => $sideLabel) {
-                            $add($category, 'A' . $axle['no'] . '-' . $side, 'wheel_end', $label . ' · Axa ' . $axle['no'] . ' ' . $sideLabel, ['axle' => $axle['no'], 'side' => $side] + $extraFor($axle['no']));
+                            if ($onAxle($axle['no'], $side)) {
+                                $add($category, 'A' . $axle['no'] . '-' . $side, 'wheel_end', $label . ' · Axa ' . $axle['no'] . ' ' . $sideLabel, ['axle' => $axle['no'], 'side' => $side] + $extraFor($axle['no'], $side));
+                            }
                         }
                     }
                     break;
@@ -445,11 +486,10 @@ final class VehicleComponentRegistry
                 case 'franare':
                 case 'rulare':
                     foreach ($axles as $axle) {
-                        if (!$onAxle($axle['no'])) {
-                            continue;
-                        }
                         foreach (['L' => 'stânga', 'R' => 'dreapta'] as $side => $sideLabel) {
-                            $add($category, 'A' . $axle['no'] . '-' . $side, 'wheel_end', $label . ' · Axa ' . $axle['no'] . ' ' . $sideLabel, ['axle' => $axle['no'], 'side' => $side] + $extraFor($axle['no']));
+                            if ($onAxle($axle['no'], $side)) {
+                                $add($category, 'A' . $axle['no'] . '-' . $side, 'wheel_end', $label . ' · Axa ' . $axle['no'] . ' ' . $sideLabel, ['axle' => $axle['no'], 'side' => $side] + $extraFor($axle['no'], $side));
+                            }
                         }
                     }
                     break;

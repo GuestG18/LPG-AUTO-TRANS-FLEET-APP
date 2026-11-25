@@ -665,9 +665,9 @@
     if (reduced) staticScene();
     else {
       // only animate while the topbar is on screen and the tab is visible
-      var onScreen = true;
+      var onScreen = true, held = false, holdTimer = 0;
       var update = function () {
-        var want = onScreen && !document.hidden;
+        var want = onScreen && !document.hidden && !held;
         if (want && !running) { running = true; last = null; rafId = requestAnimationFrame(frame); }
         else if (!want && running) { running = false; cancelAnimationFrame(rafId); }
       };
@@ -675,8 +675,27 @@
         new IntersectionObserver(function (e) { onScreen = e[0].isIntersecting; update(); }).observe(root);
       }
       document.addEventListener("visibilitychange", update);
+      // while the user works in the vehicle scheme (page Auto / driver sheet) the animation pauses and
+      // resumes 1 s after the last click / zoom / hover there: the scheme gets every frame
+      // (a tyre click on the coupled tractor + trailer: ~80 ms with the animation, ~40 ms without)
+      onSchemeActivity(function () {
+        if (!held) { held = true; update(); }
+        clearTimeout(holdTimer);
+        holdTimer = setTimeout(function () { held = false; update(); }, 1000);
+      });
       update();
     }
+  }
+
+  // Interaction inside the X-ray vehicle scheme (.fx-explorer), from anywhere it is mounted.
+  function onSchemeActivity(fn) {
+    var inScheme = function (e) {
+      var t = e.target;
+      if (t && t.closest && t.closest(".fx-explorer")) fn();
+    };
+    ["pointerdown", "pointermove", "wheel", "keydown"].forEach(function (type) {
+      document.addEventListener(type, inScheme, { capture: true, passive: true });
+    });
   }
 
   function boot() {

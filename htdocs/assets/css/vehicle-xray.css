@@ -21,7 +21,7 @@
 .fx-cat-all.is-active, .fx-cat-all.is-active:hover { background: linear-gradient(180deg, #2f86ff 0%, #1661e8 100%); border-color: #1661e8; color: #fff; box-shadow: 0 6px 16px rgba(22, 97, 232, .35); }
 .fx-cat-all.is-active .fx-cat-icon { border-color: #fff; color: #fff; }
 .fx-cat.is-active:not(.fx-cat-all) .fx-cat-icon { border-color: var(--fx-accent, var(--fx-blue)); color: var(--fx-accent, var(--fx-blue)); }
-.fx-cat:focus-visible, .fx-hot:focus-visible, .fx-legend-item:focus-visible, .fx-card.is-button:focus-visible, .fx-more-item:focus-visible, .fx-callout:focus-visible, .fx-axle-btn:focus-visible { outline: 3px solid rgba(29, 111, 242, .55); outline-offset: 2px; }
+.fx-cat:focus-visible, .fx-hot:focus-visible, .fx-legend-item:focus-visible, .fx-card.is-button:focus-visible, .fx-more-item:focus-visible, .fx-axle-btn:focus-visible { outline: 3px solid rgba(29, 111, 242, .55); outline-offset: 2px; }
 .fx-more { position: relative; }
 .fx-more-menu { position: absolute; z-index: 40; top: calc(100% + 6px); right: 0; min-width: 270px; background: #fff; border: 1px solid #d6e0ee; border-radius: 12px; padding: 6px; box-shadow: 0 16px 36px rgba(15, 42, 92, .18); }
 .fx-more-item { display: flex; align-items: center; gap: 10px; width: 100%; border: 0; background: transparent; border-radius: 8px; padding: 8px 10px; text-align: left; font-size: .92rem; color: #142a52; }
@@ -31,9 +31,12 @@
 /* Scena: desenul ocupa aproape toata latimea; legenda compacta in dreapta */
 .fx-body { display: grid; grid-template-columns: minmax(0, 1fr) 262px; gap: 12px; align-items: center; margin-top: 10px; }
 .fx-stage { position: relative; aspect-ratio: var(--fx-aspect, 1700 / 470); border-radius: 14px; background: radial-gradient(ellipse at 45% 45%, #ffffff 0%, #f2f6fc 62%, #e8eff8 100%); overflow: hidden; --fx-m: 30px; }
-.fx-svg-host, .fx-svg-host .fx-svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
-.fx-callout-lines { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
-.fx-callout-lines line { stroke: var(--fx-accent); stroke-width: .18; stroke-dasharray: .8 .6; vector-effect: non-scaling-stroke; stroke-width: 1.4; opacity: .8; }
+.fx-svg-host, .fx-svg-host .fx-svg, .fx-svg-host .fx-svg-art { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+/* Stratul desenului static: rasterizat separat, deci hover / selectie / etichete nu-l repicteaza; estomparea
+   la filtrare e opacitatea stratului (compozitor), nu a imaginii din SVG. */
+.fx-svg-host .fx-svg-art { pointer-events: none; will-change: transform; transition: opacity .3s; }
+/* Camera maririi: doar cat dureaza animatia (stratul temporar e scalat de compozitor, fara rasterizare). */
+.fx-svg-host.is-camera { will-change: transform; transform-origin: 0 0; }
 
 /* Silueta si straturile desenului */
 .fx-outline { stroke-width: 3.2; stroke-linejoin: round; }
@@ -92,6 +95,24 @@
 .fx-explorer.is-filtered:not(.is-tires) .fx-tire { opacity: .55; }
 .fx-explorer.is-tires .fx-part { opacity: .3; }
 
+/* Vehiculele vectorizate din macheta: desenul (gri, neutru) e baza, peste el doar zone de selectie.
+   Piesele sunt contururile lor exacte: invizibile implicit, conturate cand sistemul lor e ales. Fara
+   imagini colorate, filtre sau tranzitii (un filtru pe un copil SVG se rasteriza din nou la fiecare cadru). */
+.fx-trace-base { pointer-events: none; }
+.fx-explorer.is-filtered .fx-svg-art { opacity: .6; }
+.fx-trace-sil { fill: none; stroke: none; pointer-events: none; transition: none; }
+/* Starea configurata (vehicle-xray-art.js, paintCondition): o culoare fixa pe conturul piesei, peste desenul
+   gri, cat sa se vada detaliile de dedesubt. Selectia adauga doar conturul, culoarea starii ramane. */
+.fx-trace-sil.has-condition { fill-opacity: .5; }
+.fx-trace-part.is-active, .fx-explorer.is-tires .fx-trace-part.is-active { opacity: 1; }
+.fx-trace-part.is-active .fx-trace-sil { stroke: #f97316; stroke-width: 2.2; stroke-linejoin: round; }
+.fx-trace-beam { fill: transparent; stroke: none; }
+.fx-axle:hover .fx-trace-beam { fill: rgba(29, 111, 242, .22); filter: none; }
+.fx-axle.is-selected .fx-axle-beam.fx-trace-beam { fill: rgba(29, 111, 242, .42); stroke: #1d6ff2; stroke-width: 1.2; }
+.fx-trace-tyre:not(.fx-tire-ghost) { fill: transparent; stroke: transparent; stroke-width: 2.5; }
+.fx-tire:hover .fx-trace-tyre:not(.fx-tire-ghost), .fx-tire:focus-visible .fx-trace-tyre:not(.fx-tire-ghost) { stroke: rgba(29, 111, 242, .75); }
+.fx-tire.is-selected .fx-trace-tyre:not(.fx-tire-ghost) { fill: rgba(29, 111, 242, .16); stroke: #1d6ff2; stroke-width: 3.5; }
+
 /* Etichetele rotilor cu linii de legatura */
 .fx-tire-label { cursor: pointer; transition: opacity .25s; }
 .fx-connector { stroke: #6f8fd6; stroke-width: 1.3; stroke-dasharray: 3 3; fill: none; }
@@ -104,7 +125,7 @@
 .fx-explorer.is-zoomed .fx-tire-label { opacity: .25; }
 
 /* Punctele componentelor: insigne luminoase pe piese */
-.fx-hots, .fx-callouts { position: absolute; inset: 0; pointer-events: none; }
+.fx-hots { position: absolute; inset: 0; pointer-events: none; }
 .fx-hot { position: absolute; pointer-events: auto; width: var(--fx-m); height: var(--fx-m); transform: translate(-50%, -50%); border-radius: 50%; border: 2px solid #fff; padding: 0; display: grid; place-items: center; font-size: calc(var(--fx-m) * .5); color: #fff;
     background: radial-gradient(circle at 35% 30%, color-mix(in srgb, var(--fx-accent) 55%, #fff) 0%, var(--fx-accent) 55%, color-mix(in srgb, var(--fx-accent) 75%, #000) 100%);
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--fx-accent) 55%, transparent), 0 0 14px 2px color-mix(in srgb, var(--fx-accent) 70%, transparent), 0 3px 8px rgba(15, 23, 42, .3);
@@ -114,8 +135,13 @@
 .fx-hot.has-records::after { content: ""; position: absolute; top: -3px; right: -3px; width: 10px; height: 10px; border-radius: 50%; background: #fff; border: 3px solid #1d6ff2; }
 .fx-hot.is-hidden { opacity: 0; transform: translate(-50%, -50%) scale(.4); pointer-events: none; }
 .fx-explorer.has-selection .fx-hot:not(.is-selected):not(.is-hidden) { opacity: .32; transform: translate(-50%, -50%) scale(.85); }
-.fx-explorer .fx-hot.is-selected { transform: translate(-50%, -50%) scale(1.25); z-index: 6; animation: fxPulse 1.8s ease-out infinite; }
-@keyframes fxPulse { 0% { box-shadow: 0 0 0 2px #fff, 0 0 0 4px color-mix(in srgb, var(--fx-accent) 70%, transparent), 0 0 18px 4px color-mix(in srgb, var(--fx-accent) 75%, transparent); } 100% { box-shadow: 0 0 0 2px #fff, 0 0 0 16px transparent, 0 0 18px 4px color-mix(in srgb, var(--fx-accent) 75%, transparent); } }
+.fx-explorer .fx-hot.is-selected { transform: translate(-50%, -50%) scale(1.25); z-index: 6; box-shadow: 0 0 0 2px #fff, 0 0 18px 4px color-mix(in srgb, var(--fx-accent) 75%, transparent); }
+/* Pulsul marcajului selectat: inelul care se departeaza si se stinge, din transform + opacity pe un
+   pseudo-element (compozitor). Vechiul box-shadow animat repicta zona (si desenul de sub ea) la fiecare cadru. */
+.fx-explorer:not(.is-editing) .fx-hot.is-selected::before { content: ""; position: absolute; inset: -4px; border-radius: inherit; box-shadow: 0 0 0 2px color-mix(in srgb, var(--fx-accent) 70%, transparent), 0 0 6px 2px color-mix(in srgb, var(--fx-accent) 45%, transparent); pointer-events: none; animation: fxPulseRing 1.8s ease-out infinite; }
+@keyframes fxPulseRing { from { transform: scale(1); opacity: 1; } to { transform: scale(1.9); opacity: 0; } }
+/* Schema iesita din ecran: pulsul sta pe loc (nu mai produce cadre de compozitor degeaba). */
+.fx-explorer.is-offscreen .fx-hot.is-selected::before { animation-play-state: paused; }
 .fx-hot.fx-state-ok { box-shadow: 0 0 0 3px #22a455, 0 0 14px 2px color-mix(in srgb, var(--fx-accent) 70%, transparent); }
 .fx-hot.fx-state-warn { box-shadow: 0 0 0 3px #f59e0b, 0 0 14px 2px rgba(245, 158, 11, .7); }
 .fx-hot.fx-state-crit { box-shadow: 0 0 0 3px #e5383b, 0 0 14px 2px rgba(229, 56, 59, .7); }
@@ -128,12 +154,6 @@
 /* Detalierea ansamblului: subcomponente in jurul piesei marite */
 .fx-zoom-back { position: absolute; z-index: 8; bottom: 12px; left: 50%; transform: translateX(-50%); display: inline-flex; align-items: center; gap: 8px; height: 38px; padding: 0 14px; border: 1px solid #d0dbec; border-radius: 10px; background: rgba(255, 255, 255, .95); color: var(--fx-navy); font-weight: 600; box-shadow: 0 4px 12px rgba(15, 42, 92, .14); }
 .fx-zoom-back[hidden] { display: none; }
-.fx-callout { position: absolute; pointer-events: auto; transform: translate(-50%, -50%); display: inline-flex; align-items: center; gap: 8px; max-width: 24%; padding: 7px 12px; border: 1px solid color-mix(in srgb, var(--fx-accent) 35%, #dbe4f0); border-radius: 10px; background: rgba(255, 255, 255, .96); color: #142a52; font-size: .86rem; font-weight: 600; text-align: left; box-shadow: 0 4px 12px rgba(15, 42, 92, .12); animation: fxCalloutIn .3s ease-out both; }
-.fx-callout:hover { border-color: var(--fx-accent); }
-.fx-callout.is-selected { background: color-mix(in srgb, var(--fx-accent) 14%, #fff); border-color: var(--fx-accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--fx-accent) 35%, transparent), 0 4px 12px rgba(15, 42, 92, .12); }
-.fx-callout-dot { width: 10px; height: 10px; flex: 0 0 10px; border-radius: 50%; background: var(--fx-accent); box-shadow: 0 0 8px var(--fx-accent); }
-.fx-callout-note { max-width: 60%; font-weight: 500; }
-@keyframes fxCalloutIn { from { opacity: 0; } to { opacity: 1; } }
 .fx-svg-host .fx-svg { transition: none; }
 
 /* Legenda */
@@ -208,7 +228,6 @@
     .fx-legend { display: none; }
     .fx-id-plate { font-size: 1.15rem; }
     .fx-cat { height: 38px; padding: 0 10px; font-size: .85rem; }
-    .fx-callout { max-width: 40%; font-size: .75rem; }
 }
 
 /* Panoul componentei */
@@ -282,9 +301,6 @@
 /* ===================== Inspectorul componentei (dreapta) + separatorul redimensionabil ===================== */
 .fx-left, .fx-right { min-width: 0; }
 .fx-right { align-self: stretch; display: flex; flex-direction: column; }
-.fx-callout.is-selected { background: linear-gradient(180deg, color-mix(in srgb, var(--fx-accent) 82%, #fff), var(--fx-accent)); border-color: var(--fx-accent); color: #fff; box-shadow: 0 0 0 3px color-mix(in srgb, var(--fx-accent) 30%, transparent), 0 6px 16px color-mix(in srgb, var(--fx-accent) 45%, transparent); }
-.fx-callout.is-selected .fx-callout-dot { background: #fff; box-shadow: 0 0 8px #fff; }
-.fx-callout-lines line.is-selected { stroke-dasharray: none; stroke-width: 2.6; opacity: 1; }
 .fx-narrow-back, .fi-narrow-toggle { display: none; }
 
 .fx-body.is-inspecting { grid-template-columns: calc((100% - 18px) * var(--fx-split, .55)) 18px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: 0; height: clamp(560px, 68vh, 720px); align-items: stretch; }
@@ -395,10 +411,6 @@
     body.fx-printing .fi.is-printing .fi-narrow-toggle, body.fx-printing .fi.is-printing .fi-inline-actions, body.fx-printing .fi.is-printing form { display: none !important; }
 }
 
-/* Schema ingustata de inspector: etichetele se lipesc de margini, pe un rand, ca sa nu acopere piesa. */
-.fx-body.is-inspecting .fx-callout { white-space: nowrap; max-width: 46%; overflow: hidden; padding: 6px 10px; gap: 6px; font-size: .8rem; }
-.fx-body.is-inspecting .fx-callout.is-left { left: 1.5% !important; transform: translate(0, -50%); }
-.fx-body.is-inspecting .fx-callout.is-right { left: 98.5% !important; transform: translate(-100%, -50%); }
 .fx-body.is-inspecting .fx-left, .fx-body.is-inspecting .fx-right { min-height: 0; overflow: hidden; }
 @media (max-width: 900px) {
     .fx-body.is-inspecting.show-diagram .fx-left { display: block; }
@@ -474,6 +486,7 @@ a.fx-card.is-button { text-decoration: none; color: inherit; }
 .fx-km-filled { animation: fx-km-filled 1.4s ease-out; }
 @keyframes fx-km-filled { 0%, 40% { box-shadow: 0 0 0 3px rgba(21, 112, 239, .35); background: #eef4ff; } 100% { box-shadow: none; background: #fff; } }
 @media (prefers-reduced-motion: reduce) { .fx-km-filled { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .fx-explorer .fx-hot.is-selected::before { animation: none; } }
 
 /* „Data & ora montării” (selectorul din Adauga cursa) in formularele de montare: butonul ramane langa
    camp, iar calendarul iese peste panoul cu derulare (pozitie fixa, setata in vehicle-xray.js). */
@@ -494,3 +507,50 @@ a.fx-card.is-button { text-decoration: none; color: inherit; }
 .fx-hot.is-part { width: calc(var(--fx-m) * .72); height: calc(var(--fx-m) * .72); font-size: calc(var(--fx-m) * .36); border-width: 2px; }
 .fx-hot-label { position: absolute; left: calc(100% + 5px); top: 50%; transform: translateY(-50%); max-width: 150px; overflow: hidden; padding: 2px 7px; border: 1px solid color-mix(in srgb, var(--fx-accent) 35%, #fff); border-radius: 999px; background: rgba(255, 255, 255, .94); color: #142a52; font-size: 11px; font-weight: 600; line-height: 1.3; white-space: nowrap; text-overflow: ellipsis; pointer-events: none; box-shadow: 0 2px 6px rgba(15, 23, 42, .12); }
 .fx-hot.is-hidden .fx-hot-label { display: none; }
+
+/* ===================== Exploratorul de componente (nivelul 2: sistemul ales) =====================
+   Inlocuieste etichetele cu linii din jurul piesei: o lista compacta, marginita, in coloana din dreapta.
+   Pe lat nu contribuie la inaltimea randului (absolut in coloana): schema isi pastreaza dimensiunea. */
+.fx-right.has-xp { position: relative; }
+.fx-right.has-xp .fx-legend { display: none; }
+.fx-xp { position: absolute; inset: 0; display: flex; flex-direction: column; min-height: 0; background: linear-gradient(180deg, #ffffff, #f6f9fe); border: 1px solid #e1e9f5; border-radius: 14px; box-shadow: 0 2px 10px rgba(15, 42, 92, .07); overflow: hidden; contain: layout paint; }
+.fx-xp[hidden] { display: none; }
+.fx-xp-head { display: flex; align-items: center; gap: 10px; padding: 10px 10px 8px 12px; border-bottom: 1px solid #edf2f9; }
+.fx-xp-icon { width: 32px; height: 32px; flex: 0 0 32px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-size: .9rem; background: radial-gradient(circle at 35% 30%, color-mix(in srgb, var(--fx-accent) 55%, #fff), var(--fx-accent)); }
+.fx-xp-icon.is-square { border-radius: 28%; }
+.fx-xp-title { flex: 1 1 auto; min-width: 0; }
+.fx-xp-name { font-weight: 800; color: var(--fx-navy); line-height: 1.2; }
+.fx-xp-sub { font-size: .78rem; color: #5b6d8c; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fx-xp-close { flex: 0 0 auto; width: 30px; height: 30px; border: 1px solid #d8e2f0; border-radius: 8px; background: #fff; color: #33476b; display: grid; place-items: center; }
+.fx-xp-close:hover { border-color: #9fb6d9; color: #142a52; }
+.fx-xp-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 12px; font-size: .8rem; color: #33476b; }
+.fx-xp-sys { display: inline-flex; align-items: center; gap: 6px; color: #5b6d8c; }
+.fx-xp-search { display: flex; align-items: center; gap: 6px; margin: 0 10px 8px; padding: 0 9px; height: 32px; border: 1px solid #d8e2f0; border-radius: 8px; background: #fff; color: #7b8aa5; }
+.fx-xp-search:focus-within { border-color: #1d6ff2; box-shadow: 0 0 0 3px rgba(29, 111, 242, .15); }
+.fx-xp-search input { flex: 1 1 auto; min-width: 0; border: 0; outline: 0; background: transparent; font-size: .84rem; color: #142a52; }
+.fx-xp-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 6px 8px; }
+.fx-xp-group-head { display: flex; align-items: center; gap: 6px; width: 100%; border: 0; background: transparent; padding: 6px 6px; font-size: .8rem; font-weight: 700; color: #33476b; text-align: left; }
+.fx-xp-group-head i { font-size: .7rem; transition: transform .15s; }
+.fx-xp-group-head[aria-expanded="true"] i { transform: rotate(90deg); }
+.fx-xp-group-head span:first-of-type { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fx-xp-count { flex: 0 0 auto; min-width: 22px; padding: 0 6px; border-radius: 9px; background: #eef3fa; color: #5b6d8c; font-size: .72rem; text-align: center; }
+.fx-xp-row { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; padding: 5px 8px; margin-bottom: 3px; border: 1px solid #edf2f9; border-radius: 8px; background: #fbfcff; font-size: .85rem; color: #1b2f55; text-align: left; }
+.fx-xp-row:hover { border-color: #cdd9ea; background: #fff; }
+.fx-xp-row:focus-visible, .fx-xp-group-head:focus-visible, .fx-xp-close:focus-visible, .fx-xp-more:focus-visible { outline: 3px solid rgba(29, 111, 242, .55); outline-offset: 1px; }
+.fx-xp-row.is-selected { border-color: #1d6ff2; background: #eaf2ff; box-shadow: inset 3px 0 0 #1d6ff2; font-weight: 600; }
+.fx-xp-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.fx-xp-note { display: block; font-size: .74rem; font-weight: 500; color: #5b6d8c; }
+.fx-xp-pct { flex: 0 0 auto; font-size: .74rem; color: #5b6d8c; font-variant-numeric: tabular-nums; }
+.fx-xp-dot { width: 9px; height: 9px; flex: 0 0 9px; border-radius: 50%; }
+.fx-xp-dot.is-none { background: transparent; border: 1.5px solid #a8b5c9; }
+.fx-xp-more { width: 100%; border: 1px dashed #cdd9ea; border-radius: 8px; background: transparent; padding: 5px; font-size: .8rem; color: #1d6ff2; }
+.fx-xp-empty { padding: 12px 8px; font-size: .84rem; color: #5b6d8c; }
+/* Cu inspectorul deschis: exploratorul ramane deasupra lui, scurt, ca alt rand sa se poata alege direct. */
+.fx-body.is-inspecting .fx-right.has-xp { gap: 8px; }
+.fx-body.is-inspecting .fx-xp { position: static; flex: 0 1 auto; max-height: 30%; min-height: 120px; }
+/* inspectorul mai scund: doar corpul lui se strange (antet, cifre, tab-uri, actiuni raman intregi) */
+.fx-body.is-inspecting .fx-right.has-xp .fi > :not(.fi-body) { flex-shrink: 0; }
+.fx-body.is-inspecting .fx-xp-meta { display: none; }
+@media (max-width: 1100px) {
+    .fx-xp { position: static; max-height: 380px; margin-top: 8px; }
+}

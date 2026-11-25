@@ -19,7 +19,7 @@
         page: parseInt(params.get('p') || '1', 10) || 1,
         per_page: parseInt(params.get('per_page') || '10', 10) || 10,
         // categoria aleasa in cardul „Valoare initiala” (restrange doar tabelul; nu se pastreaza in URL)
-        fin_node: '', fin_tip: ''
+        fin_node: '', fin_tip: '', fin_masura: '', tip_vehicul: ''
     };
     var rowsByKey = {};
     var open = {};          // key -> { detail, tab, cat, line, project }
@@ -180,7 +180,7 @@
         tbody.classList.add('is-busy');
         syncUrl();
         return getJson(url(CFG.urls.list, { q: state.q, tab: state.tab, status: state.status, tara: state.tara, perioada: state.perioada, p: state.page, per_page: state.per_page,
-            fin_node: state.fin_node, fin_tip: state.fin_tip }), listAbort.signal)
+            fin_node: state.fin_node, fin_tip: state.fin_tip, fin_masura: state.fin_masura, tip_vehicul: state.tip_vehicul }), listAbort.signal)
             .then(function (data) {
                 tbody.classList.remove('is-busy');
                 if (!data.ok) { tbody.innerHTML = emptyRow('bi-exclamation-triangle', data.message || 'Lista nu a putut fi încărcată.'); return; }
@@ -198,36 +198,74 @@
 
     function renderKpis(data) {
         var k = data.kpis;
-        animateNumber(root.querySelector('[data-kpi="vehicule"]'), k.vehicule, '');
-        // cardul „Valoare initiala” isi tine singur valoarea (navigare interna); primeste totalul si scopul paginii
-        if (valueCard) {
-            valueCard.update(k.valoare_initiala, { dossiers: k.dosare, incomplete: k.dosare_incomplete },
-                { q: state.q, tab: state.tab, status: state.status, tara: state.tara, perioada: state.perioada });
-        }
-        animateNumber(root.querySelector('[data-kpi="capitalizat"]'), k.capitalizat, ' lei');
-        animateNumber(root.querySelector('[data-kpi="necapitalizabile"]'), k.necapitalizabile, ' lei');
-        animateNumber(root.querySelector('[data-kpi="derulare"]'), k.derulare, '');
-        var note = root.querySelector('[data-kpi="capitalizat_note"]');
-        note.textContent = k.capitalizat_vs_initial !== null && k.capitalizat_vs_initial !== undefined
-            ? (k.capitalizat_vs_initial > 0 ? '+' : '') + String(k.capitalizat_vs_initial).replace('.', ',') + '% vs. inițial' : '';
+        // cardurile KPI isi tin singure valorile (navigare interna); primesc KPI-urile si filtrele paginii
+        var filters = { q: state.q, tab: state.tab, status: state.status, tara: state.tara, perioada: state.perioada };
+        Object.keys(kpiCards).forEach(function (key) { kpiCards[key].update(k, filters); });
         ['toate', 'derulare', 'finalizate'].forEach(function (key) { root.querySelector('[data-count="' + key + '"]').textContent = data.counts[key]; });
         root.querySelectorAll('.ifv-seg-btn').forEach(function (b) { b.classList.toggle('is-active', b.dataset.tab === state.tab); });
     }
 
-    // „Valoare initiala (total)”: categorie aleasa in card → tabelul arata doar dosarele cu costuri in ea;
-    // o tranzactie deschide fisa ei (acelasi panou ca la clic pe rand in Costuri).
-    var valueCardEl = document.getElementById('ifvValueCard');
-    var valueCard = window.IfvValueCard && valueCardEl ? window.IfvValueCard.mount(valueCardEl, {
-        endpoint: CFG.urls.kpiBreakdown,
-        onScope: function (scope) {
-            if (String(scope.fin_node || '') === String(state.fin_node) && String(scope.fin_tip || '') === String(state.fin_tip)) { return; }
-            state.fin_node = scope.fin_node ? String(scope.fin_node) : '';
-            state.fin_tip = scope.fin_tip || '';
-            state.page = 1;
-            loadList();
-        },
-        onLine: function (lineId, dossierKey, rowEl, newTab) { openLineSheet(dossierKey, lineId, rowEl, newTab); }
-    }) : null;
+    // ------------------------------------------------------------------ carduri KPI (navigare interna)
+    // Un singur card restrange tabelul odata (vehicule pe tip, categorie financiara, etapa dosarului). Cand un card
+    // preia scopul, celalalt revine la total; la iesirea la total se reda scopul de dinainte (ex. fila si statusul).
+    var kpiCards = {};
+    var cardScope = { owner: null, saved: null };
+    function applyScope(patch) {
+        var changed = false;
+        Object.keys(patch).forEach(function (k) {
+            var v = patch[k] == null ? '' : String(patch[k]);
+            if (String(state[k] == null ? '' : state[k]) !== v) { state[k] = v; changed = true; }
+        });
+        if (patch.status !== undefined) { selStatus.value = state.status; }
+        if (patch.tab !== undefined && !state.tab) { state.tab = 'toate'; }
+        return changed;
+    }
+    function onCardScope(key, patch, keys) {
+        if (patch === null) {
+            if (cardScope.owner !== key) { return; }
+            var restore = cardScope.saved || {};
+            cardScope.owner = null; cardScope.saved = null;
+            if (applyScope(restore)) { state.page = 1; loadList(); }
+            return;
+        }
+        var restored = false;
+        if (cardScope.owner !== key) {
+            if (cardScope.owner && kpiCards[cardScope.owner]) {
+                // cardul anterior revine la total; scopul lui se scoate (si atunci cand noul card nu schimba nimic)
+                kpiCards[cardScope.owner].reset();
+                restored = applyScope(cardScope.saved || {});
+            }
+            cardScope.saved = {};
+            keys.forEach(function (k) { cardScope.saved[k] = state[k] == null ? '' : state[k]; });
+            cardScope.owner = key;
+        }
+        if (applyScope(patch) || restored) { state.page = 1; loadList(); }
+    }
+    function openTableRow(rowKey, label) {
+        var go = function () {
+            if (!rowsByKey[rowKey]) { return false; }
+            if (!open[rowKey]) { expand(rowKey); }
+            var tr = rowEl(rowKey);
+            if (tr) { tr.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+            return true;
+        };
+        if (go()) { return; }
+        // randul e pe alta pagina a tabelului: il cautam dupa numar (cautarea ramane vizibila in bara de sus)
+        state.q = label || ''; searchInput.value = state.q; state.page = 1;
+        loadList().then(go);
+    }
+    if (window.IfvKpiCard) {
+        root.querySelectorAll('[data-ifv-card]').forEach(function (cardEl) {
+            var key = cardEl.dataset.ifvCard;
+            kpiCards[key] = window.IfvKpiCard.mount(cardEl, {
+                card: key,
+                endpoint: CFG.urls.kpiBreakdown,
+                onScope: onCardScope,
+                onLine: function (lineId, dossierKey, rowEl, newTab) { openLineSheet(dossierKey, lineId, rowEl, newTab); },
+                onRow: function (rowKey, label) { openTableRow(rowKey, label); }
+            });
+        });
+    }
 
     function renderCountries(list) {
         var current = state.tara;
@@ -266,7 +304,7 @@
     function renderRows(rows) {
         rowsByKey = {};
         if (!rows.length) {
-            tbody.innerHTML = emptyRow('bi-inboxes', state.q || state.status || state.tara || state.perioada || state.tab !== 'toate' || state.fin_node
+            tbody.innerHTML = emptyRow('bi-inboxes', state.q || state.status || state.tara || state.perioada || state.tab !== 'toate' || state.fin_node || state.tip_vehicul
                 ? 'Niciun vehicul sau dosar pentru filtrele alese.' : 'Nu există încă vehicule sau dosare de achiziție.');
             return;
         }
@@ -324,13 +362,6 @@
     root.querySelectorAll('.ifv-seg-btn').forEach(function (b) {
         b.addEventListener('click', function () { state.tab = b.dataset.tab; state.page = 1; loadList(); });
     });
-    root.querySelectorAll('[data-kpi-tab]').forEach(function (card) {
-        card.addEventListener('click', function () {
-            state.tab = card.dataset.kpiTab; state.page = 1;
-            root.querySelectorAll('.ifv-kpi').forEach(function (c) { c.classList.toggle('is-active', c === card && state.tab !== 'toate'); });
-            loadList().then(function () { root.querySelector('.ifv-table-card').scrollIntoView({ behavior: 'smooth', block: 'start' }); });
-        });
-    });
     root.addEventListener('click', function (e) {
         var action = e.target.closest('[data-ifv-action]');
         if (!action) { return; }
@@ -338,7 +369,10 @@
         if (a === 'create-dossier') { formDossier(null); }
         if (a === 'refresh') { loadList(); }
         if (a === 'reset') {
-            state = { q: '', tab: 'toate', status: '', tara: '', perioada: '', page: 1, per_page: state.per_page };
+            state = { q: '', tab: 'toate', status: '', tara: '', perioada: '', page: 1, per_page: state.per_page, fin_node: '', fin_tip: '', fin_masura: '', tip_vehicul: '' };
+            // resetarea paginii aduce si cardurile KPI la total (fara scop propriu)
+            Object.keys(kpiCards).forEach(function (k) { kpiCards[k].reset(); });
+            cardScope.owner = null; cardScope.saved = null;
             searchInput.value = ''; selStatus.value = ''; selPeriod.value = '';
             loadList();
         }

@@ -207,7 +207,17 @@ class MaintenanceController
             $sections = $service->sections($profile['type'], $effective['systems'], $effective['components']);
             $page['vehicle'] = $selectedVehicle + ['axles' => $profile['axles'], 'assigned' => !empty($effective['structure']['assigned'])];
             $page['structure'] = $effective['structure'];
-            $page['axle_columns'] = $service->axleColumns($profile['type'], $effective['axle_kinds'], true);
+            $page['axle_columns'] = $service->axleColumns($effective['axle_kinds']);
+            $page['axle_kinds_map'] = $effective['axle_kinds'];
+            $page['axle_wheels_map'] = $effective['axle_wheels'];
+            // „Aplică pe alte vehicule”: acelasi tip de vehicul, cu axele lor.
+            $page['copy_targets'] = [];
+            foreach ($service->axleCopyTargets($selectedVehicle['id']) as $target) {
+                if (isset($vehicles[$target['id']])) {
+                    $page['copy_targets'][] = $target + ['label' => $vehicles[$target['id']]['label'], 'plate' => $vehicles[$target['id']]['plate']];
+                }
+            }
+            usort($page['copy_targets'], static fn (array $a, array $b): int => strcmp($a['plate'], $b['plate']));
             $page['removed'] = $service->removedItems($effective);
             $page['compatible'] = array_values(array_filter($structures, static fn (array $item): bool => $item['type'] === $profile['type'] && $item['axles'] === $profile['axles']));
             $page['explorer'] = $this->legacyController->fleetExplorerData($selectedVehicle['id']);
@@ -236,7 +246,9 @@ class MaintenanceController
             $components = array_map(static fn (array $component): array => $component + ['origin' => 'general'], $structure['components']);
             $sections = $service->sections($structure['type'], $structure['systems'], $components);
             $page['structure'] = $structure;
-            $page['axle_columns'] = $service->axleColumns($structure['type'], $structure['axle_kinds'], false);
+            $page['axle_columns'] = $service->axleColumns($structure['axle_kinds']);
+            $page['axle_kinds_map'] = $structure['axle_kinds'];
+            $page['axle_wheels_map'] = $structure['axle_wheels'];
             $catalog = $service->catalog();
             $catalogMap = $service->catalogMap();
             $page['explorer'] = [

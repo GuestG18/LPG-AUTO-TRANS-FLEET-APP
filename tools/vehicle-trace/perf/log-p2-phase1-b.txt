@@ -1,0 +1,23 @@
+Cap tractor 2 axe {"load":{"wallMs":989,"domContentLoaded":768,"scripting":220.7,"styleLayout":217.1,"paint":24.7,"raster":221.3,"imageDecode":34.4,"parse":136.2,"layoutCount":20,"longestLayout":46.5},"sel":{"n":6,"median":65.1,"avg":55.2,"worst":71},"zoom":{"avg":16.9,"worst":66.7,"dropped":7},"mem":[3,3.4],"nodes":134}
+Camion 4 axe {"load":{"wallMs":1095,"domContentLoaded":886,"scripting":220,"styleLayout":243.9,"paint":23.5,"raster":206.6,"imageDecode":49.7,"parse":138.3,"layoutCount":22,"longestLayout":56.1},"sel":{"n":6,"median":50.6,"avg":48.3,"worst":67.8},"zoom":{"avg":18.8,"worst":116.6,"dropped":94},"mem":[3,3.4],"nodes":195}
+Semiremorcă 6 axe {"load":{"wallMs":2376,"domContentLoaded":1956,"scripting":348.6,"styleLayout":442.5,"paint":44.8,"raster":413,"imageDecode":81.9,"parse":181.6,"layoutCount":26,"longestLayout":99.2},"sel":{"n":6,"median":52.5,"avg":63.2,"worst":114.6},"zoom":{"avg":17.7,"worst":116.7,"dropped":40},"mem":[2.9,3.4],"nodes":225}
+node:internal/process/promises:394
+    triggerUncaughtException(err, true /* fromPromise */);
+    ^
+
+elementHandle.click: Element is outside of the viewport
+Call log:
+[2m  - attempting click action[22m
+[2m    - scrolling into view if needed[22m
+[2m    - done scrolling[22m
+
+    at C:\laragon\www\aplicatie_fleet\tools\vehicle-trace\perf\bench.js:242:86 {
+  log: [
+    '  - attempting click action',
+    '    - scrolling into view if needed',
+    '    - done scrolling'
+  ],
+  name: 'Error'
+}
+
+Node.js v24.13.0

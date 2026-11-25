@@ -110,7 +110,8 @@ final class VehicleFinancialRegisterService
         $finNode = (int) ($f['fin_node'] ?? 0);
         $finType = (string) ($f['fin_tip'] ?? '');
         if ($finNode > 0) {
-            $finScope = $this->categoryScope($visible, $finNode, $finType !== '' ? $finType : null);
+            $measure = (string) ($f['fin_masura'] ?? 'total');
+            $finScope = $this->categoryScope($visible, $finNode, $finType !== '' ? $finType : null, isset(self::MEASURES[$measure]) ? $measure : 'total');
         }
 
         $kpis = ['vehicule' => 0, 'valoare_initiala' => 0.0, 'capitalizat' => 0.0, 'necapitalizabile' => 0.0, 'derulare' => $counts['derulare'], 'dosare' => 0, 'tratament_neconfirmat' => 0.0, 'dosare_incomplete' => 0];
@@ -132,6 +133,7 @@ final class VehicleFinancialRegisterService
             $kpis['tratament_neconfirmat'] += $row['tratament_neconfirmat'];
         }
         $kpis['vehicule'] = count($vehicles) + count(array_filter($visible, static fn ($r) => $r['vehicle_id'] === null));
+        $kpis['vehicule_fara_dosar'] = count(array_filter($visible, static fn ($r) => $r['status'] === 'fara_dosar'));
         foreach (['valoare_initiala', 'capitalizat', 'necapitalizabile', 'tratament_neconfirmat'] as $key) {
             $kpis[$key] = round($kpis[$key], 2);
         }
@@ -140,6 +142,11 @@ final class VehicleFinancialRegisterService
         $tableRows = $finScope !== null
             ? array_values(array_filter($visible, static fn (array $row): bool => isset($finScope['acquisitions'][(int) $row['acquisition_id']])))
             : $visible;
+        // tipul de vehicul ales in cardul „Total vehicule” (doar tabelul)
+        $vehicleType = (string) ($f['tip_vehicul'] ?? '');
+        if ($vehicleType !== '') {
+            $tableRows = array_values(array_filter($tableRows, static fn (array $row): bool => $row['tip'] === $vehicleType));
+        }
         $perPage = (int) ($f['per_page'] ?? 10);
         $perPage = in_array($perPage, [10, 25, 50], true) ? $perPage : 10;
         $pages = max(1, (int) ceil(count($tableRows) / $perPage));
@@ -156,6 +163,7 @@ final class VehicleFinancialRegisterService
             }, $slice),
             'total' => count($tableRows),
             '_visible' => $visible,
+            '_filtered' => $filtered,
             'categorie' => $finScope !== null ? ['node' => $finNode, 'tip' => $finType, 'label' => $finScope['label'], 'total' => $finScope['total'], 'dosare' => count($finScope['acquisitions'])] : null,
             'page' => $page,
             'pages' => $pages,
@@ -249,68 +257,93 @@ final class VehicleFinancialRegisterService
     }
 
     /**
-     * Defalcarea cardului „Valoare initiala (total)” (navigare in card, dimensiuni fixe):
+     * Defalcarea cardurilor financiare din Istoric Financiar Vehicul (navigare in card, dimensiuni fixe):
      *   categorii principale → subcategorii (copiii din financiar_categorii) → tipuri de cost → tranzactii.
-     * Scopul = dosarele vizibile cu filtrele paginii (ca KPI-ul valoare_initiala). Totalurile vin din
-     * FinancialCategoryTree::aggregate peste liniile dosarelor (aceleasi excluderi ca summary(): anulate, incluse
-     * in alta linie, TVA, fara curs), deci suma categoriilor se reconciliaza cu valoarea de la nivelul 0;
-     * o diferenta se raporteaza explicit (nu se ajusteaza).
+     * $measure: total (Valoare initiala) | capitalizabil (Valoare capitalizata) | necapitalizabil (Cheltuieli necapitalizabile).
+     * Scopul = dosarele vizibile cu filtrele paginii (ca KPI-urile). Totalurile vin din FinancialCategoryTree::aggregate
+     * peste liniile dosarelor (aceleasi excluderi ca summary(): anulate, incluse in alta linie, TVA, fara curs; tratamentul
+     * pe linie), deci suma categoriilor se reconciliaza cu KPI-ul cardului; o diferenta se raporteaza explicit.
      *
-     * @param ?int    $node nodul ales (null = nivelul de sus)
-     * @param ?string $type tipul de cost ales in frunza (null = inca nu)
+     * Fiecare rand are si campurile generice ale cardului (value, unit, meta, info, drill).
      */
-    public function initialValueBreakdown(array $f, ?int $node = null, ?string $type = null): array
+    public function initialValueBreakdown(array $f, ?int $node = null, ?string $type = null, string $measure = 'total'): array
     {
+        if (!isset(self::MEASURES[$measure])) {
+            throw new InvalidArgumentException('Indicator necunoscut.');
+        }
+        [$totalKey, $rowKey, $title] = self::MEASURES[$measure];
         $visible = $this->visibleRows($f);
         $dossiers = array_values(array_filter($visible, static fn (array $r): bool => $r['acquisition_id'] !== null && $r['status'] !== 'anulat'));
-        $level0 = round(array_sum(array_map(static fn (array $r): float => (float) $r['cost_initial'], $dossiers)), 2);
+        $level0 = round(array_sum(array_map(static fn (array $r): float => (float) $r[$rowKey], $dossiers)), 2);
         $tree = new FinancialCategoryTree($this->db);
         $lines = $this->collectLines($dossiers, $tree);
         $flat = $tree->flatten($tree->aggregate($this->linesForTotals($lines)));
         $byId = array_column($flat, null, 'id');
-        $rootsWithData = array_values(array_filter($flat, static fn (array $n): bool => $n['nivel'] === 0 && $n['totaluri']['linii'] > 0));
-        $rootsTotal = round(array_sum(array_map(static fn (array $n): float => $n['totaluri']['total'], $rootsWithData)), 2);
+        // numarul de tranzactii pe nod, doar cele care intra in indicatorul cardului
+        $counts = [];
+        foreach ($lines as $l) {
+            if (self::countsInMeasure($l, $measure)) {
+                foreach ($l['fin_cale'] as $id) {
+                    $counts[$id] = ($counts[$id] ?? 0) + 1;
+                }
+            }
+        }
+        $value = static fn (array $n): float => (float) $n['totaluri'][$totalKey];
+        $hasData = static fn (array $n): bool => ($counts[$n['id']] ?? 0) > 0;
+        $roots = array_values(array_filter($flat, static fn (array $n): bool => $n['nivel'] === 0 && $hasData($n)));
+        $rootsTotal = round(array_sum(array_map($value, $roots)), 2);
         $noRate = [];
-        foreach ($rootsWithData as $r) {
+        foreach ($roots as $r) {
             foreach ($r['totaluri']['fara_curs'] as $cur => $amount) {
                 $noRate[$cur] = round(($noRate[$cur] ?? 0) + $amount, 2);
             }
         }
         $out = [
-            'valoare_initiala' => $level0,
+            'indicator' => $measure,
+            'valoare_initiala' => $level0, // valoarea de la nivelul 0 a cardului (numele ramane pentru compatibilitate)
+            'kpi' => $level0,
+            'unit' => 'lei',
             'reconciliere' => ['total_categorii' => $rootsTotal, 'diferenta' => round($level0 - $rootsTotal, 2), 'fara_curs' => $noRate],
             'dosare' => count($dossiers),
             'dosare_incomplete' => count(array_filter($dossiers, static fn (array $r): bool => (int) $r['incomplet'] > 0)),
         ];
+        $nodeRow = function (array $n, float $parentTotal) use ($value, $counts): array {
+            $v = $value($n);
+            $share = $parentTotal > 0 ? $v / $parentTotal * 100 : null;
+            $count = (int) ($counts[$n['id']] ?? 0);
+            return ['kind' => 'node', 'id' => (int) $n['id'], 'label' => $n['denumire'], 'total' => $v, 'count' => $count, 'share' => $share,
+                'frunza' => $n['frunza'], 'fara_curs' => $n['totaluri']['fara_curs'],
+                'value' => $v, 'unit' => 'lei', 'meta' => $share === null ? $count . ' tr.' : $this->pct1($share), 'drill' => true,
+                'info' => $n['denumire'] . ' — ' . $this->lei0($v) . ($share === null ? '' : ' · ' . $this->pct1($share) . ' din nivelul de deasupra') . ' · ' . $count . ' tranzacții'];
+        };
 
-        // nivelul de sus: o singura radacina cu date (ex. „Achizitie si punere in exploatare”) se sare transparent
         if ($node === null) {
-            if (count($rootsWithData) === 1) {
-                $node = (int) $rootsWithData[0]['id'];
-                $out['radacina_sarita'] = $rootsWithData[0]['denumire'];
+            if (count($roots) === 1) {
+                $node = (int) $roots[0]['id'];
+                $out['radacina_sarita'] = $roots[0]['denumire'];
             } else {
-                return $out + ['nivel' => 'categorii', 'titlu' => 'Valoare inițială', 'total' => $level0, 'cale' => [],
-                    'randuri' => array_map(fn (array $n): array => $this->nodeRow($n, $level0), $rootsWithData)];
+                return $out + ['nivel' => 'categorii', 'titlu' => $title, 'total' => $level0, 'cale' => [],
+                    'randuri' => array_map(static fn (array $n): array => $nodeRow($n, $level0), $roots)];
             }
         }
         $current = $byId[$node] ?? throw new InvalidArgumentException('Categoria nu există sau nu are costuri în scop.');
         $path = array_map(static fn (int $id): array => ['id' => $id, 'label' => (string) ($byId[$id]['denumire'] ?? '')], $tree->path($node));
-        $total = (float) $current['totaluri']['total'];
+        $total = $value($current);
         $out += ['node' => $node, 'cale' => $path, 'titlu' => $current['denumire'], 'total' => $total];
 
         if (!$current['frunza']) {
             $children = array_values(array_filter(array_map(static fn (int $id): ?array => $byId[$id] ?? null, $current['copii']),
-                static fn (?array $n): bool => $n !== null && $n['totaluri']['linii'] > 0));
-            return $out + ['nivel' => 'categorii', 'randuri' => array_map(fn (array $n): array => $this->nodeRow($n, $total), $children)];
+                static fn (?array $n): bool => $n !== null && $hasData($n)));
+            return $out + ['nivel' => 'categorii', 'randuri' => array_map(static fn (array $n): array => $nodeRow($n, $total), $children)];
         }
 
-        // frunza: tipurile de cost ale liniilor ei (doar cele cu inregistrari); cu un singur tip → direct tranzactiile
-        $leafLines = array_values(array_filter($lines, static fn (array $l): bool => in_array($node, $l['fin_cale'], true) && !$l['anulat']));
+        // frunza: tipurile de cost ale liniilor ei care tin de indicator; cu un singur tip → direct tranzactiile
+        $leafLines = array_values(array_filter($lines, static fn (array $l): bool => in_array($node, $l['fin_cale'], true) && self::shownInMeasure($l, $measure)));
         $types = [];
         foreach ($leafLines as $l) {
             $types[$l['categorie']] ??= ['kind' => 'tip', 'id' => $l['categorie'], 'label' => $l['categorie_label'], 'total' => 0.0, 'count' => 0];
             $types[$l['categorie']]['count']++;
-            if (self::countsInValue($l)) {
+            if (self::countsInMeasure($l, $measure)) {
                 $types[$l['categorie']]['total'] += (float) $l['suma'];
             }
         }
@@ -320,6 +353,8 @@ final class VehicleFinancialRegisterService
             foreach ($rows as &$r) {
                 $r['total'] = round($r['total'], 2);
                 $r['share'] = $total > 0 ? $r['total'] / $total * 100 : null;
+                $r += ['value' => $r['total'], 'unit' => 'lei', 'meta' => $r['share'] === null ? $r['count'] . ' tr.' : $this->pct1($r['share']), 'drill' => true,
+                    'info' => $r['label'] . ' — ' . $this->lei0($r['total']) . ($r['share'] === null ? '' : ' · ' . $this->pct1($r['share']) . ' din categorie') . ' · ' . $r['count'] . ' tranzacții'];
             }
             unset($r);
             return $out + ['nivel' => 'tipuri', 'randuri' => $rows];
@@ -337,16 +372,32 @@ final class VehicleFinancialRegisterService
             $out['tip'] = ['id' => $only, 'label' => $types[$only]['label'], 'unic' => true];
         }
         usort($leafLines, static fn (array $a, array $b): int => strcmp((string) $b['data'], (string) $a['data']) ?: $b['id'] <=> $a['id']);
-        return $out + ['nivel' => 'tranzactii', 'randuri' => array_map(static fn (array $l): array => [
-            'kind' => 'linie', 'id' => $l['id'], 'data' => $l['data'], 'descriere' => $l['descriere'] ?: $l['categorie_label'], 'furnizor' => $l['furnizor'],
-            'suma' => $l['suma'], 'suma_originala' => $l['suma_originala'], 'moneda' => $l['moneda'], 'curs' => $l['curs'],
-            'tratament' => $l['tratament'], 'tratament_label' => $l['tratament_label'], 'status_verificare' => $l['status_verificare'],
-            'document' => trim(($l['document_tip'] ? $l['document_tip'] . ' ' : '') . (string) ($l['document_numar'] ?? '')), 'are_fisier' => $l['are_fisier'],
-            'dosar' => $l['_dosar'], 'dosar_key' => 'a' . $l['_acq'],
-            'in_valoare' => self::countsInValue($l),
-            'nota' => $l['inclus_in'] ? 'inclusă în linia #' . $l['inclus_in'] : ($l['clasificare'] === 'tva' ? 'TVA — nu intră în valoare' : ($l['suma'] === null ? 'fără curs ' . $l['moneda'] : '')),
-        ], $leafLines)];
+        return $out + ['nivel' => 'tranzactii', 'randuri' => array_map(function (array $l) use ($measure): array {
+            $in = self::countsInMeasure($l, $measure);
+            $doc = trim(($l['document_tip'] ? $l['document_tip'] . ' ' : '') . (string) ($l['document_numar'] ?? ''));
+            $note = $l['inclus_in'] ? 'inclusă în linia #' . $l['inclus_in'] : ($l['clasificare'] === 'tva' ? 'TVA — nu intră în valoare' : ($l['suma'] === null ? 'fără curs ' . $l['moneda'] : ''));
+            $date = $l['data'] ? date('d.m.y', strtotime((string) $l['data'])) : '';
+            return [
+                'kind' => 'linie', 'id' => $l['id'], 'data' => $l['data'], 'descriere' => $l['descriere'] ?: $l['categorie_label'], 'furnizor' => $l['furnizor'],
+                'suma' => $l['suma'], 'suma_originala' => $l['suma_originala'], 'moneda' => $l['moneda'], 'curs' => $l['curs'],
+                'tratament' => $l['tratament'], 'tratament_label' => $l['tratament_label'], 'status_verificare' => $l['status_verificare'],
+                'document' => $doc, 'are_fisier' => $l['are_fisier'], 'dosar' => $l['_dosar'], 'dosar_key' => 'a' . $l['_acq'],
+                'in_valoare' => $in, 'nota' => $note,
+                'label' => $l['descriere'] ?: $l['categorie_label'], 'value' => $l['suma'], 'unit' => 'lei', 'meta' => $date, 'drill' => false, 'out' => !$in, 'dot' => $l['tratament'],
+                'value_text' => $l['suma'] === null ? number_format((float) $l['suma_originala'], 2, ',', '.') . ' ' . $l['moneda'] : null,
+                'info' => implode("\n", array_filter([$l['descriere'] ?: $l['categorie_label'], $l['data'] ? date('d.m.Y', strtotime((string) $l['data'])) : '', $l['furnizor'] ?: '—',
+                    ($l['suma'] !== null ? number_format((float) $l['suma'], 2, ',', '.') . ' lei' : '') . ($l['moneda'] !== 'RON' ? ' (' . number_format((float) $l['suma_originala'], 2, ',', '.') . ' ' . $l['moneda'] . ')' : ''),
+                    'Tratament: ' . $l['tratament_label'], $doc !== '' ? 'Document: ' . $doc : 'Fără document', 'Dosar: ' . $l['_dosar'], $note])),
+            ];
+        }, $leafLines)];
     }
+
+    /** [cheia din totaluri, campul din randul dosarului, titlul] pentru fiecare indicator financiar al cardurilor. */
+    private const MEASURES = [
+        'total' => ['total', 'cost_initial', 'Valoare inițială'],
+        'capitalizabil' => ['capitalizabil', 'capitalizat', 'Valoare capitalizată'],
+        'necapitalizabil' => ['necapitalizabil', 'necapitalizabile', 'Cheltuieli necapitalizabile'],
+    ];
 
     /** O linie intra in valoarea initiala: neanulata, neinclusa in alta, nu e TVA, are curs (aceleasi reguli ca summary()). */
     private static function countsInValue(array $l): bool
@@ -354,22 +405,125 @@ final class VehicleFinancialRegisterService
         return !$l['anulat'] && $l['inclus_in'] === null && $l['clasificare'] !== 'tva' && $l['suma'] !== null;
     }
 
-    private function nodeRow(array $n, float $parentTotal): array
+    /** Linia intra in indicatorul cardului (valoarea initiala, restransa la tratamentul cardului). */
+    private static function countsInMeasure(array $l, string $measure): bool
     {
-        return ['kind' => 'node', 'id' => (int) $n['id'], 'label' => $n['denumire'], 'total' => $n['totaluri']['total'], 'count' => $n['totaluri']['linii'],
-            'share' => $parentTotal > 0 ? $n['totaluri']['total'] / $parentTotal * 100 : null, 'frunza' => $n['frunza'],
-            'fara_curs' => $n['totaluri']['fara_curs']];
+        return self::countsInValue($l) && self::treatmentMatches($l, $measure);
     }
 
-    /** Dosarele (din randurile date) cu costuri care intra in valoare in categoria / tipul ales + totalul lor. */
-    private function categoryScope(array $rows, int $node, ?string $type): array
+    /** Linia se arata in lista cardului (si cele neincluse in valoare, marcate): neanulata, cu tratamentul cardului. */
+    private static function shownInMeasure(array $l, string $measure): bool
+    {
+        return !$l['anulat'] && self::treatmentMatches($l, $measure);
+    }
+
+    private static function treatmentMatches(array $l, string $measure): bool
+    {
+        return match ($measure) {
+            'capitalizabil' => $l['tratament'] === 'capitalizabil',
+            'necapitalizabil' => $l['tratament'] === 'cheltuiala',
+            default => true,
+        };
+    }
+
+    /**
+     * Cardul „Total vehicule”: tipurile de vehicul → vehiculele tipului (un vehicul o singura data, ca KPI-ul;
+     * dosarele provizorii fara vehicul inmatriculat se numara fiecare). Doar citire, din randurile vizibile.
+     */
+    public function vehicleBreakdown(array $f, ?string $group = null): array
+    {
+        $visible = $this->visibleRows($f);
+        $units = []; // cheie unica: vehiculul sau dosarul provizoriu
+        foreach ($visible as $row) {
+            $key = $row['vehicle_id'] !== null ? 'v' . $row['vehicle_id'] : $row['key'];
+            // randul dosarului (activ) are prioritate fata de randul „fara dosar” / dosarul anulat al aceluiasi vehicul
+            if (!isset($units[$key]) || ($units[$key]['acquisition_id'] === null && $row['acquisition_id'] !== null) || $units[$key]['status'] === 'anulat') {
+                $units[$key] = $row;
+            }
+        }
+        $total = count($units);
+        $groups = [];
+        foreach ($units as $row) {
+            $groups[$row['tip']] ??= ['label' => (string) $row['tip_label'], 'rows' => []];
+            $groups[$row['tip']]['rows'][] = $row;
+        }
+        $out = ['indicator' => 'vehicule', 'kpi' => $total, 'unit' => 'count', 'total' => $total, 'titlu' => 'Tipuri de vehicul'];
+        if ($group === null) {
+            $rows = [];
+            foreach ($groups as $tip => $g) {
+                $n = count($g['rows']);
+                $withDossier = count(array_filter($g['rows'], static fn (array $r): bool => $r['acquisition_id'] !== null && $r['status'] !== 'anulat'));
+                $rows[] = ['kind' => 'grup', 'id' => (string) $tip, 'label' => $g['label'], 'value' => $n, 'unit' => 'count', 'count' => $n,
+                    'share' => $total > 0 ? $n / $total * 100 : null, 'meta' => $withDossier . ' cu dosar', 'drill' => true,
+                    'info' => $g['label'] . ': ' . $n . ' vehicule · ' . $withDossier . ' cu dosar de achiziție · ' . ($n - $withDossier) . ' fără dosar'];
+            }
+            usort($rows, static fn (array $a, array $b): int => $b['value'] <=> $a['value'] ?: strcmp($a['label'], $b['label']));
+            return $out + ['nivel' => 'grupuri', 'randuri' => $rows];
+        }
+        $g = $groups[$group] ?? throw new InvalidArgumentException('Tipul de vehicul nu are vehicule în scop.');
+        $rows = array_map(fn (array $r): array => [
+            'kind' => 'rand', 'id' => $r['key'], 'label' => (string) $r['nr'], 'value' => $r['cost_initial'], 'unit' => 'lei',
+            'value_text' => $r['cost_initial'] === null ? '—' : null, 'meta' => (string) $r['status_label'], 'drill' => false, 'row_key' => $r['key'],
+            'info' => trim($r['nr'] . ' · ' . $r['model']) . "\n" . $r['status_label'] . ($r['cost_initial'] !== null ? "\nCost inițial: " . $this->lei0((float) $r['cost_initial']) : ''),
+        ], $g['rows']);
+        usort($rows, static fn (array $a, array $b): int => strnatcasecmp($a['label'], $b['label']));
+        return array_merge($out, ['nivel' => 'randuri', 'titlu' => $g['label'], 'total' => count($rows), 'grup' => $group, 'randuri' => $rows]);
+    }
+
+    /**
+     * Cardul „Dosare in derulare”: statusul dosarului (in analiza, contractat, in plata ...) → dosarele lui.
+     * Aceeasi selectie ca KPI-ul: dosarele filtrate (inaintea filei), neanulate si nefinalizate.
+     */
+    public function dossierBreakdown(array $f, ?string $group = null): array
+    {
+        $rows = array_values(array_filter($this->filteredRows($f), static fn (array $r): bool => $r['acquisition_id'] !== null && !in_array($r['status'], [self::FINISHED, 'anulat'], true)));
+        $total = count($rows);
+        $out = ['indicator' => 'derulare', 'kpi' => $total, 'unit' => 'count', 'total' => $total, 'titlu' => 'Etape'];
+        if ($group === null) {
+            $list = [];
+            foreach (array_keys(self::STATUS_LABELS) as $status) {
+                $in = array_values(array_filter($rows, static fn (array $r): bool => $r['status'] === $status));
+                if ($in === []) {
+                    continue;
+                }
+                $value = array_sum(array_map(static fn (array $r): float => (float) $r['cost_initial'], $in));
+                $list[] = ['kind' => 'grup', 'id' => $status, 'label' => self::STATUS_LABELS[$status], 'value' => count($in), 'unit' => 'count', 'count' => count($in),
+                    'share' => $total > 0 ? count($in) / $total * 100 : null, 'meta' => $this->lei0($value), 'drill' => true,
+                    'info' => self::STATUS_LABELS[$status] . ': ' . count($in) . ' dosare · cost inițial ' . $this->lei0($value)];
+            }
+            return $out + ['nivel' => 'grupuri', 'randuri' => $list];
+        }
+        if (!isset(self::STATUS_LABELS[$group])) {
+            throw new InvalidArgumentException('Status necunoscut.');
+        }
+        $in = array_values(array_filter($rows, static fn (array $r): bool => $r['status'] === $group));
+        return array_merge($out, ['nivel' => 'randuri', 'titlu' => self::STATUS_LABELS[$group], 'total' => count($in), 'grup' => $group,
+            'randuri' => array_map(fn (array $r): array => [
+                'kind' => 'rand', 'id' => $r['key'], 'label' => (string) $r['nr'], 'value' => $r['cost_initial'], 'unit' => 'lei', 'drill' => false, 'row_key' => $r['key'],
+                'meta' => $r['data_achizitie'] ? date('d.m.y', strtotime((string) $r['data_achizitie'])) : (string) $r['cod_dosar'],
+                'info' => $r['cod_dosar'] . ' · ' . trim($r['nr'] . ' ' . $r['model']) . "\nCost inițial: " . $this->lei0((float) $r['cost_initial']) . ((int) $r['incomplet'] > 0 ? "\nDate incomplete" : ''),
+            ], $in)]);
+    }
+
+    private function lei0(float $v): string
+    {
+        return number_format($v, 0, ',', '.') . ' lei';
+    }
+
+    private function pct1(float $v): string
+    {
+        return number_format($v, 1, ',', '.') . '%';
+    }
+
+    /** Dosarele (din randurile date) cu costuri care intra in indicator in categoria / tipul ales + totalul lor. */
+    private function categoryScope(array $rows, int $node, ?string $type, string $measure = 'total'): array
     {
         $dossiers = array_values(array_filter($rows, static fn (array $r): bool => $r['acquisition_id'] !== null && $r['status'] !== 'anulat'));
         $tree = new FinancialCategoryTree($this->db);
         $acq = [];
         $total = 0.0;
         foreach ($this->collectLines($dossiers, $tree) as $l) {
-            if (!in_array($node, $l['fin_cale'], true) || ($type !== null && $l['categorie'] !== $type) || !self::countsInValue($l)) {
+            if (!in_array($node, $l['fin_cale'], true) || ($type !== null && $l['categorie'] !== $type) || !self::countsInMeasure($l, $measure)) {
                 continue;
             }
             $acq[$l['_acq']] = true;
@@ -402,11 +556,16 @@ final class VehicleFinancialRegisterService
         ], $lines);
     }
 
-    /** Randurile vizibile (filtrele paginii + fila), fara paginare — aceeasi selectie ca list(). */
+    /** Randurile vizibile (filtrele paginii + fila), fara paginare si fara restrangerile cardurilor — ca KPI-urile. */
     private function visibleRows(array $f): array
     {
-        $out = $this->list(['per_page' => 50, 'page' => 1, 'fin_node' => 0] + $f);
-        return $out['_visible'];
+        return $this->list(['per_page' => 50, 'page' => 1, 'fin_node' => 0, 'tip_vehicul' => ''] + $f)['_visible'];
+    }
+
+    /** Randurile filtrate inaintea filei (ca numaratoarea „In derulare”). */
+    private function filteredRows(array $f): array
+    {
+        return $this->list(['per_page' => 50, 'page' => 1, 'fin_node' => 0, 'tip_vehicul' => ''] + $f)['_filtered'];
     }
 
     /** @return array{0:?string,1:?string} */

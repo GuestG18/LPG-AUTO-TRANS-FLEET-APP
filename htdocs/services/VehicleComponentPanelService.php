@@ -24,6 +24,63 @@ final class VehicleComponentPanelService
     }
 
     /**
+     * Starea pe sisteme pentru culorile schemei: pentru fiecare categorie a vehiculului, cea mai mare
+     * consumare a intervalului dintre componentele ei configurate (prima limita atinsa decide). Aceleasi
+     * date si aceeasi regula ca build() / Reparatii Auto (AutoComponentStateService::wearPercent: km de bord
+     * sau luni de la ultima montare reala, raportat la intervalul configurat). Nimic inventat: o categorie
+     * fara componente configurate, fara interval sau fara montare reala lipseste (ramane gri pe schema).
+     * E consumarea intervalului planificat, nu uzura fizica masurata (aceea e in inspectii / anvelope).
+     *
+     * @param array $vehicle randul din vehicule (id, km_bord)
+     * @param array<string,array> $catalog AutoComponentCatalogService::components()
+     * @param array|null $partIndex MaintenanceModel::getAutoComponentPartIndex(), refolosit intre vehicule
+     * @return array<string,array{wear:int,components:int}>
+     */
+    public function conditionByCategory(array $vehicle, array $catalog, ?array $partIndex = null): array
+    {
+        $vehicleId = (int) $vehicle['id'];
+        $configs = $this->maintenance->getAutoComponentConfigs($vehicleId);
+        if ($configs === []) {
+            return [];
+        }
+        $usage = $this->maintenance->getAutoPartUsageForVehicle($vehicleId);
+        $partIndex ??= $this->maintenance->getAutoComponentPartIndex();
+        $vehicleKm = is_numeric((string) ($vehicle['km_bord'] ?? null)) ? (int) $vehicle['km_bord'] : 0;
+
+        $result = [];
+        foreach (VehicleComponentRegistry::catalogByCategory($catalog) as $category => $keys) {
+            $highest = null;
+            $counted = 0;
+            foreach ($keys as $key) {
+                $config = $configs[$key] ?? null;
+                $item = $catalog[$key] ?? null;
+                if (!is_array($config) || $item === null) {
+                    continue;
+                }
+                $part = AutoComponentStateService::findStockPart($partIndex, (string) $item['category'], (string) $item['name']);
+                $wear = AutoComponentStateService::wearPercent([
+                    'configured' => true,
+                    'inherited' => !empty($config['inherited']),
+                    'interval' => $config['interval_value'] ?? null,
+                    'unit' => (string) ($config['unit'] ?? 'km'),
+                    'stock_part_id' => (int) ($config['stock_part_id'] ?? 0) ?: (int) ($part['id'] ?? 0),
+                    'config_created_at' => (string) ($config['created_at'] ?? ''),
+                ], $vehicleKm, $usage);
+                if ($wear === null) {
+                    continue;
+                }
+                $counted++;
+                $highest = $highest === null ? $wear : max($highest, $wear);
+            }
+            if ($highest !== null) {
+                $result[$category] = ['wear' => $highest, 'components' => $counted];
+            }
+        }
+
+        return $result;
+    }
+
+    /**
      * @param array $vehicle randul din vehicule (id, nr_inmatriculare, tip_vehicul, km_bord...)
      * @param array<string,array> $catalog AutoComponentCatalogService::components()
      */

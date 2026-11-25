@@ -1,0 +1,466 @@
+{
+ "label": "final-before",
+ "date": "2026-11-24T09:46:50.922Z",
+ "configs": [
+  {
+   "name": "Cap tractor 2 axe",
+   "steps": {
+    "load": {
+     "wallMs": 2331,
+     "domContentLoaded": 1814,
+     "scripting": 349.7,
+     "styleLayout": 413.5,
+     "paint": 79.3,
+     "raster": 676.4,
+     "imageDecode": 170.2,
+     "parse": 168.4,
+     "layoutCount": 33,
+     "longestLayout": 72.3
+    },
+    "selectTyre": {
+     "wallMs": 1099,
+     "longTasks": 1,
+     "longestTask": 57,
+     "frames": 98,
+     "avg": 24.3,
+     "worst": 116.7,
+     "dropped": 45,
+     "scripting": 183.1,
+     "styleLayout": 178.3,
+     "paint": 114.5,
+     "raster": 1051.1,
+     "imageDecode": 0,
+     "parse": 0.1,
+     "layoutCount": 45,
+     "longestLayout": 15.8
+    },
+    "switchSystem": {
+     "wallMs": 3368,
+     "longTasks": 0,
+     "longestTask": 0,
+     "frames": 185,
+     "avg": 31.2,
+     "worst": 200,
+     "dropped": 161,
+     "scripting": 244.7,
+     "styleLayout": 374.1,
+     "paint": 250.7,
+     "raster": 3256.1,
+     "imageDecode": 60.4,
+     "parse": 1.5,
+     "layoutCount": 88,
+     "longestLayout": 3.1
+    },
+    "zoom": {
+     "wallMs": 5995,
+     "longTasks": 0,
+     "longestTask": 0,
+     "frames": 765,
+     "avg": 18.3,
+     "worst": 99.9,
+     "dropped": 73,
+     "scripting": 459.5,
+     "styleLayout": 714.8,
+     "paint": 678.6,
+     "raster": 4989.9,
+     "imageDecode": 0,
+     "parse": 0.6,
+     "layoutCount": 320,
+     "longestLayout": 5.3
+    },
+    "hover": {
+     "wallMs": 2826,
+     "longTasks": 0,
+     "longestTask": 0,
+     "frames": 227,
+     "avg": 23.9,
+     "worst": 149.9,
+     "dropped": 98,
+     "scripting": 127.1,
+     "styleLayout": 250.9,
+     "paint": 226.2,
+     "raster": 2868.6,
+     "imageDecode": 0,
+     "parse": 0,
+     "layoutCount": 75,
+     "longestLayout": 1.9
+    }
+   },
+   "afterLoad": {
+    "svgNodes": 134,
+    "explorerNodes": 343,
+    "documentNodes": 26168,
+    "jsEventListeners": 174,
+    "documents": 6,
+    "heapMB": 3
+   },
+   "selectionLatency": {
+    "n": 6,
+    "median": 109.7,
+    "avg": 108.9,
+    "worst": 232.4
+   },
+   "afterInteractions": {
+    "svgNodes": 134,
+    "explorerNodes": 343,
+    "documentNodes": 30310,
+    "jsEventListeners": 173,
+    "documents": 6,
+    "heapMB": 3.3
+   },
+   "afterCycles": {
+    "svgNodes": 134,
+    "explorerNodes": 343,
+    "documentNodes": 31646,
+    "jsEventListeners": 176,
+    "documents": 10,
+    "heapMB": 3.4
+   }
+  },
+  {
+   "name": "Camion 4 axe",
+   "steps": {
+    "load": {
+     "wallMs": 1701,
+     "domContentLoaded": 1185,
+     "scripting": 313.6,
+     "styleLayout": 414.6,
+     "paint": 65.9,
+     "raster": 779.5,
+     "imageDecode": 229.3,
+     "parse": 195.4,
+     "layoutCount": 21,
+     "longestLayout": 50.5
+    },
+    "selectTyre": {
+     "wallMs": 1241,
+     "longTasks": 2,
+     "longestTask": 77,
+     "frames": 67,
+     "avg": 35.3,
+     "worst": 166.7,
+     "dropped": 75,
+     "scripting": 172.5,
+     "styleLayout": 272,
+     "paint": 108.1,
+     "raster": 1282.5,
+     "imageDecode": 0,
+     "parse": 0.1,
+     "layoutCount": 49,
+     "longestLayout": 16
+    },
+    "switchSystem": {
+     "wallMs": 3458,
+     "longTasks": 1,
+     "longestTask": 69,
+     "frames": 151,
+     "avg": 38.1,
+     "worst": 233.3,
+     "dropped": 194,
+     "scripting": 228.6,
+     "styleLayout": 394.9,
+     "paint": 222.6,
+     "raster": 3622.1,
+     "imageDecode": 106.4,
+     "parse": 1.9,
+     "layoutCount": 66,
+     "longestLayout": 4.4
+    },
+    "zoom": {
+     "wallMs": 6258,
+     "longTasks": 0,
+     "longestTask": 0,
+     "frames": 497,
+     "avg": 21.8,
+     "worst": 233.3,
+     "dropped": 153,
+     "scripting": 399.6,
+     "styleLayout": 529,
+     "paint": 526.5,
+     "raster": 5570,
+     "imageDecode": 0,
+     "parse": 0.7,
+     "layoutCount": 239,
+     "longestLayout": 2.1
+    },
+    "hover": {
+     "wallMs": 4133,
+     "longTasks": 0,
+     "longestTask": 0,
+     "frames": 163,
+     "avg": 35.8,
+     "worst": 300,
+     "dropped": 187,
+     "scripting": 123.6,
+     "styleLayout": 244.1,
+     "paint": 259.9,
+     "raster": 4911.4,
+     "imageDecode": 0,
+     "parse": 0,
+     "layoutCount": 95,
+     "longestLayout": 1.7
+    }
+   },
+   "afterLoad": {
+    "svgNodes": 195,
+    "explorerNodes": 414,
+    "documentNodes": 33355,
+    "jsEventListeners": 174,
+    "documents": 6,
+    "heapMB": 3
+   },
+   "selectionLatency": {
+    "n": 6,
+    "median": 56.5,
+    "avg": 54.6,
+    "worst": 84.6
+   },
+   "afterInteractions": {
+    "svgNodes": 195,
+    "explorerNodes": 414,
+    "documentNodes": 38892,
+    "jsEventListeners": 173,
+    "documents": 12,
+    "heapMB": 3.4
+   },
+   "afterCycles": {
+    "svgNodes": 195,
+    "explorerNodes": 414,
+    "documentNodes": 41133,
+    "jsEventListeners": 175,
+    "documents": 25,
+    "heapMB": 3.4
+   }
+  },
+  {
+   "name": "Semiremorcă 6 axe",
+   "steps": {
+    "load": {
+     "wallMs": 1192,
+     "domContentLoaded": 956,
+     "scripting": 191.5,
+     "styleLayout": 250.6,
+     "paint": 41,
+     "raster": 374.1,
+     "imageDecode": 139.2,
+     "parse": 104.1,
+     "layoutCount": 21,
+     "longestLayout": 41.2
+    },
+    "selectTyre": {
+     "wallMs": 491,
+     "longTasks": 0,
+     "longestTask": 0,
+     "frames": 37,
+     "avg": 23.9,
+     "worst": 83.3,
+     "dropped": 16,
+     "scripting": 76.8,
+     "styleLayout": 71.9,
+     "paint": 38.7,
+     "raster": 470.6,
+     "imageDecode": 0,
+     "parse": 0,
+     "layoutCount": 43,
+     "longestLayout": 2.3
+    },
+    "switchSystem": {
+     "wallMs": 2270,
+     "longTasks": 0,
+     "longestTask": 0,
+     "frames": 145,
+     "avg": 28.7,
+     "worst": 116.7,
+     "dropped": 105,
+     "scripting": 126.4,
+     "styleLayout": 236.9,
+     "paint": 145.5,
+     "raster": 2079.9,
+     "imageDecode": 78.5,
+     "parse": 2.4,
+     "layoutCount": 93,
+     "longestLayout": 1.3
+    },
+    "zoom": {
+     "wallMs": 6101,
+     "longTasks": 0,
+     "longestTask": 0,
+     "frames": 505,
+     "avg": 20.4,
+     "worst": 200,
+     "dropped": 112,
+     "scripting": 472.1,
+     "styleLayout": 664.7,
+     "paint": 563.8,
+     "raster": 5363.2,
+     "imageDecode": 0,
+     "parse": 0.5,
+     "layoutCount": 262,
+     "longestLayout": 8.9
+    },
+    "hover": {
+     "wallMs": 3287,
+     "longTasks": 3,
+     "longestTask": 86,
+     "frames": 200,
+     "avg": 27,
+     "worst": 183.3,
+     "dropped": 124,
+     "scripting": 104.5,
+     "styleLayout": 307.2,
+     "paint": 487.4,
+     "raster": 3754.3,
+     "imageDecode": 0,
+     "parse": 0,
+     "layoutCount": 108,
+     "longestLayout": 2.4
+    }
+   },
+   "afterLoad": {
+    "svgNodes": 225,
+    "explorerNodes": 416,
+    "documentNodes": 26157,
+    "jsEventListeners": 174,
+    "documents": 6,
+    "heapMB": 2.9
+   },
+   "selectionLatency": {
+    "n": 6,
+    "median": 43.6,
+    "avg": 39.9,
+    "worst": 50.8
+   },
+   "afterInteractions": {
+    "svgNodes": 225,
+    "explorerNodes": 416,
+    "documentNodes": 30441,
+    "jsEventListeners": 173,
+    "documents": 20,
+    "heapMB": 3.3
+   },
+   "afterCycles": {
+    "svgNodes": 225,
+    "explorerNodes": 416,
+    "documentNodes": 34156,
+    "jsEventListeners": 176,
+    "documents": 32,
+    "heapMB": 3.4
+   }
+  },
+  {
+   "name": "Ansamblu B 105 NET + B 935 NET",
+   "steps": {
+    "load": {
+     "wallMs": 2139,
+     "domContentLoaded": 1795,
+     "scripting": 373.7,
+     "styleLayout": 448.3,
+     "paint": 85.3,
+     "raster": 755.2,
+     "imageDecode": 266.3,
+     "parse": 202.7,
+     "layoutCount": 31,
+     "longestLayout": 54.1
+    },
+    "selectTyre": {
+     "wallMs": 2016,
+     "longTasks": 2,
+     "longestTask": 116,
+     "frames": 67,
+     "avg": 44,
+     "worst": 383.3,
+     "dropped": 110,
+     "scripting": 298.4,
+     "styleLayout": 345.4,
+     "paint": 108.5,
+     "raster": 1814.4,
+     "imageDecode": 72.7,
+     "parse": 7.5,
+     "layoutCount": 57,
+     "longestLayout": 27.3
+    },
+    "switchSystem": {
+     "wallMs": 2968,
+     "longTasks": 0,
+     "longestTask": 0,
+     "frames": 153,
+     "avg": 33.7,
+     "worst": 233.3,
+     "dropped": 156,
+     "scripting": 148.7,
+     "styleLayout": 311.6,
+     "paint": 183.2,
+     "raster": 3313.9,
+     "imageDecode": 88.2,
+     "parse": 2.2,
+     "layoutCount": 79,
+     "longestLayout": 6.3
+    },
+    "zoom": {
+     "wallMs": 6299,
+     "longTasks": 5,
+     "longestTask": 60,
+     "frames": 264,
+     "avg": 36.6,
+     "worst": 333.3,
+     "dropped": 315,
+     "scripting": 471.7,
+     "styleLayout": 900.5,
+     "paint": 609.4,
+     "raster": 6355.2,
+     "imageDecode": 0,
+     "parse": 6.6,
+     "layoutCount": 204,
+     "longestLayout": 8.4
+    },
+    "hover": {
+     "wallMs": 2230,
+     "longTasks": 0,
+     "longestTask": 0,
+     "frames": 135,
+     "avg": 28.6,
+     "worst": 233.3,
+     "dropped": 97,
+     "scripting": 79.8,
+     "styleLayout": 282,
+     "paint": 343.9,
+     "raster": 2844.9,
+     "imageDecode": 0,
+     "parse": 0,
+     "layoutCount": 83,
+     "longestLayout": 2.7
+    }
+   },
+   "afterLoad": {
+    "svgNodes": 252,
+    "explorerNodes": 520,
+    "documentNodes": 34959,
+    "jsEventListeners": 174,
+    "documents": 8,
+    "heapMB": 3
+   },
+   "selectionLatency": {
+    "n": 6,
+    "median": 62.9,
+    "avg": 91,
+    "worst": 186.5
+   },
+   "afterInteractions": {
+    "svgNodes": 257,
+    "explorerNodes": 541,
+    "documentNodes": 44796,
+    "jsEventListeners": 172,
+    "documents": 26,
+    "heapMB": 3.5
+   },
+   "afterCycles": {
+    "svgNodes": 252,
+    "explorerNodes": 520,
+    "documentNodes": 47378,
+    "jsEventListeners": 175,
+    "documents": 26,
+    "heapMB": 3.5
+   }
+  }
+ ]
+}

@@ -51,7 +51,7 @@ class VehicleFinancialHistoryController
     {
         $categories = $this->db->query('SELECT cod, denumire, grup FROM achizitii_categorii_cheltuieli WHERE activ = 1 ORDER BY grup_ordine, ordine')->fetchAll(PDO::FETCH_ASSOC);
         render('istoric_financiar/index.php', [
-            'pageTitle' => 'Istoric Financiar Vehicul',
+            'pageTitle' => 'Istoric Vehicul',
             'currentPage' => 'istoric_financiar',
             'permissions' => $this->permissions(),
             'categories' => $categories,
@@ -81,8 +81,11 @@ class VehicleFinancialHistoryController
                 // categoria aleasa in cardul „Valoare initiala” (restrange doar tabelul)
                 'fin_node' => (int) ($_GET['fin_node'] ?? 0),
                 'fin_tip' => (string) ($_GET['fin_tip'] ?? ''),
+                'fin_masura' => (string) ($_GET['fin_masura'] ?? 'total'),
+                // tipul de vehicul ales in cardul „Total vehicule” (restrange doar tabelul)
+                'tip_vehicul' => (string) ($_GET['tip_vehicul'] ?? ''),
             ]);
-            unset($data['_visible']);
+            unset($data['_visible'], $data['_filtered']);
             $this->json(['ok' => true] + $data);
         } catch (Throwable $e) {
             error_log('[VehicleFinancialHistoryController][list] ' . $e->getMessage());
@@ -96,7 +99,17 @@ class VehicleFinancialHistoryController
         try {
             $node = (int) ($_GET['node'] ?? 0);
             $type = (string) ($_GET['tip'] ?? '');
-            $data = (new VehicleFinancialRegisterService($this->db))->initialValueBreakdown($this->pageFilters(), $node > 0 ? $node : null, $type !== '' ? $type : null);
+            $group = (string) ($_GET['grup'] ?? '');
+            $service = new VehicleFinancialRegisterService($this->db);
+            // cardul KPI: valoare_initiala | capitalizat | necapitalizabile (categorii) · vehicule (tipuri) · derulare (etape)
+            $data = match ((string) ($_GET['card'] ?? 'valoare_initiala')) {
+                'valoare_initiala' => $service->initialValueBreakdown($this->pageFilters(), $node > 0 ? $node : null, $type !== '' ? $type : null, 'total'),
+                'capitalizat' => $service->initialValueBreakdown($this->pageFilters(), $node > 0 ? $node : null, $type !== '' ? $type : null, 'capitalizabil'),
+                'necapitalizabile' => $service->initialValueBreakdown($this->pageFilters(), $node > 0 ? $node : null, $type !== '' ? $type : null, 'necapitalizabil'),
+                'vehicule' => $service->vehicleBreakdown($this->pageFilters(), $group !== '' ? $group : null),
+                'derulare' => $service->dossierBreakdown($this->pageFilters(), $group !== '' ? $group : null),
+                default => throw new InvalidArgumentException('Card necunoscut.'),
+            };
             $this->json(['ok' => true] + $data);
         } catch (InvalidArgumentException $e) {
             $this->json(['ok' => false, 'message' => $e->getMessage()], 422);

@@ -201,3 +201,33 @@
 .as-pinned li > i { color: var(--as-accent); }
 .as-pinned li span { flex: 1; min-width: 0; }
 .as-pinned li em { color: #64748b; font-size: .75rem; font-style: normal; }
+
+/* Piese pe axă: „Aplică pe alte vehicule” */
+.as-matrix-buttons { display: inline-flex; flex-wrap: wrap; gap: 8px; }
+.as-axle-copy { border-top: 1px solid #edf1f7; background: #fbfcfe; }
+.as-axle-copy-step { display: grid; gap: 8px; padding: 12px 14px 4px; }
+.as-axle-copy-step strong { color: #142a52; font-size: .86rem; }
+.as-axle-copy-axles { display: flex; flex-wrap: wrap; gap: 6px 18px; }
+.as-axle-copy-axles small, .as-axle-copy-targets small { color: #7b8ba6; font-size: .72rem; }
+.as-axle-copy-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.as-axle-copy-search { flex: 0 1 260px; width: 260px; min-height: 32px; padding: 0 10px; border: 1px solid #d5dfee; border-radius: 8px; font-size: .82rem; }
+.as-axle-copy-targets { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 6px 14px; max-height: 240px; overflow: auto; padding: 2px 0 8px; }
+.as-axle-copy-targets .as-check.is-disabled { opacity: .45; cursor: not-allowed; }
+.as-axle-copy-targets [hidden] { display: none !important; }
+
+/* Piese pe axă: roțile fiecărei axe (SE SI DI DE / S D) */
+.as-matrix summary .as-wheels-all { margin-left: auto; }
+.as-matrix summary .as-wheels-all[aria-pressed="true"] { border-color: #1570ef; color: #1570ef; background: #eef4ff; }
+.as-matrix-name { display: inline-flex; align-items: center; gap: 8px; }
+.as-wheels-toggle { display: inline-grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 1px solid transparent; border-radius: 6px; background: transparent; color: #9aa9c2; font-size: .8rem; cursor: pointer; }
+.as-wheels-toggle:hover, .as-wheels-toggle[aria-pressed="true"] { border-color: #c9d6ea; color: #1570ef; background: #eef4ff; }
+.as-matrix-table .is-kind { width: 150px; }
+.as-wheels { display: none; justify-content: center; gap: 3px; margin-top: 6px; }
+.as-wheels.is-dual .as-wheel:nth-child(2) { margin-right: 8px; } /* stânga | dreapta */
+.as-matrix-table tr.is-wheels .as-wheels, .is-wheels-all .as-matrix-table .as-wheels { display: flex; }
+.as-wheel { position: relative; margin: 0; cursor: pointer; }
+.as-wheel input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
+.as-wheel span { display: inline-grid; place-items: center; min-width: 26px; height: 22px; padding: 0 3px; border: 1px solid #d5dfee; border-radius: 5px; background: #fff; color: #7b8ba6; font-size: .68rem; font-weight: 700; letter-spacing: .02em; }
+.as-wheel input:checked + span { border-color: #1570ef; background: #1570ef; color: #fff; }
+.as-wheel input:focus-visible + span { outline: 2px solid #84adff; outline-offset: 1px; }
+.as-wheel input:disabled + span { opacity: .6; cursor: default; }

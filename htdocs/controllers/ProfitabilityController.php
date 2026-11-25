@@ -21,6 +21,12 @@ require_once dirname(__DIR__) . '/services/ProfitabilityRegisterService.php';
  *   action=drivers      — JSON: soferi / simulare (fara schimbarea asignarii)
  *   action=driver       — JSON: rezumatul soferului
  *   action=export       — CSV cu tabelul curent (aceleasi filtre)
+ *   action=location_detail — JSON: o locatie din modul Locatii, pe vehicule si pe rute (id = loc fizic, -1 = fara loc)
+ *   action=locations    — JSON: locurile fizice cu sursele lor (ecranul „Locații fizice”) + sugestii de unire
+ *   action=save_location— POST JSON: op=update|move|merge (dreptul rentabilitate.locatii)
+ *
+ * Filtrele de locatie (oricare mod): origine / destinatie / depozit = id loc fizic (-1 = fara loc); modul Locatii
+ * grupeaza randurile pe dimensiunea dim (origine | destinatie | depozit). Vezi LocationDimensionService.
  */
 class ProfitabilityController
 {
@@ -39,6 +45,10 @@ class ProfitabilityController
             http_response_code(403);
             exit('Nu aveți dreptul de export.');
         }
+        if ($action === 'save_location') {
+            $this->saveLocation();
+            return;
+        }
         if ($action === 'index' || $action === '') {
             $this->index();
             return;
@@ -53,17 +63,19 @@ class ProfitabilityController
         // Scopul de analiza (acelasi pentru tabel, cardurile KPI si defalcarile lor).
         $scope = [
             'mode' => (string) ($_GET['mode'] ?? 'vehicule'), 'q' => (string) ($_GET['q'] ?? ''), 'tip' => (string) ($_GET['tip'] ?? ''),
-            'beneficiar' => (int) ($_GET['beneficiar'] ?? 0), 'status' => (string) ($_GET['status'] ?? ''), 'from' => $from, 'to' => $to,
-            'vehicle_id' => (int) ($_GET['vehicle_id'] ?? 0), 'driver_id' => (int) ($_GET['driver_id'] ?? 0), 'keep' => (string) ($_GET['keep'] ?? ''),
-        ];
+            'beneficiar' => self::listParam('beneficiar'), 'status' => (string) ($_GET['status'] ?? ''), 'from' => $from, 'to' => $to,
+            'vehicle_id' => self::listParam('vehicle_id'), 'driver_id' => self::listParam('driver_id'), 'keep' => (string) ($_GET['keep'] ?? ''),
+        ] + self::locationParams();
         try {
             $payload = match ($action) {
                 'list' => $service->list([
                     'mode' => (string) ($_GET['mode'] ?? 'vehicule'), 'q' => (string) ($_GET['q'] ?? ''), 'tip' => (string) ($_GET['tip'] ?? ''),
-                    'beneficiar' => (int) ($_GET['beneficiar'] ?? 0), 'status' => (string) ($_GET['status'] ?? ''), 'from' => $from, 'to' => $to,
+                    'beneficiar' => self::listParam('beneficiar'), 'status' => (string) ($_GET['status'] ?? ''), 'from' => $from, 'to' => $to,
                     'page' => (int) ($_GET['p'] ?? 1), 'per_page' => (int) ($_GET['per_page'] ?? 25), 'sort' => (string) ($_GET['sort'] ?? ''),
-                    'vehicle_id' => (int) ($_GET['vehicle_id'] ?? 0), 'driver_id' => (int) ($_GET['driver_id'] ?? 0), 'keep' => (string) ($_GET['keep'] ?? ''),
-                ]),
+                    'vehicle_id' => self::listParam('vehicle_id'), 'driver_id' => self::listParam('driver_id'), 'keep' => (string) ($_GET['keep'] ?? ''),
+                ] + self::locationParams()),
+                'location_detail' => $service->locationDetail($scope, $id),
+                'locations' => $service->locations()->overview() + ['canEdit' => self::canEditLocations()],
                 'kpi' => $service->kpiSummary($scope),
                 'kpi_breakdown' => $service->kpiBreakdown($scope, (string) ($_GET['by'] ?? '')),
                 'vehicle' => $service->vehicleSummary($id, $from, $to),
@@ -99,6 +111,7 @@ class ProfitabilityController
             'to' => $to,
             'beneficiaries' => $service->beneficiaries(),
             'canExport' => !function_exists('can') || can('rentabilitate', 'export'),
+            'canEditLocations' => self::canEditLocations(),
             'links' => [
                 'cursa_noua' => function_exists('can') && can('dispecer_curse') ? build_query_url(['page' => 'dispecer_curse']) : null,
                 'cheltuiala' => function_exists('can') && can('cheltuieli') ? build_query_url(['page' => 'cheltuieli']) : null,
@@ -158,14 +171,69 @@ class ProfitabilityController
     {
         $csv = $service->exportCsv([
             'mode' => (string) ($_GET['mode'] ?? 'vehicule'), 'q' => (string) ($_GET['q'] ?? ''), 'tip' => (string) ($_GET['tip'] ?? ''),
-            'beneficiar' => (int) ($_GET['beneficiar'] ?? 0), 'status' => (string) ($_GET['status'] ?? ''), 'from' => $from, 'to' => $to,
-            'vehicle_id' => (int) ($_GET['vehicle_id'] ?? 0), 'driver_id' => (int) ($_GET['driver_id'] ?? 0),
-        ]);
+            'beneficiar' => self::listParam('beneficiar'), 'status' => (string) ($_GET['status'] ?? ''), 'from' => $from, 'to' => $to,
+            'vehicle_id' => self::listParam('vehicle_id'), 'driver_id' => self::listParam('driver_id'),
+        ] + self::locationParams());
         header('Content-Type: text/csv; charset=UTF-8');
         header('Content-Disposition: attachment; filename="rentabilitate_' . $from . '_' . $to . '.csv"');
         header('Cache-Control: no-store');
         echo $csv;
         exit;
+    }
+
+    /** Filtru cu selectie multipla din URL: "3,5,8" (sau 3); validat in serviciu (ProfitabilityRegisterService::ids). */
+    private static function listParam(string $name): string
+    {
+        $v = $_GET[$name] ?? '';
+        return is_array($v) ? implode(',', array_map('strval', $v)) : substr((string) $v, 0, 2000);
+    }
+
+    /** dim + filtrele de locatie din cerere (validate in serviciu). */
+    private static function locationParams(): array
+    {
+        return ['dim' => (string) ($_GET['dim'] ?? ''), 'origine' => self::listParam('origine'),
+            'destinatie' => self::listParam('destinatie'), 'depozit' => self::listParam('depozit'), 'ruta' => self::listParam('ruta')];
+    }
+
+    private static function canEditLocations(): bool
+    {
+        return !function_exists('can') || can('rentabilitate', 'locatii');
+    }
+
+    /**
+     * Gestionarea locurilor fizice (doar stratul de raportare; tarifele si configurarea transportului raman neatinse):
+     *   op=update  id, nume, tip          — redenumire / punct fizic sau regiune
+     *   op=move    sursa, sursa_id, tinta — muta un loc de incarcare / o zona la alt loc fizic (tinta 0 = loc nou)
+     *   op=merge   from, into             — uneste doua locuri fizice
+     */
+    private function saveLocation(): void
+    {
+        if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') {
+            $this->json(['ok' => false, 'message' => 'Metodă nepermisă.'], 405);
+        }
+        if (!self::canEditLocations()) {
+            $this->json(['ok' => false, 'message' => 'Nu aveți dreptul de a gestiona locațiile.'], 403);
+        }
+        $in = json_decode((string) file_get_contents('php://input'), true);
+        $in = is_array($in) ? $in : $_POST;
+        if (!verify_csrf_token($_SERVER['HTTP_X_CSRF_TOKEN'] ?? ($in['_token'] ?? null))) {
+            $this->json(['ok' => false, 'message' => 'Sesiunea a expirat. Reîncarcă pagina.'], 419);
+        }
+        $locations = new LocationDimensionService($this->db);
+        try {
+            match ((string) ($in['op'] ?? '')) {
+                'update' => $locations->updatePlace((int) ($in['id'] ?? 0), (string) ($in['nume'] ?? ''), (string) ($in['tip'] ?? '')),
+                'move' => $locations->moveSource((string) ($in['sursa'] ?? ''), (int) ($in['sursa_id'] ?? 0), (int) ($in['tinta'] ?? 0)),
+                'merge' => $locations->merge((int) ($in['from'] ?? 0), (int) ($in['into'] ?? 0)),
+                default => throw new InvalidArgumentException('Operație necunoscută.'),
+            };
+            $this->json(['ok' => true] + $locations->overview() + ['canEdit' => true]);
+        } catch (InvalidArgumentException $e) {
+            $this->json(['ok' => false, 'message' => $e->getMessage()], 422);
+        } catch (Throwable $e) {
+            error_log('[ProfitabilityController][save_location] ' . $e->getMessage() . ' @ ' . $e->getFile() . ':' . $e->getLine());
+            $this->json(['ok' => false, 'message' => 'Modificarea nu a putut fi salvată.'], 500);
+        }
     }
 
     private function json(array $payload, int $status = 200): never

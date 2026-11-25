@@ -4,10 +4,11 @@ declare(strict_types=1);
 /**
  * Km din CAN (odometrul de bord citit de pe magistrala CAN) din SAS Fleet.
  *
- * API-ul public SAS NU are odometrul CAN (travelsheet da doar kmIndex = odometrul GPS,
- * necalibrat pe bord). Raportul web „Foaie de parcurs cu distanțe din CAN”
- * (SASGRecordSheetCan.aspx) il are: Index CAN pornire/oprire + Distanta CAN pe fiecare
- * tronson. Raportul e HTML; aici se cere cu SessionId-ul de rapoarte si se transforma in JSON.
+ * Sursa principala (din 2026-11-25): API-ul public api/reports/travelsheet, care are acum
+ * pe fiecare tronson odometerCanStart / odometerCanEnd (pe langa kmIndex = odometrul GPS).
+ * Rezerva: raportul web „Foaie de parcurs cu distanțe din CAN” (SASGRecordSheetCan.aspx, HTML
+ * cerut cu SessionId-ul de rapoarte), folosit doar daca API-ul cade sau nu mai trimite campurile CAN.
+ * Ambele surse dau acelasi format JSON (vezi fromApiTravelSheet / parseRecordSheetCan).
  *
  * CarId din raport = carId din API (ex. 9118 = B 105 NET).
  */
@@ -67,6 +68,43 @@ class SasCanKmService
             throw new InvalidArgumentException('Intervalul maxim este de ' . self::MAX_DAYS . ' de zile.');
         }
 
+        $report = null;
+        $apiError = null;
+        try {
+            $sheet = $this->client->getTravelSheet($carId, $start->format('Y-m-d\TH:i:s'), $end->format('Y-m-d\TH:i:s'));
+            if (self::apiHasCanOdometer($sheet)) {
+                $report = self::fromApiTravelSheet($sheet);
+                $report['source'] = 'api';
+            }
+        } catch (RuntimeException $e) {
+            // 503 (prea multe cereri) si autentificarea esuata ajung la apelant: raportul web ar pica la fel.
+            if ($e instanceof SasUnauthorizedException || str_starts_with($e->getMessage(), 'SAS HTTP 503')) {
+                throw $e;
+            }
+            $apiError = $e;
+        }
+
+        if ($report === null) {
+            try {
+                $report = $this->fromWebReport($carId, $start, $end);
+            } catch (RuntimeException $e) {
+                throw $apiError ?? $e;
+            }
+            $report['source'] = 'web_report';
+        }
+
+        $report['car_id'] = $carId;
+        $report['from'] = $start->format('Y-m-d H:i:s');
+        $report['to'] = $end->format('Y-m-d H:i:s');
+
+        return $report;
+    }
+
+    /**
+     * Rezerva: raportul web HTML (SASGRecordSheetCan.aspx), sursa unica pana la 2026-11-25.
+     */
+    private function fromWebReport(int $carId, DateTimeImmutable $start, DateTimeImmutable $end): array
+    {
         $html = $this->client->fetchWebReport('SASGRecordSheetCan.aspx', [
             'CarId' => $carId,
             'DateStartEx' => $start->format('H:i:s@m/d/Y'),
@@ -75,12 +113,127 @@ class SasCanKmService
             'RouteType' => 0,
         ]);
 
-        $report = self::parseRecordSheetCan($html);
-        $report['car_id'] = $carId;
-        $report['from'] = $start->format('Y-m-d H:i:s');
-        $report['to'] = $end->format('Y-m-d H:i:s');
+        return self::parseRecordSheetCan($html);
+    }
 
-        return $report;
+    /**
+     * API-ul trimite campurile CAN pe tronsoane? Fara tronsoane (masina a stat) raspunsul
+     * e valid oricum: nu e nimic de citit nici din raportul web.
+     */
+    public static function apiHasCanOdometer(array $sheet): bool
+    {
+        $segments = (array) ($sheet['segments'] ?? []);
+        if ($segments === []) {
+            return true;
+        }
+        foreach ($segments as $segment) {
+            if (is_array($segment) && (array_key_exists('odometerCanStart', $segment) || array_key_exists('odometerCanEnd', $segment))) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Raspunsul api/reports/travelsheet -> acelasi format ca parseRecordSheetCan. Functie pura.
+     */
+    public static function fromApiTravelSheet(array $sheet): array
+    {
+        $segments = [];
+        $workSeconds = 0;
+        foreach ((array) ($sheet['segments'] ?? []) as $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+            $start = self::apiDate($item['dateStart'] ?? null);
+            // Tronsoanele de durata 0 fara distanta (doar puncte „fake”) lipsesc si din raportul web.
+            if ($start === null || ($item['distance'] === null && ($item['dateStart'] ?? null) === ($item['dateEnd'] ?? null))) {
+                continue;
+            }
+            $canStart = self::positiveOrNull($item['odometerCanStart'] ?? null);
+            $canEnd = self::positiveOrNull($item['odometerCanEnd'] ?? null);
+            $workSeconds += (int) ($item['workSeconds'] ?? 0);
+            $segments[] = [
+                'segment' => isset($item['indexId']) ? (int) $item['indexId'] : count($segments) + 1,
+                'start' => $start,
+                'start_location' => self::apiLocation($item['locationDescriptionStart'] ?? null, $item['addressStart'] ?? null, $item['cityStart'] ?? null, $item['countyStart'] ?? null),
+                'end' => self::apiDate($item['dateEnd'] ?? null),
+                'end_location' => self::apiLocation($item['locationDescriptionEnd'] ?? null, $item['addressEnd'] ?? null, $item['cityEnd'] ?? null, $item['countyEnd'] ?? null),
+                'avg_speed_kmh' => self::roundOrNull($item['averageSpeed'] ?? null, 1),
+                'gps_km' => self::roundOrNull($item['distance'] ?? null, 1),
+                'gps_index_end_km' => self::roundOrNull(self::positiveOrNull($item['kmIndex'] ?? null), 1),
+                'can_index_start_km' => self::roundOrNull($canStart, 1),
+                'can_index_end_km' => self::roundOrNull($canEnd, 1),
+                // Ca in raportul web: diferenta neta, si negativa cand CAN-ul are sarituri (ex. B 430 NET).
+                'can_km' => $canStart !== null && $canEnd !== null ? round($canEnd - $canStart, 1) : null,
+                'engine_minutes' => isset($item['workSeconds']) ? (int) round($item['workSeconds'] / 60) : null,
+                'idle_minutes' => isset($item['idleEngineSeconds']) ? (int) round($item['idleEngineSeconds'] / 60) : null,
+                'parked_after_minutes' => isset($item['parkTimeSeconds']) ? (int) round($item['parkTimeSeconds'] / 60) : null,
+                'notes' => null,
+            ];
+        }
+
+        $canStarts = array_values(array_filter(array_column($segments, 'can_index_start_km'), static fn ($v) => $v !== null));
+        $canEnds = array_values(array_filter(array_column($segments, 'can_index_end_km'), static fn ($v) => $v !== null));
+        // „Total distanta CAN” din raportul web = ultimul index CAN - primul (nu suma tronsoanelor).
+        $canKmFromIndex = $canStarts !== [] && $canEnds !== [] ? round(end($canEnds) - $canStarts[0], 1) : null;
+        $fuel = is_numeric($sheet['CANFuelUsed'] ?? null) ? (float) $sheet['CANFuelUsed'] : null;
+        $make = trim((string) ($sheet['makeName'] ?? ''));
+        $modelName = trim((string) ($sheet['modelName'] ?? ''));
+
+        return [
+            'plate' => ($sheet['licensePlate'] ?? '') !== '' ? (string) $sheet['licensePlate'] : null,
+            'model' => $make !== '' || $modelName !== '' ? $make . '/' . $modelName : null,
+            'segments' => $segments,
+            'totals' => [
+                'gps_km' => self::roundOrNull($sheet['totalDistance'] ?? null, 1),
+                'can_km' => $canKmFromIndex,
+                'can_km_from_index' => $canKmFromIndex,
+                'can_index_start_km' => $canStarts[0] ?? null,
+                'can_index_end_km' => $canEnds !== [] ? end($canEnds) : null,
+                'fuel_l' => $fuel,
+                'fuel_l_per_100km' => self::roundOrNull($sheet['CANFuelUsedPer100Km'] ?? null, 2),
+                'fuel_l_per_hour' => $fuel !== null && $workSeconds > 0 ? round($fuel / ($workSeconds / 3600), 2) : null,
+                'segments' => count($segments),
+            ],
+            'has_can' => $canEnds !== [],
+        ];
+    }
+
+    /** „2026-11-24T07:09:40” -> „2026-11-24 07:09:40” (ora locala, ca in raportul web). */
+    private static function apiDate(mixed $value): ?string
+    {
+        if (!is_string($value) || !preg_match('/^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2})/', $value, $m)) {
+            return null;
+        }
+
+        return $m[1] . ' ' . $m[2];
+    }
+
+    /** Ca in raportul web: „Nume POI sau adresa/oras/judet”. */
+    private static function apiLocation(mixed $description, mixed $address, mixed $city, mixed $county): ?string
+    {
+        $first = trim((string) ($description ?? ''));
+        if ($first === '') {
+            $first = trim((string) ($address ?? ''));
+        }
+        $parts = [$first, trim((string) ($city ?? '')), trim((string) ($county ?? ''))];
+        if (implode('', $parts) === '') {
+            return null;
+        }
+
+        return implode('/', $parts);
+    }
+
+    private static function positiveOrNull(mixed $value): ?float
+    {
+        return is_numeric($value) && (float) $value > 0 ? (float) $value : null;
+    }
+
+    private static function roundOrNull(mixed $value, int $precision): ?float
+    {
+        return is_numeric($value) ? round((float) $value, $precision) : null;
     }
 
     /**

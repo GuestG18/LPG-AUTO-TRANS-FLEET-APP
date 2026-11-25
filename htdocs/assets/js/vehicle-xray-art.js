@@ -29,6 +29,139 @@
     };
     var f1 = function (value) { return (Math.round(value * 10) / 10).toString(); };
 
+    /* ------------------------------------------------------------ vehiculele vectorizate din macheta */
+
+    // Capul tractor 4x2 si semiremorca cu 3 axe se deseneaza din macheta aprobata, vectorizata 1:1
+    // (tools/vehicle-trace, date in vehicle-xray-traced-data.js). Desenul dicteaza geometria: axele,
+    // anvelopele si punctele componentelor se aseaza pe piesele desenate, nu invers.
+    var TRACED = window.FleetXrayTracedData || null;
+    var TRACED_K = 3.4 / 397; // metri pe pixel de macheta: ampatamentul capului (A1 191 px -> A2 588 px) = 3,4 m
+    var TRACED_CY = 308; // axul longitudinal al vehiculelor in macheta (pixeli)
+    var TRACED_TOP = 171; // marginea de sus a anvelopelor din macheta (pixeli)
+    var TRACED_COUPLE = 699 - 14; // semiremorca incepe la 685 px dupa fata capului tractor, ca in macheta
+    var TRACED_BASE = (function () {
+        try { return new URL('../img/xray-traced/', document.currentScript.src).href; } catch (error) { return 'assets/img/xray-traced/'; }
+    })();
+    var tracedUrl = function (file) { return TRACED_BASE + file + (TRACED && TRACED.version ? '?v=' + TRACED.version : ''); };
+    // Locul implicit al unui sistem pe desen, cand are mai multe piese (motor = blocul motor etc.).
+    var TRACED_MAIN_PART = { motor: 'engine', racire: 'radiator', electrica: 'battery', transmisie: 'gearbox', directie: 'steering', evacuare: 'exhaust', rezervor_combustibil: 'fuel-tank', pneumatica: 'coupling' };
+
+    // Un desen pe tip + numar de axe (configuratiile generale din pagina Auto); restul vehiculelor
+    // raman pe desenul generat din geometrie.
+    // Culoarea starii: consumarea intervalului configurat (0..100+ %), rampa continua verde -> galben (50 %)
+    // -> portocaliu (~80 %) -> rosu (100 %+). Fara stare (neconfigurat / fara date): null, piesa ramane gri.
+    var CONDITION_STOPS = [[0, [34, 197, 94]], [50, [234, 179, 8]], [80, [249, 115, 22]], [100, [239, 68, 68]]];
+    var conditionColor = function (wear) {
+        if (wear === null || wear === undefined || !isFinite(wear)) { return null; }
+        var w = Math.max(0, Math.min(100, Number(wear)));
+        for (var i = 1; i < CONDITION_STOPS.length; i++) {
+            if (w <= CONDITION_STOPS[i][0]) {
+                var a = CONDITION_STOPS[i - 1];
+                var b = CONDITION_STOPS[i];
+                var t = (w - a[0]) / (b[0] - a[0]);
+                return 'rgb(' + [0, 1, 2].map(function (k) { return Math.round(a[1][k] + (b[1][k] - a[1][k]) * t); }).join(',') + ')';
+            }
+        }
+        return 'rgb(239,68,68)';
+    };
+    // Culoarea unei piese dupa starea sistemului ei; doar atributul fill (fara filtre / imagini / tranzitii).
+    var paintCondition = function (path, wear) {
+        var color = conditionColor(wear);
+        // stil inline (un atribut fill ar pierde in fata regulii CSS `fill: none` a conturului)
+        path.style.fill = color || '';
+        path.classList.toggle('has-condition', !!color);
+    };
+
+    var tracedTemplate = function (geo) {
+        if (!TRACED || !TRACED.templates) { return null; }
+        return TRACED.templates[geo.type + '|' + geo.axles.length] || null;
+    };
+
+    // Geometria vehiculului (metri, fata = 0, axul = 0, dreapta sus) luata din desenul vectorizat.
+    var applyTraced = function (geo, tpl) {
+        var x0 = tpl.crop[0];
+        var mx = function (px) { return (px - x0) * TRACED_K; };
+        var my = function (py) { return (py - TRACED_CY) * TRACED_K; };
+        var toM = function (b) { return { x0: mx(b[0]), y0: my(b[1]), x1: mx(b[2]), y1: my(b[3]) }; };
+        // Caseta unei anvelope (axa = a cata axa a vehiculului, cod = R/L/RO/RI/LO/LI).
+        var tyreBox = function (index, side) {
+            var key = (index + 1) + ':';
+            var own = tpl.tyres[key + side];
+            if (own) { return toM(own); }
+            var o = tpl.tyres[key + side.charAt(0) + 'O'];
+            var i = tpl.tyres[key + side.charAt(0) + 'I'];
+            if (side.length === 1 && o && i) {
+                // Desenul are roti duble, vehiculul o singura anvelopa pe parte: toata perechea.
+                return toM([Math.min(o[0], i[0]), Math.min(o[1], i[1]), Math.max(o[2], i[2]), Math.max(o[3], i[3])]);
+            }
+            var single = tpl.tyres[key + side.charAt(0)];
+            if (single && side.length === 2) {
+                // Desenul are o anvelopa, vehiculul roti duble: jumatatea dinspre exterior / interior.
+                var mid = (single[1] + single[3]) / 2;
+                var outerHalf = side.charAt(0) === 'R' ? [single[1], mid] : [mid, single[3]];
+                var innerHalf = side.charAt(0) === 'R' ? [mid, single[3]] : [single[1], mid];
+                var half = side.charAt(1) === 'I' ? innerHalf : outerHalf;
+                return toM([single[0], half[0], single[2], half[1]]);
+            }
+            return null;
+        };
+        geo.axles.forEach(function (axle, index) {
+            var box = tyreBox(index, 'R') || tyreBox(index, 'RO') || tyreBox(index, 'L') || tyreBox(index, 'LO');
+            if (box) { axle.x = (box.x0 + box.x1) / 2; }
+        });
+        geo.length = mx(tpl.crop[2]);
+        var outer = -my(TRACED_TOP);
+        geo.halfWidth = outer - 0.08;
+        if (geo.type === 'cap_tractor') { geo.fifthWheel = mx(640); }
+        if (geo.type === 'semiremorca') { geo.kingpin = mx(tpl.front + 61); }
+        var parts = tpl.parts.map(function (p) { return { id: p.id, label: p.label, cat: p.cat, sil: p.sil || null, box: toM(p.box) }; });
+        var center = function (p) { return p ? { x: (p.box.x0 + p.box.x1) / 2, y: (p.box.y0 + p.box.y1) / 2 } : null; };
+        geo.traced = {
+            tpl: tpl,
+            parts: parts,
+            box: toM(tpl.crop),
+            tireRects: function () {
+                var rects = [];
+                geo.axles.forEach(function (axle, index) {
+                    axle.positions.forEach(function (position) {
+                        var side = String(position.side || '').toUpperCase();
+                        var box = tyreBox(index, side);
+                        if (!box) { return; }
+                        var isTop = side.charAt(0) === 'R';
+                        var isInner = side.length > 1 && side.charAt(1) === 'I';
+                        rects.push({
+                            position: position, axle: axle, ax: (box.x0 + box.x1) / 2, length: box.x1 - box.x0,
+                            x0: box.x0, x1: box.x1, y0: box.y0, y1: box.y1, isTop: isTop, isInner: isInner,
+                            gapAtEnd: side.length > 1 && (isTop !== isInner), gapAtStart: side.length > 1 && (isTop === isInner)
+                        });
+                    });
+                });
+                return { rects: rects, outer: outer };
+            },
+            // Punctul unui loc pe piesa desenata a sistemului lui; null = locul general (tire-fleet.js).
+            anchor: function (slot) {
+                var mine = parts.filter(function (p) { return p.cat === slot.category; });
+                if (!mine.length) { return null; }
+                var index = -1;
+                geo.axles.forEach(function (axle, i) { if (axle.no === slot.axle) { index = i; } });
+                if (index === -1) {
+                    var main = TRACED_MAIN_PART[slot.category];
+                    return center(mine.filter(function (p) { return p.id === main; })[0] || mine[0]);
+                }
+                var tag = '-a' + (index + 1);
+                var onAxle = mine.filter(function (p) { return p.id.indexOf(tag) !== -1 && /-a\d(-|$)/.test(p.id); });
+                if (!onAxle.length) {
+                    var free = mine.filter(function (p) { return !/-a\d(-|$)/.test(p.id); });
+                    return free.length ? center(free[0]) : null;
+                }
+                var side = slot.side === 'L' ? 'l' : (slot.side === 'R' ? 'r' : '');
+                var sided = side ? onAxle.filter(function (p) { return p.id.indexOf(tag + '-' + side) !== -1; }) : [];
+                var pool = sided.length ? sided : onAxle;
+                return center(pool.filter(function (p) { return !/-in$/.test(p.id); })[0] || pool[0]);
+            }
+        };
+    };
+
     /* ------------------------------------------------------------ gradienti si filtre comune */
 
     var defsReady = false;
@@ -91,6 +224,8 @@
         // pivotul, picioarele de sprijin si distantele dintre axe raman reale.
         layout.members.forEach(function (member) {
             var geo = member.geo;
+            var tpl = tracedTemplate(geo);
+            if (tpl) { applyTraced(geo, tpl); return; }
             if (geo.type !== 'semiremorca' || !geo.axles.length) { return; }
             var span = geo.axles[geo.axles.length - 1].x - geo.axles[0].x;
             var compact = Math.max(9.2, span + 6.4);
@@ -101,8 +236,14 @@
         });
         if (layout.members.length > 1) {
             var lead = layout.members[0];
-            layout.members[1].offset = lead.offset + lead.geo.length + 0.06;
+            // Ambele din macheta: cuplate exact ca in macheta (contururile se ating).
+            var follower = layout.members[1].geo.traced;
+            // Fata semiremorcii (tpl.front, pixeli in desenul ei) cade la 685 px dupa fata capului.
+            layout.members[1].offset = lead.geo.traced && follower
+                ? lead.offset + (TRACED_COUPLE - (follower.tpl.front - follower.tpl.crop[0])) * TRACED_K
+                : lead.offset + lead.geo.length + 0.06;
         }
+        layout.halfWidth = layout.members.reduce(function (max, member) { return Math.max(max, member.geo.halfWidth); }, 0);
         layout.totalLength = layout.members.reduce(function (max, member) { return Math.max(max, member.offset + member.geo.length); }, 0);
         var outerMax = layout.halfWidth + 0.38; // oglinzi / carcase roti
         var scale = Math.min(MAX_SCALE, (VIEW_W - 70) / ((layout.totalLength + 0.5) * PX));
@@ -119,6 +260,12 @@
         // „engine”: desenul motorului sta peste grinda axei fata (vazut de sus, motorul e deasupra ei);
         // zona lui de click ramane in „parts”, sub axe, deci click-urile se impart ca inainte.
         ['pods', 'shell', 'frame', 'parts', 'axles', 'engine', 'tires', 'labels'].forEach(function (name) { layers[name] = el('g', { class: 'fx-l-' + name }, svg); });
+        // Stratul desenului static (doar la vehiculele vectorizate): acelasi sistem de coordonate ca svg.
+        var base = null;
+        var baseLayer = function () {
+            if (!base) { base = el('svg', { viewBox: '0 0 ' + VIEW_W + ' ' + viewH, class: 'fx-svg-art', 'aria-hidden': 'true', focusable: 'false' }); }
+            return base;
+        };
 
         var rect = function (parent, x0, y0, x1, y1, attrs) {
             var r = el('rect', { x: f1(X(Math.min(x0, x1))), y: f1(Y(Math.min(y0, y1))), width: f1(S(Math.abs(x1 - x0))), height: f1(S(Math.abs(y1 - y0))) }, parent);
@@ -169,6 +316,61 @@
             var placed = Geometry.tireRects(geo);
             var outer = placed.outer;
             var hasSlot = function (category) { return (member.data.slots || []).some(function (slot) { return slot.category === category; }); };
+
+            if (geo.traced) {
+                // Desenul vectorizat ca baza; peste el: piesele (vizibile doar cand sistemul lor e activ),
+                // zonele de click ale axelor si anvelopele (cate una, si la rotile duble).
+                var tb = geo.traced.box;
+                // Bitmap pre-randat din SVG-ul vectorizat (desenul vectorial de cativa MB se rasteriza la
+                // fiecare repictare peste el); varianta dubla (data-hd) se incarca abia la marire.
+                // Desenul static sta in propriul <svg> (stratul „art”, sub cel interactiv, acelasi viewBox):
+                // trecerea cu mouse-ul, selectia si etichetele nu-l mai repicteaza.
+                el('image', {
+                    class: 'fx-trace-base', href: tracedUrl(geo.traced.tpl.file), 'data-hd': geo.traced.tpl.hd ? tracedUrl(geo.traced.tpl.hd) : null,
+                    // latimea in pixeli a bitmapului de ansamblu (@1 = 2 px pe pixel de macheta): vehicle-xray.js
+                    // trece la @2 doar cand marirea ar arata mai mult de ~1 pixel de ecran pe pixel @1
+                    'data-px': (geo.traced.tpl.crop[2] - geo.traced.tpl.crop[0]) * 2,
+                    preserveAspectRatio: 'none', decoding: 'async',
+                    x: f1(X(o + tb.x0)), y: f1(Y(tb.y0)), width: f1(S(tb.x1 - tb.x0)), height: f1(S(tb.y1 - tb.y0))
+                }, baseLayer());
+                // Piesele: conturul exact al fiecareia (silhouettes.py), in sfert-pixeli de macheta; matricea il
+                // aduce in unitatile desenului (aceeasi proiectie ca bitmapul). Fara imagini / filtre: selectia
+                // e conturul, starea (uzura configurata) umple acelasi contur, cu o culoare fixa.
+                var sb = S(TRACED_K) / 4;
+                var silMatrix = 'matrix(' + sb.toFixed(5) + ' 0 0 ' + sb.toFixed(5) + ' ' + f1(X(o) - S(TRACED_K) * geo.traced.tpl.crop[0]) + ' ' + f1(Y(0) - S(TRACED_K) * TRACED_CY) + ')';
+                var condition = member.data.condition || {};
+                geo.traced.parts.forEach(function (p) {
+                    if (!hasSlot(p.cat) || !p.sil) { return; }
+                    var g = part(p.cat, id, shift(p.box));
+                    g.classList.add('fx-trace-part');
+                    g.dataset.fxPart = p.id;
+                    var sil = el('path', { class: 'fx-trace-sil', d: p.sil, transform: silMatrix, 'vector-effect': 'non-scaling-stroke' }, g);
+                    paintCondition(sil, condition[p.cat] ? condition[p.cat].wear : null);
+                    el('title', {}, g).textContent = p.label + (condition[p.cat] ? ' · ' + condition[p.cat].wear + '% din intervalul configurat' : '');
+                });
+                geo.axles.forEach(function (axle) {
+                    var ax = o + axle.x;
+                    var group = el('g', { class: 'fx-axle', 'data-fx-member': String(id), 'data-fx-axle': String(axle.no) }, layers.axles);
+                    rect(group, ax - 0.075, -outer + 0.3, ax + 0.075, outer - 0.3, { class: 'fx-axle-beam fx-trace-beam' });
+                    rect(group, ax - 0.4, -outer + 0.25, ax + 0.4, outer - 0.25, { class: 'fx-axle-hit', fill: 'transparent' });
+                });
+                placed.rects.forEach(function (item) {
+                    var position = item.position;
+                    var g = el('g', {
+                        class: 'fx-tire is-' + position.status, tabindex: '0', role: 'button',
+                        'data-fx-pos': String(position.id), 'data-fx-member': String(id),
+                        'aria-label': position.code + ', ' + position.side_label + ', ' + (position.tire ? position.tire.label : 'poziție liberă')
+                    }, layers.tires);
+                    var x0 = o + item.x0;
+                    var x1 = o + item.x1;
+                    rect(g, x0, item.y0, x1, item.y1, { class: 'fx-trace-tyre' + (position.status === 'empty' ? ' fx-tire-ghost' : ''), rx: 0.08 });
+                    if (STATUS_RING[position.status]) {
+                        rect(g, x0 - 0.02, item.y0 - 0.02, x1 + 0.02, item.y1 + 0.02, { class: 'fx-tire-ring', stroke: STATUS_RING[position.status], rx: 0.1 });
+                    }
+                    rect(g, x0 - 0.06, item.y0 - (item.gapAtStart ? 0 : 0.08), x1 + 0.06, item.y1 + (item.gapAtEnd ? 0 : 0.08), { class: 'fx-hit', fill: 'transparent' });
+                });
+                return;
+            }
 
             // 1. Carcasele rotilor (aripile vazute de sus), sub silueta.
             geo.axles.forEach(function (axle) {
@@ -428,6 +630,7 @@
 
         return {
             svg: svg,
+            base: base,
             layout: layout,
             view: { x: 0, y: 0, w: VIEW_W, h: viewH },
             scale: scale,
@@ -443,5 +646,5 @@
     // Jumatatea de latime a caroseriei din spatele cabinei (camion = toata latimea).
     var bodyHwOf = function (geo) { return geo.type === 'camion' ? geo.halfWidth - 0.06 : geo.halfWidth - 0.2; };
 
-    window.FleetXrayArt = { ensureDefs: ensureDefs, draw: draw };
+    window.FleetXrayArt = { ensureDefs: ensureDefs, draw: draw, paintCondition: paintCondition };
 })();

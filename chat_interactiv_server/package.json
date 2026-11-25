@@ -1,0 +1,22 @@
+{
+  "name": "lpg-connect-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "LPG Connect — server multiplayer (WebSocket) pentru pagina Chat Interactiv",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "assets": "node tools/optimize-assets.mjs"
+  },
+  "engines": { "node": ">=18" },
+  "dependencies": {
+    "ws": "8.18.0"
+  },
+  "devDependencies": {
+    "@gltf-transform/core": "4.1.1",
+    "@gltf-transform/extensions": "4.1.1",
+    "@gltf-transform/functions": "4.1.1",
+    "sharp": "0.33.5"
+  }
+}

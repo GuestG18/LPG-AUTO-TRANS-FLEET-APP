@@ -4,6 +4,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/OperationalProfitabilityService.php';
 require_once __DIR__ . '/VehicleFinancialRegisterService.php';
 require_once __DIR__ . '/CostNature.php';
+require_once __DIR__ . '/LocationDimensionService.php';
 
 /**
  * Modelul de citire al paginii „Rentabilitate Operationala” (?page=rentabilitate).
@@ -24,11 +25,18 @@ final class ProfitabilityRegisterService
         'cursuri_soferi' => 'Cursuri șofer', 'ssm_su' => 'SSM / SU'];
 
     private OperationalProfitabilityService $engine;
+    private LocationDimensionService $locations;
     private array $analysisMemo = [];
 
     public function __construct(private PDO $db, ?string $cacheDir = null)
     {
         $this->engine = new OperationalProfitabilityService($db, $cacheDir);
+        $this->locations = new LocationDimensionService($db);
+    }
+
+    public function locations(): LocationDimensionService
+    {
+        return $this->locations;
     }
 
     public function engine(): OperationalProfitabilityService
@@ -69,31 +77,38 @@ final class ProfitabilityRegisterService
     {
         [$from, $to] = self::range($f['from'] ?? null, $f['to'] ?? null);
         $a = $this->analysis($from, $to);
-        $mode = ($f['mode'] ?? 'vehicule') === 'soferi' ? 'soferi' : 'vehicule';
+        $mode = in_array($f['mode'] ?? '', ['soferi', 'locatii'], true) ? (string) $f['mode'] : 'vehicule';
+        // Locatii: dimensiunea randurilor (Origine / Destinatie / Depozit) + filtrele de locatie (oricare mod)
+        $dim = isset(LocationDimensionService::DIMENSIONS[$f['dim'] ?? '']) ? (string) $f['dim'] : 'depozit';
+        $loc = self::locationFilter($f);
         $type = (string) ($f['tip'] ?? '');
-        $benef = (int) ($f['beneficiar'] ?? 0);
+        // filtre cu selectie multipla: "3,5,8" / [3,5,8] / 3 (lista goala = toate)
+        $benef = self::ids($f['beneficiar'] ?? null);
         $q = mb_strtolower(trim((string) ($f['q'] ?? '')), 'UTF-8');
         $status = (string) ($f['status'] ?? '');
         $benefNames = $this->beneficiaries();
         $drivers = $this->engine->driverNames();
 
-        // Vehicul / sofer (filtrele cardurilor KPI): doar combinatii care au activitate in perioada si in tipul /
-        // beneficiarul ales; o selectie incompatibila se scoate aici (si se raporteaza), nu da un tabel gol.
-        $vehicleId = (int) ($f['vehicle_id'] ?? 0);
-        $driverId = (int) ($f['driver_id'] ?? 0);
-        $options = $this->filterOptions($a, $type, $benef, $vehicleId, $driverId, (string) ($f['keep'] ?? ''));
+        // Vehicule / soferi (bara de sus, cardurile KPI, bifele din tabel): doar cele cu activitate in perioada si in
+        // tipul / beneficiarii / locatiile alese; selectiile fara activitate se scot aici (si se raporteaza), nu dau un tabel gol.
+        $vehicleId = self::ids($f['vehicle_id'] ?? null);
+        $driverId = self::ids($f['driver_id'] ?? null);
+        $options = $this->filterOptions($a, $type, $benef, $vehicleId, $driverId, (string) ($f['keep'] ?? ''), $loc);
         $dropped = [];
-        if ($vehicleId > 0 && !isset($options['vehicule_valid'][$vehicleId])) {
+        if ($options['vehicle_ids'] !== $vehicleId) {
             $dropped[] = 'vehicle_id';
-            $vehicleId = 0;
+            $vehicleId = $options['vehicle_ids'];
         }
-        if ($driverId > 0 && !isset($options['soferi_valid'][$driverId])) {
+        if ($options['driver_ids'] !== $driverId) {
             $dropped[] = 'driver_id';
-            $driverId = 0;
+            $driverId = $options['driver_ids'];
         }
 
-        $rows = $mode === 'vehicule' ? $this->vehicleRows($a, $type, $benef, $benefNames, $drivers, $vehicleId, $driverId)
-            : $this->driverRows($a, $type, $benef, $benefNames, $vehicleId, $driverId);
+        $rows = match ($mode) {
+            'vehicule' => $this->vehicleRows($a, $type, $benef, $benefNames, $drivers, $vehicleId, $driverId, $loc),
+            'soferi' => $this->driverRows($a, $type, $benef, $benefNames, $vehicleId, $driverId, $loc),
+            'locatii' => $this->locationRows($a, $type, $benef, $vehicleId, $driverId, $loc, $dim, $benefNames),
+        };
         if ($q !== '') {
             $tripQuery = preg_match('/^#?(\d+)$/', $q, $m) === 1 ? (int) $m[1] : null;
             $rows = array_values(array_filter($rows, static fn (array $r): bool => str_contains($r['_search'], $q) || ($tripQuery !== null && in_array($tripQuery, $r['_trips'], true))));
@@ -108,7 +123,8 @@ final class ProfitabilityRegisterService
             }));
         }
         return [$rows, ['a' => $a, 'mode' => $mode, 'from' => $from, 'to' => $to, 'type' => $type, 'benef' => $benef, 'vehicle_id' => $vehicleId,
-            'driver_id' => $driverId, 'status' => $status, 'q' => (string) ($f['q'] ?? ''), 'dropped' => $dropped, 'options' => $options]];
+            'driver_id' => $driverId, 'status' => $status, 'q' => (string) ($f['q'] ?? ''), 'dropped' => $dropped, 'options' => $options,
+            'dim' => $dim, 'loc' => $loc]];
     }
 
     public function list(array $f): array
@@ -127,7 +143,7 @@ final class ProfitabilityRegisterService
             }
             $totals['km'] += $r['km'];
             $totals['revenue'] += $r['revenue'];
-            $totals['cost'] += $mode === 'vehicule' ? $r['cost_total'] : $r['cost_driver'];
+            $totals['cost'] += $mode === 'soferi' ? $r['cost_driver'] : $r['cost_total'];
             $totals['cost_vehicle'] += $r['cost_vehicle'] ?? 0.0;
             $totals['cost_driver'] += $r['cost_driver'] ?? 0.0;
             $totals['unitati']++;
@@ -165,9 +181,15 @@ final class ProfitabilityRegisterService
             'totals' => $totals,
             'kpi' => $kpi,
             'lipsa' => $a['missing_elements'],
-            'optiuni' => ['tipuri' => $types, 'beneficiari' => $benefNames, 'vehicule' => $options['vehicule'], 'soferi' => $options['soferi']],
+            'optiuni' => ['tipuri' => $types, 'beneficiari' => $benefNames, 'vehicule' => $options['vehicule'], 'soferi' => $options['soferi'],
+                'locatii_filtru' => $this->locationOptions($a, $type, $benef, $ctx['loc']),
+                'locatii' => array_map(static fn (array $p): string => $p['nume'], $this->locations->places()) + [-1 => 'Nespecificat'],
+                'dimensiuni' => LocationDimensionService::DIMENSIONS, 'dimensiuni_info' => LocationDimensionService::DIMENSION_HINTS],
             // filtrele efectiv aplicate (sursa de adevar pentru pagina) + cele scoase ca incompatibile
-            'aplicat' => ['tip' => $type, 'beneficiar' => $benef, 'vehicle_id' => $vehicleId, 'driver_id' => $driverId, 'status' => $status, 'q' => (string) ($f['q'] ?? '')],
+            // listele ca "3,5,8" ('' = fara filtru), aceeasi forma ca parametrii din URL
+            'aplicat' => ['tip' => $type, 'beneficiar' => implode(',', $benef), 'vehicle_id' => implode(',', $vehicleId), 'driver_id' => implode(',', $driverId),
+                'status' => $status, 'q' => (string) ($f['q'] ?? ''), 'dim' => $ctx['dim']]
+                + array_map(static fn (array $ids): string => implode(',', $ids), $ctx['loc']) + array_fill_keys(array_keys(LocationDimensionService::DIMENSIONS), '') + ['ruta' => ''],
             'anulate' => $dropped,
         ];
     }
@@ -213,10 +235,11 @@ final class ProfitabilityRegisterService
     }
 
     /**
-     * Optiunile Vehicul / Sofer compatibile cu perioada + tip + beneficiar (+ celalalt filtru).
-     * Cand vehiculul si soferul ales nu au lucrat impreuna, ramane cel ales ultimul ($keep), celalalt se scoate.
+     * Optiunile Vehicul / Sofer compatibile cu perioada + tip + beneficiari + locatii (+ celalalt filtru) si selectiile
+     * ramase valabile: un vehicul / sofer fara activitate in scop se scoate; cand niciun vehicul ales nu a lucrat cu
+     * vreun sofer ales, ramane filtrul schimbat ultimul ($keep), celalalt se goleste.
      */
-    private function filterOptions(array $a, string $type, int $benef, int $vehicleId, int $driverId, string $keep): array
+    private function filterOptions(array $a, string $type, array $benef, array $vehicleIds, array $driverIds, string $keep, array $loc = []): array
     {
         $info = $this->engine->vehicleInfo();
         $names = $this->engine->driverNames();
@@ -226,49 +249,103 @@ final class ProfitabilityRegisterService
             if ($meta === null || !in_array($meta['tip_vehicul'], self::HEAVY_TYPES, true) || in_array($meta['tip_vehicul'], self::SEMI_TYPES, true)) {
                 continue;
             }
-            [$km] = $this->scoped($v, $type, $benef);
+            [$km] = $this->scoped($v, $type, $benef, $loc);
             if ($km <= 0) {
                 continue;
             }
             $ratio = $v['km_real'] > 0 ? $km / $v['km_real'] : 0.0;
-            $pairs[$vid] = [];
+            $pairs[(int) $vid] = [];
             foreach ($v['by_driver'] as $did => $d) {
                 if ($d['km'] * $ratio > 0) {
-                    $pairs[$vid][(int) $did] = $d['km'] * $ratio;
+                    $pairs[(int) $vid][(int) $did] = $d['km'] * $ratio;
                 }
             }
         }
-        // o selectie fara activitate in scop nu restrange lista celuilalt filtru (list() o scoate)
-        if (!isset($pairs[$vehicleId])) {
-            $vehicleId = 0;
-        }
-        $driverActive = false;
+        $activeDrivers = [];
         foreach ($pairs as $ds) {
-            $driverActive = $driverActive || isset($ds[$driverId]);
+            $activeDrivers += $ds;
         }
-        if (!$driverActive) {
-            $driverId = 0;
-        }
-        if ($vehicleId > 0 && $driverId > 0 && isset($pairs[$vehicleId]) && !isset($pairs[$vehicleId][$driverId])) {
-            // perechea nu exista: pastram filtrul schimbat ultimul
-            $keep === 'driver_id' ? $vehicleId = 0 : $driverId = 0;
+        $vehicleIds = array_values(array_filter($vehicleIds, static fn (int $id): bool => isset($pairs[$id])));
+        $driverIds = array_values(array_filter($driverIds, static fn (int $id): bool => isset($activeDrivers[$id])));
+        if ($vehicleIds !== [] && $driverIds !== []) {
+            $together = false;
+            foreach ($vehicleIds as $vid) {
+                foreach ($driverIds as $did) {
+                    $together = $together || isset($pairs[$vid][$did]);
+                }
+            }
+            if (!$together) {
+                // nicio pereche nu a lucrat impreuna: pastram filtrul schimbat ultimul
+                $keep === 'driver_id' ? $vehicleIds = [] : $driverIds = [];
+            }
         }
         $vehicles = [];
         $driversOut = [];
         foreach ($pairs as $vid => $ds) {
-            if ($driverId <= 0 || isset($ds[$driverId])) {
+            if ($driverIds === [] || array_intersect_key($ds, array_flip($driverIds)) !== []) {
                 $vehicles[$vid] = $info[$vid]['nr'];
             }
-            if ($vehicleId <= 0 || $vid === $vehicleId) {
+            if ($vehicleIds === [] || in_array($vid, $vehicleIds, true)) {
                 foreach (array_keys($ds) as $did) {
                     $driversOut[$did] = $names[$did]['nume'] ?? ('Șofer #' . $did);
                 }
             }
         }
+        // selectia ramane mereu in lista (ca bifa ei sa poata fi scoasa)
+        foreach ($vehicleIds as $vid) {
+            $vehicles[$vid] ??= $info[$vid]['nr'] ?? '#' . $vid;
+        }
+        foreach ($driverIds as $did) {
+            $driversOut[$did] ??= $names[$did]['nume'] ?? ('Șofer #' . $did);
+        }
         natcasesort($vehicles);
         asort($driversOut, SORT_LOCALE_STRING);
         $list = static fn (array $m): array => array_map(static fn ($id, $label): array => ['id' => (int) $id, 'label' => (string) $label], array_keys($m), array_values($m));
-        return ['vehicule' => $list($vehicles), 'soferi' => $list($driversOut), 'vehicule_valid' => $vehicles, 'soferi_valid' => $driversOut];
+        return ['vehicule' => $list($vehicles), 'soferi' => $list($driversOut), 'vehicle_ids' => $vehicleIds, 'driver_ids' => $driverIds];
+    }
+
+    /**
+     * Optiunile filtrelor de locatie (Loc incarcare / Zona distributie / Depozit): locurile cu activitate in perioada,
+     * tipul si beneficiarii alesi. Celelalte filtre de locatie NU restrang lista (se pot adauga locuri) — doar
+     * selectia curenta ramane mereu in ea. @return array<string,list<array{id:int,label:string}>>
+     */
+    private function locationOptions(array $a, string $type, array $benef, array $loc): array
+    {
+        $found = array_fill_keys(array_keys(LocationDimensionService::DIMENSIONS), []);
+        $routes = [];
+        foreach ($a['vehicles'] as $v) {
+            foreach ($v['by_seg'] ?? [] as $key => $act) {
+                $parts = explode('|', (string) $key);
+                if ((float) $act['km'] <= 0 || ($type !== '' && $parts[1] !== $type) || ($benef !== [] && !in_array((int) $parts[0], $benef, true))) {
+                    continue;
+                }
+                $roles = $this->locations->roles($parts[1], (int) ($parts[2] ?? 0), (int) ($parts[3] ?? 0));
+                foreach ($roles as $dim => $pid) {
+                    $found[$dim][$pid ?? -1] = true;
+                }
+                $routes[self::routeKey($roles)] = true;
+            }
+        }
+        foreach ($loc['ruta'] ?? [] as $r) {
+            $routes[$r] = true;
+        }
+        $out = ['ruta' => []];
+        foreach (array_keys($routes) as $r) {
+            $out['ruta'][] = ['id' => (string) $r, 'label' => $this->routeLabel((string) $r)];
+        }
+        usort($out['ruta'], static fn (array $x, array $y): int => strcasecmp($x['label'], $y['label']));
+        foreach ($found as $dim => $ids) {
+            foreach ($loc[$dim] ?? [] as $id) {
+                $ids[$id] = true;
+            }
+            $items = [];
+            foreach (array_keys($ids) as $pid) {
+                $items[] = ['id' => (int) $pid, 'label' => $pid > 0 ? $this->locations->placeName((int) $pid) : self::noLocationLabel($dim)];
+            }
+            usort($items, static fn (array $x, array $y): int => ($x['id'] < 0) <=> ($y['id'] < 0) ?: strcasecmp($x['label'], $y['label']));
+            $out[$dim] = $items;
+        }
+        return $out;
     }
 
     /**
@@ -277,32 +354,52 @@ final class ProfitabilityRegisterService
      * deci exact ce ar arata pagina daca ai alege acel beneficiar / tip / vehicul. Fara medii ale rapoartelor.
      * Doar valori cu activitate (km sau cost) in scop; nivelurile fara date nu se ofera.
      *
-     * @param string $by beneficiar | tip | vehicul | sofer
+     * @param string $by beneficiar | tip | origine | destinatie | depozit | ruta | vehicul | sofer
+     *                   (origine = locul de incarcare, destinatie = zona de distributie, depozit: vezi LocationDimensionService;
+     *                   ruta = perechea Loc incarcare → Zona distributie, valoarea "origine:destinatie", -1 = fara loc)
      */
     public function kpiBreakdown(array $f, string $by): array
     {
-        if (!in_array($by, ['beneficiar', 'tip', 'vehicul', 'sofer'], true)) {
+        $isRoute = $by === 'ruta';
+        $isLoc = $isRoute || isset(LocationDimensionService::DIMENSIONS[$by]);
+        if (!$isLoc && !in_array($by, ['beneficiar', 'tip', 'vehicul', 'sofer'], true)) {
             throw new InvalidArgumentException('Defalcare necunoscută.');
         }
         [$baseRows, $ctx] = $this->scopeRows($f);
         $total = $this->kpiBlock($baseRows, $ctx['a']);
         $scope = ['mode' => $ctx['mode'], 'from' => $ctx['from'], 'to' => $ctx['to'], 'tip' => $ctx['type'], 'beneficiar' => $ctx['benef'],
-            'vehicle_id' => $ctx['vehicle_id'], 'driver_id' => $ctx['driver_id'], 'status' => $ctx['status'], 'q' => $ctx['q']];
+            'vehicle_id' => $ctx['vehicle_id'], 'driver_id' => $ctx['driver_id'], 'status' => $ctx['status'], 'q' => $ctx['q'], 'dim' => $ctx['dim']] + $ctx['loc'];
 
         // valorile candidate: doar cele cu activitate in scopul curent (fara pasi goi)
         $candidates = [];
-        if ($by === 'beneficiar' || $by === 'tip') {
+        if ($by === 'beneficiar' || $by === 'tip' || $isLoc) {
             $names = $this->beneficiaries();
             foreach ($ctx['a']['vehicles'] as $vid => $v) {
-                if ($ctx['vehicle_id'] > 0 && (int) $vid !== $ctx['vehicle_id']) {
+                if ($ctx['vehicle_id'] !== [] && !in_array((int) $vid, $ctx['vehicle_id'], true)) {
                     continue;
                 }
-                if ($ctx['driver_id'] > 0 && !isset($v['by_driver'][$ctx['driver_id']])) {
+                if ($ctx['driver_id'] !== [] && array_intersect_key($v['by_driver'], array_flip($ctx['driver_id'])) === []) {
                     continue;
                 }
-                foreach ($v['by_bt'] as $key => $act) {
-                    [$b, $t] = explode('|', (string) $key, 2);
-                    if ((float) $act['km'] <= 0 || ($ctx['type'] !== '' && $t !== $ctx['type']) || ($ctx['benef'] > 0 && (int) $b !== $ctx['benef'])) {
+                foreach ($ctx['loc'] !== [] || $isLoc ? ($v['by_seg'] ?? []) : $v['by_bt'] as $key => $act) {
+                    $parts = explode('|', (string) $key);
+                    [$b, $t] = $parts;
+                    if ((float) $act['km'] <= 0 || ($ctx['type'] !== '' && $t !== $ctx['type']) || ($ctx['benef'] !== [] && !in_array((int) $b, $ctx['benef'], true))) {
+                        continue;
+                    }
+                    if ($ctx['loc'] !== [] && !$this->matchesLocation($t, (int) ($parts[2] ?? 0), (int) ($parts[3] ?? 0), $ctx['loc'])) {
+                        continue;
+                    }
+                    if ($isRoute) {
+                        // ruta = locul de incarcare → zona de distributie a segmentului (aceeasi pereche ca in detaliul locatiei)
+                        $roles = $this->locations->roles($t, (int) ($parts[2] ?? 0), (int) ($parts[3] ?? 0));
+                        $candidates[self::routeKey($roles)] = $this->routeLabel(self::routeKey($roles));
+                        continue;
+                    }
+                    if ($isLoc) {
+                        // locul fizic al segmentului pe dimensiune (-1 = fara loc: compresor / livrare directa)
+                        $pid = $this->locations->roles($t, (int) ($parts[2] ?? 0), (int) ($parts[3] ?? 0))[$by] ?? -1;
+                        $candidates[(string) $pid] = $pid > 0 ? $this->locations->placeName($pid) : self::noLocationLabel($by);
                         continue;
                     }
                     $by === 'beneficiar'
@@ -316,10 +413,16 @@ final class ProfitabilityRegisterService
             }
         }
 
-        $key = ['beneficiar' => 'beneficiar', 'tip' => 'tip', 'vehicul' => 'vehicle_id', 'sofer' => 'driver_id'][$by];
+        $key = ['beneficiar' => 'beneficiar', 'tip' => 'tip', 'vehicul' => 'vehicle_id', 'sofer' => 'driver_id'][$by] ?? $by;
         $rows = [];
         foreach ($candidates as $value => $label) {
-            [$r] = $this->scopeRows([$key => $by === 'tip' ? (string) $value : (int) $value] + $scope);
+            // valoarea randului inlocuieste selectia de pe nivelul ei (un singur beneficiar / loc / vehicul / ruta)
+            if ($isRoute) {
+                $pick = ['ruta' => (string) $value];
+            } else {
+                $pick = [$key => $by === 'tip' ? (string) $value : (int) $value];
+            }
+            [$r] = $this->scopeRows($pick + $scope);
             $k = $this->kpiBlock($r, $ctx['a']);
             if ($k['km'] <= 0 && $k['cost'] <= 0) {
                 continue;
@@ -341,7 +444,7 @@ final class ProfitabilityRegisterService
             'from' => $out['from'], 'to' => $out['to'], 'mode' => $out['mode'], 'total' => $out['total']];
     }
 
-    private function vehicleRows(array $a, string $type, int $benef, array $benefNames, array $drivers, int $vehicleId = 0, int $driverId = 0): array
+    private function vehicleRows(array $a, string $type, array $benef, array $benefNames, array $drivers, array $vehicleId = [], array $driverId = [], array $loc = []): array
     {
         $rows = [];
         $info = $this->engine->vehicleInfo();
@@ -354,7 +457,7 @@ final class ProfitabilityRegisterService
             if ($v === null && $meta['status'] !== 'activ') {
                 continue;
             }
-            if ($vehicleId > 0 && $vid !== $vehicleId) {
+            if ($vehicleId !== [] && !in_array((int) $vid, $vehicleId, true)) {
                 continue;
             }
             $v ??= ['km_real' => 0.0, 'revenue' => 0.0, 'cost_vehicle' => 0.0, 'cost_driver' => 0.0, 'cost_total' => 0.0, 'by_type' => [], 'by_benef' => [], 'by_bt' => [],
@@ -365,7 +468,7 @@ final class ProfitabilityRegisterService
                 foreach ($a['vehicles'] as $other) {
                     $km += (float) ($other['semi_km'][$vid] ?? 0);
                 }
-                if ($type !== '' || $benef > 0 || $driverId > 0) {
+                if ($this->narrowed($type, $benef, $loc) || $driverId !== []) {
                     continue; // activitatea (tip / beneficiar / sofer) e a tractorului
                 }
                 $tractors = array_map(static fn (int $t): string => $info[$t]['nr'] ?? '#' . $t, array_keys($v['allocated_to']));
@@ -377,36 +480,49 @@ final class ProfitabilityRegisterService
                 ]);
                 continue;
             }
-            [$km, $revenue, $trips, $typesUsed] = $this->scoped($v, $type, $benef);
-            if (($type !== '' || $benef > 0) && $km <= 0) {
+            [$km, $revenue, $trips, $typesUsed] = $this->scoped($v, $type, $benef, $loc);
+            // cursele fara km raman cu venitul lor (costul, impartit dupa km, e 0) — ca in modul Locatii
+            if ($this->narrowed($type, $benef, $loc) && $km <= 0 && (float) $revenue == 0.0) {
                 continue;
             }
             $full = (float) $v['km_real'];
-            $costVehicle = $full > 0 ? $v['cost_vehicle'] * $km / $full : ($type === '' && $benef === 0 ? $v['cost_vehicle'] : 0.0);
-            $costDriver = $full > 0 ? $v['cost_driver'] * $km / $full : ($type === '' && $benef === 0 ? $v['cost_driver'] : 0.0);
-            $driverIds = array_keys($v['by_driver']);
-            if ($driverId > 0) {
-                // Doar activitatea soferului ales pe vehicul (restransa proportional la tip / beneficiar, ca in modul Soferi):
-                // costul vehiculului dupa km-ii lui, costul soferului = partea lui alocata acestui vehicul.
-                $bd = $v['by_driver'][$driverId] ?? null;
+            $costVehicle = $full > 0 ? $v['cost_vehicle'] * $km / $full : (!$this->narrowed($type, $benef, $loc) ? $v['cost_vehicle'] : 0.0);
+            $costDriver = $full > 0 ? $v['cost_driver'] * $km / $full : (!$this->narrowed($type, $benef, $loc) ? $v['cost_driver'] : 0.0);
+            $rowDrivers = array_keys($v['by_driver']);
+            if ($driverId !== []) {
+                // Doar activitatea soferilor alesi pe vehicul (restransa proportional la tip / beneficiar, ca in modul Soferi):
+                // costul vehiculului dupa km-ii lor, costul soferilor = partea fiecaruia alocata acestui vehicul.
                 $ratio = $full > 0 ? $km / $full : 0.0;
-                $dkm = $bd !== null ? (float) $bd['km'] * $ratio : 0.0;
+                $dkm = 0.0;
+                $revenue = 0.0;
+                $tripsF = 0.0;
+                $costDriver = 0.0;
+                $rowDrivers = [];
+                foreach ($driverId as $did) {
+                    $bd = $v['by_driver'][$did] ?? null;
+                    $part = $bd !== null ? (float) $bd['km'] * $ratio : 0.0;
+                    if ($part <= 0) {
+                        continue;
+                    }
+                    $dkm += $part;
+                    $revenue += (float) $bd['revenue'] * $ratio;
+                    $tripsF += $bd['trips'] * $ratio;
+                    $costDriver += (float) ($v['driver_costs'][$did] ?? 0) * ($bd['km'] > 0 ? $part / $bd['km'] : 0.0);
+                    $rowDrivers[] = $did;
+                }
                 if ($dkm <= 0) {
                     continue;
                 }
-                $revenue = (float) $bd['revenue'] * $ratio;
-                $trips = (int) round($bd['trips'] * $ratio);
+                $trips = (int) round($tripsF);
                 $costVehicle = $full > 0 ? $v['cost_vehicle'] * $dkm / $full : 0.0;
-                $costDriver = (float) ($v['driver_costs'][$driverId] ?? 0) * ($bd['km'] > 0 ? $dkm / $bd['km'] : 0.0)
-                    + (float) ($v['costs']['sofer'] ?? 0) * ($full > 0 ? $dkm / $full : 0.0);
+                $costDriver += (float) ($v['costs']['sofer'] ?? 0) * ($full > 0 ? $dkm / $full : 0.0);
                 $km = $dkm;
-                $driverIds = [$driverId];
             }
-            $driverLabel = count($driverIds) === 1 ? ($drivers[$driverIds[0]]['nume'] ?? '—') : (count($driverIds) > 1 ? count($driverIds) . ' șoferi' : '—');
+            $driverLabel = count($rowDrivers) === 1 ? ($drivers[$rowDrivers[0]]['nume'] ?? '—') : (count($rowDrivers) > 1 ? count($rowDrivers) . ' șoferi' : '—');
             $semis = array_map(static fn (int $s): string => $info[$s]['nr'] ?? '#' . $s, array_keys($v['semi_km']));
             $rows[] = $this->row($vid, $meta, [
                 'km' => $km, 'revenue' => $revenue, 'cost_vehicle' => $costVehicle, 'cost_driver' => $costDriver, 'trips' => $trips,
-                'drivers' => $driverLabel, 'driver_count' => count($driverIds), 'driver_names' => array_map(static fn (int $d): string => $drivers[$d]['nume'] ?? '#' . $d, $driverIds),
+                'drivers' => $driverLabel, 'driver_count' => count($rowDrivers), 'driver_names' => array_map(static fn (int $d): string => $drivers[$d]['nume'] ?? '#' . $d, $rowDrivers),
                 'transport' => count($typesUsed) === 0 ? null : (count($typesUsed) === 1 ? $typesUsed[0] : 'mixt'),
                 'incomplet' => $v['incomplet'], 'is_semi' => false, 'semis' => $semis, 'trip_ids' => $v['trip_ids'],
                 'benef_names' => array_map(static fn (int $b): string => $benefNames[$b] ?? '', array_keys($v['by_benef'])),
@@ -416,18 +532,23 @@ final class ProfitabilityRegisterService
     }
 
     /** @return array{0:float,1:float,2:int,3:list<string>} km, venit, curse, tipuri — restranse la filtru */
-    private function scoped(array $v, string $type, int $benef): array
+    private function scoped(array $v, string $type, array $benef, array $loc = []): array
     {
-        if ($type === '' && $benef === 0) {
+        if (!$this->narrowed($type, $benef, $loc)) {
             return [(float) $v['km_real'], (float) $v['revenue'], (int) $v['trips'], array_keys($v['by_type'])];
         }
         $km = 0.0;
         $revenue = 0.0;
         $trips = 0;
         $types = [];
-        foreach ($v['by_bt'] as $key => $act) {
-            [$b, $t] = explode('|', (string) $key, 2);
-            if (($type !== '' && $t !== $type) || ($benef > 0 && (int) $b !== $benef)) {
+        // cu filtru de locatie: pe segmente (beneficiar|tip|loc|zona), altfel pe beneficiar|tip
+        foreach ($loc !== [] ? ($v['by_seg'] ?? []) : $v['by_bt'] as $key => $act) {
+            $parts = explode('|', (string) $key);
+            [$b, $t] = $parts;
+            if (($type !== '' && $t !== $type) || ($benef !== [] && !in_array((int) $b, $benef, true))) {
+                continue;
+            }
+            if ($loc !== [] && !$this->matchesLocation($t, (int) ($parts[2] ?? 0), (int) ($parts[3] ?? 0), $loc)) {
                 continue;
             }
             $km += $act['km'];
@@ -436,6 +557,251 @@ final class ProfitabilityRegisterService
             $types[$t] = true;
         }
         return [$km, $revenue, $trips, array_keys($types)];
+    }
+
+    // ================================================================== locatii (Origine / Destinatie / Depozit)
+
+    /**
+     * Activitatea si costul vehiculelor (fara semiremorci: costul lor alocat e deja in tractoare) impartite pe grupuri
+     * de segmente de cursa. Costul vehiculului si al soferului se imparte dupa km, exact ca la filtrele Tip / Beneficiar
+     * (costul / km al vehiculului pe interval × km-ii segmentului); cu sofer ales, doar partea lui (ca in vehicleRows).
+     *
+     * @param callable(int $vid, array $roles): (string|int|null) $keyOf  grupul segmentului (null = sare)
+     * @return array<string|int,array> grup => km, revenue, trips, cost_vehicle, cost_driver, vehicles[vid=>km], benefs, types, incomplet
+     */
+    private function locationAggregate(array $a, string $type, array $benef, array $vehicleId, array $driverId, array $loc, callable $keyOf): array
+    {
+        $info = $this->engine->vehicleInfo();
+        $groups = [];
+        foreach ($a['vehicles'] as $vid => $v) {
+            $vid = (int) $vid;
+            $meta = $info[$vid] ?? null;
+            if ($meta === null || !in_array($meta['tip_vehicul'], self::HEAVY_TYPES, true) || in_array($meta['tip_vehicul'], self::SEMI_TYPES, true)) {
+                continue;
+            }
+            if ($vehicleId !== [] && !in_array((int) $vid, $vehicleId, true)) {
+                continue;
+            }
+            $full = (float) $v['km_real'];
+            if ($full <= 0) {
+                continue;
+            }
+            // soferii alesi: partea lor din activitatea vehiculului + costul lor alocat vehiculului
+            $dShare = 1.0;
+            $driverCost = 0.0;
+            if ($driverId !== []) {
+                $dkm = 0.0;
+                foreach ($driverId as $did) {
+                    $dkm += (float) ($v['by_driver'][$did]['km'] ?? 0);
+                    $driverCost += (float) ($v['driver_costs'][$did] ?? 0);
+                }
+                if ($dkm <= 0) {
+                    continue;
+                }
+                $dShare = $dkm / $full;
+            }
+            foreach ($v['by_seg'] ?? [] as $key => $act) {
+                $parts = explode('|', (string) $key);
+                $b = (int) $parts[0];
+                $t = (string) ($parts[1] ?? '');
+                $locId = (int) ($parts[2] ?? 0);
+                $zonaId = (int) ($parts[3] ?? 0);
+                // segmentele fara km pastreaza venitul / cursele (costul, impartit dupa km, e 0)
+                if (($type !== '' && $t !== $type) || ($benef !== [] && !in_array($b, $benef, true)) || ((float) $act['km'] <= 0 && (float) $act['revenue'] == 0.0 && (int) $act['trips'] === 0)) {
+                    continue;
+                }
+                if ($loc !== [] && !$this->matchesLocation($t, $locId, $zonaId, $loc)) {
+                    continue;
+                }
+                $g = $keyOf($vid, $this->locations->roles($t, $locId, $zonaId));
+                if ($g === null) {
+                    continue;
+                }
+                $segShare = (float) $act['km'] / $full;
+                $km = (float) $act['km'] * $dShare;
+                $costDriver = $driverId !== []
+                    ? $driverCost * $segShare + (float) ($v['costs']['sofer'] ?? 0) * $km / $full
+                    : (float) $v['cost_driver'] * $segShare;
+                $acc = &$groups[$g];
+                $acc ??= ['km' => 0.0, 'revenue' => 0.0, 'trips' => 0.0, 'cost_vehicle' => 0.0, 'cost_driver' => 0.0, 'vehicles' => [], 'benefs' => [], 'types' => [], 'incomplet' => [],
+                    'tone_inc' => 0.0, 'tone_liv' => 0.0, 'cap' => 0.0, 'tone_lipsa' => 0.0, 'tone_peste' => 0.0, 'clienti' => 0.0, 'cap_neconf' => 0.0];
+                $acc['km'] += $km;
+                // incarcarea: tone, capacitate, clienti (cu sofer ales: partea lui, ca venitul)
+                foreach (['tone_inc', 'tone_liv', 'cap', 'tone_lipsa', 'tone_peste', 'clienti', 'cap_neconf'] as $lk) {
+                    $acc[$lk] += (float) ($act[$lk] ?? 0) * $dShare;
+                }
+                $acc['revenue'] += (float) $act['revenue'] * $dShare;
+                $acc['trips'] += (float) $act['trips'] * $dShare;
+                $acc['cost_vehicle'] += (float) $v['cost_vehicle'] * $km / $full;
+                $acc['cost_driver'] += $costDriver;
+                $acc['vehicles'][$vid] = ($acc['vehicles'][$vid] ?? 0.0) + $km;
+                $acc['benefs'][$b] = true;
+                $acc['types'][$t] = true;
+                foreach ($v['incomplet'] as $reason) {
+                    $acc['incomplet'][$reason] = true;
+                }
+                unset($acc);
+            }
+        }
+        return $groups;
+    }
+
+    /** Randurile modului Locatii: un loc fizic pe rand, pe dimensiunea aleasa (-1 = fara loc pe dimensiune). */
+    private function locationRows(array $a, string $type, array $benef, array $vehicleId, array $driverId, array $loc, string $dim, array $benefNames): array
+    {
+        $groups = $this->locationAggregate($a, $type, $benef, $vehicleId, $driverId, $loc,
+            static fn (int $vid, array $roles): int => $roles[$dim] ?? -1);
+        $places = $this->locations->places();
+        $info = $this->engine->vehicleInfo();
+        $rows = [];
+        foreach ($groups as $pid => $g) {
+            $pid = (int) $pid;
+            $label = $pid === -1 ? self::noLocationLabel($dim) : ($places[$pid]['nume'] ?? 'Locație #' . $pid);
+            $vehicles = array_map(static fn (int $v): string => $info[$v]['nr'] ?? '#' . $v, array_keys($g['vehicles']));
+            $rows[] = $this->aggregateRow('l' . $pid, $pid, $label, $pid === -1 ? '' : (($places[$pid]['tip'] ?? '') === 'regiune' ? 'Regiune' : 'Punct fizic'), $g,
+                count($vehicles) === 1 ? $vehicles[0] : count($vehicles) . ' vehicule', array_keys($g['types']),
+                array_merge([$label], $vehicles, array_map(static fn (int $b): string => $benefNames[$b] ?? '', array_keys($g['benefs']))));
+        }
+        usort($rows, static fn (array $x, array $y): int => $y['km'] <=> $x['km']);
+        return $rows;
+    }
+
+    public static function noLocationLabel(string $dim): string
+    {
+        return $dim === 'depozit' ? 'Fără depozit (livrare directă / compresor)' : 'Nespecificat';
+    }
+
+    /** Un rand de tabel din suma unui grup (modul Locatii, detaliul unei locatii). */
+    private function aggregateRow(string $key, int $id, string $label, string $model, array $g, string $second, array $typeKeys, array $search): array
+    {
+        $km = (float) $g['km'];
+        $cost = $g['cost_vehicle'] + $g['cost_driver'];
+        $result = $g['revenue'] - $cost;
+        return [
+            'key' => $key, 'id' => $id, 'label' => $label, 'model' => $model, 'tip_label' => $model, 'status' => 'activ',
+            'activitate' => $km > 0 ? 'activ' : 'fara_activitate', 'drivers' => $second, 'driver_count' => 0, 'vehicle_count' => count($g['vehicles']),
+            'transport' => count($typeKeys) === 0 ? null : (count($typeKeys) === 1 ? $typeKeys[0] : 'mixt'),
+            'transport_label' => count($typeKeys) === 0 ? null : (count($typeKeys) === 1 ? (OperationalProfitabilityService::TRANSPORT_LABELS[$typeKeys[0]] ?? $typeKeys[0]) : 'Mixt'),
+            'km' => $km, 'trips' => (int) round($g['trips']), 'revenue' => $g['revenue'],
+            'cost_vehicle' => $g['cost_vehicle'], 'cost_driver' => $g['cost_driver'], 'cost_total' => $cost, 'result' => $result,
+            'cost_vehicle_km' => $km > 0 ? $g['cost_vehicle'] / $km : null, 'cost_driver_km' => $km > 0 ? $g['cost_driver'] / $km : null,
+            'cost_total_km' => $km > 0 ? $cost / $km : null, 'revenue_km' => $km > 0 ? $g['revenue'] / $km : null,
+            'result_km' => $km > 0 ? $result / $km : null, 'coverage' => $cost > 0 ? $g['revenue'] / $cost * 100 : null,
+            'incomplet' => array_keys($g['incomplet']), 'is_semi' => false, 'unallocated' => 0.0,
+            // incarcarea: tone incarcate / livrate (livrate = incarcate cand nu s-au inregistrat separat), clienti (puncte de livrare),
+            // tone lipsa = capacitatea cursei − tone incarcate (doar cursele sub capacitate; supraincarcarea e separat, nu compenseaza)
+            'tone_inc' => (float) ($g['tone_inc'] ?? 0), 'tone_liv' => (float) ($g['tone_liv'] ?? 0), 'clienti' => (int) round((float) ($g['clienti'] ?? 0)),
+            'capacitate' => (float) ($g['cap'] ?? 0), 'tone_lipsa' => (float) ($g['tone_lipsa'] ?? 0), 'tone_peste' => (float) ($g['tone_peste'] ?? 0),
+            'grad_umplere' => ($g['cap'] ?? 0) > 0 ? ($g['cap'] - $g['tone_lipsa'] + $g['tone_peste']) / $g['cap'] * 100 : null,
+            'cap_neconfirmata' => (int) round((float) ($g['cap_neconf'] ?? 0)),
+            '_search' => mb_strtolower(implode(' ', $search), 'UTF-8'), '_trips' => [],
+        ];
+    }
+
+    /**
+     * Detaliul unei locatii (rand extins in modul Locatii): pe vehicule si pe rute (Origine → Destinatie),
+     * in scopul curent al paginii + locatia aleasa pe dimensiune (-1 = fara loc).
+     */
+    public function locationDetail(array $f, int $placeId): array
+    {
+        [, $ctx] = $this->scopeRows(['mode' => 'locatii'] + $f);
+        $loc = $ctx['loc'];
+        $loc[$ctx['dim']] = [$placeId > 0 ? $placeId : -1];
+        $info = $this->engine->vehicleInfo();
+        $benefNames = $this->beneficiaries();
+        $agg = fn (callable $keyOf): array => $this->locationAggregate($ctx['a'], $ctx['type'], $ctx['benef'], $ctx['vehicle_id'], $ctx['driver_id'], $loc, $keyOf);
+        $vehicles = [];
+        foreach ($agg(static fn (int $vid): int => $vid) as $vid => $g) {
+            $vid = (int) $vid;
+            $vehicles[] = $this->aggregateRow('v' . $vid, $vid, $info[$vid]['nr'] ?? '#' . $vid, $info[$vid]['model'] ?? '', $g,
+                implode(', ', array_filter(array_map(static fn (int $b): string => $benefNames[$b] ?? '', array_keys($g['benefs'])))), array_keys($g['types']), []);
+        }
+        $routes = [];
+        foreach ($agg(static fn (int $vid, array $roles): string => ($roles['origine'] ?? -1) . '>' . ($roles['destinatie'] ?? -1)) as $key => $g) {
+            [$o, $d] = array_map('intval', explode('>', (string) $key));
+            $routes[] = $this->aggregateRow('r' . $key, 0, $this->locations->placeName($o > 0 ? $o : null) . ' → ' . $this->locations->placeName($d > 0 ? $d : null), '', $g,
+                count($g['vehicles']) . ' vehicule', array_keys($g['types']), []) + ['origine' => $o, 'destinatie' => $d];
+        }
+        $clean = static fn (array $rows): array => array_map(static function (array $r): array {
+            unset($r['_search'], $r['_trips']);
+            return $r;
+        }, $rows);
+        usort($vehicles, static fn (array $x, array $y): int => $y['km'] <=> $x['km']);
+        usort($routes, static fn (array $x, array $y): int => $y['km'] <=> $x['km']);
+        return ['dim' => $ctx['dim'], 'id' => $placeId, 'vehicles' => $clean($vehicles), 'routes' => $clean($routes)];
+    }
+
+    /** Filtrul restrange activitatea (tip, beneficiar sau locatie)? */
+    private function narrowed(string $type, array $benef, array $loc): bool
+    {
+        return $type !== '' || $benef !== [] || $loc !== [];
+    }
+
+    /**
+     * Filtrele de locatie din cerere: dimensiune => id-uri de loc fizic (-1 = nespecificat). Doar cele setate.
+     * @return array<string,list<int>>
+     */
+    private static function locationFilter(array $f): array
+    {
+        $out = [];
+        foreach (array_keys(LocationDimensionService::DIMENSIONS) as $dim) {
+            $ids = self::ids($f[$dim] ?? null, true);
+            if ($ids !== []) {
+                $out[$dim] = $ids;
+            }
+        }
+        // rute exacte „loc:zona” (Loc incarcare → Zona distributie; -1 = fara loc): doar perechile alese, fara combinatii
+        $routes = [];
+        foreach (is_array($f['ruta'] ?? null) ? $f['ruta'] : explode(',', (string) ($f['ruta'] ?? '')) as $r) {
+            $r = trim((string) $r);
+            if (preg_match('/^(-1|[1-9]\d*):(-1|[1-9]\d*)$/', $r) === 1) {
+                $routes[$r] = $r;
+            }
+        }
+        if ($routes !== []) {
+            $out['ruta'] = array_values($routes);
+        }
+        return $out;
+    }
+
+    /** Cheia rutei unui segment: „origine:destinatie” (-1 = fara loc). */
+    private static function routeKey(array $roles): string
+    {
+        return ($roles['origine'] ?? -1) . ':' . ($roles['destinatie'] ?? -1);
+    }
+
+    public function routeLabel(string $key): string
+    {
+        [$o, $d] = array_map('intval', explode(':', $key) + [1 => -1]);
+        return ($o > 0 ? $this->locations->placeName($o) : 'Nespecificat') . ' → ' . ($d > 0 ? $this->locations->placeName($d) : 'Nespecificat');
+    }
+
+    /**
+     * Id-urile unui filtru cu selectie multipla: "3,5,8", [3, 5, 8] sau 3; ordinea se pastreaza, fara dubluri.
+     * @param bool $withNone accepta -1 (fara loc, la filtrele de locatie) @return list<int>
+     */
+    private static function ids(mixed $value, bool $withNone = false): array
+    {
+        $out = [];
+        foreach (is_array($value) ? $value : explode(',', (string) ($value ?? '')) as $x) {
+            $id = (int) trim((string) $x);
+            if ($id > 0 || ($withNone && $id === -1)) {
+                $out[$id] = $id;
+            }
+        }
+        return array_values($out);
+    }
+
+    /** O locatie se potriveste cand, pe fiecare dimensiune filtrata, locul cursei e unul din cele alese. */
+    private function matchesLocation(string $type, int $locId, int $zonaId, array $loc): bool
+    {
+        $roles = $this->locations->roles($type, $locId, $zonaId);
+        foreach ($loc as $dim => $ids) {
+            if ($dim === 'ruta' ? !in_array(self::routeKey($roles), $ids, true) : !in_array($roles[$dim] ?? -1, $ids, true)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private function row(int $vid, array $meta, array $d): array
@@ -467,7 +833,7 @@ final class ProfitabilityRegisterService
         ];
     }
 
-    private function driverRows(array $a, string $type, int $benef, array $benefNames, int $vehicleId = 0, int $driverId = 0): array
+    private function driverRows(array $a, string $type, array $benef, array $benefNames, array $vehicleId = [], array $driverId = [], array $loc = []): array
     {
         $info = $this->engine->vehicleInfo();
         $names = $this->engine->driverNames();
@@ -479,9 +845,9 @@ final class ProfitabilityRegisterService
             }
         }
         // filtrul de vehicul restrange activitatea (si costul, proportional cu km-ii) ca filtrul de tip / beneficiar
-        $scopedFilter = $type !== '' || $benef > 0 || $vehicleId > 0;
+        $scopedFilter = $this->narrowed($type, $benef, $loc) || $vehicleId !== [];
         foreach ($ids as $did) {
-            if ($driverId > 0 && (int) $did !== $driverId) {
+            if ($driverId !== [] && !in_array((int) $did, $driverId, true)) {
                 continue;
             }
             $d = $a['drivers'][$did] ?? null;
@@ -494,19 +860,19 @@ final class ProfitabilityRegisterService
             $tripIds = [];
             $types = [];
             foreach ($a['vehicles'] as $vid => $v) {
-                if (!isset($v['by_driver'][$did]) || ($vehicleId > 0 && (int) $vid !== $vehicleId)) {
+                if (!isset($v['by_driver'][$did]) || ($vehicleId !== [] && !in_array((int) $vid, $vehicleId, true))) {
                     continue;
                 }
                 // activitatea soferului pe vehicul, restransa proportional la filtru (tip / beneficiar)
-                [$skm, , , $styp] = $this->scoped($v, $type, $benef);
+                [$skm, , , $styp] = $this->scoped($v, $type, $benef, $loc);
                 $ratio = $v['km_real'] > 0 ? $skm / $v['km_real'] : 0.0;
-                $dkm = $v['by_driver'][$did]['km'] * ($type !== '' || $benef > 0 ? $ratio : 1.0);
-                if ($dkm <= 0 && ($type !== '' || $benef > 0)) {
+                $dkm = $v['by_driver'][$did]['km'] * ($this->narrowed($type, $benef, $loc) ? $ratio : 1.0);
+                if ($dkm <= 0 && $this->narrowed($type, $benef, $loc)) {
                     continue;
                 }
                 $km += $dkm;
-                $revenue += $v['by_driver'][$did]['revenue'] * ($type !== '' || $benef > 0 ? $ratio : 1.0);
-                $trips += (int) round($v['by_driver'][$did]['trips'] * ($type !== '' || $benef > 0 ? $ratio : 1.0));
+                $revenue += $v['by_driver'][$did]['revenue'] * ($this->narrowed($type, $benef, $loc) ? $ratio : 1.0);
+                $trips += (int) round($v['by_driver'][$did]['trips'] * ($this->narrowed($type, $benef, $loc) ? $ratio : 1.0));
                 $vehicleCost += $v['km_real'] > 0 ? $v['cost_vehicle'] / $v['km_real'] * $dkm : 0.0;
                 $vehicles[] = $info[$vid]['nr'] ?? '#' . $vid;
                 foreach (array_keys($v['by_benef']) as $b) {
@@ -988,7 +1354,7 @@ final class ProfitabilityRegisterService
             throw new InvalidArgumentException('Șoferul nu există.');
         }
         $d = $a['drivers'][$did] ?? null;
-        $rows = $this->driverRows($a, '', 0, $this->beneficiaries());
+        $rows = $this->driverRows($a, '', [], $this->beneficiaries());
         $row = array_values(array_filter($rows, static fn (array $r): bool => $r['id'] === $did))[0] ?? null;
         $info = $this->engine->vehicleInfo();
         $cats = [];
@@ -1086,7 +1452,9 @@ final class ProfitabilityRegisterService
         $fmt = static fn (?float $v, int $d = 2): string => $v === null ? '' : number_format($v, $d, ',', '');
         $out = fopen('php://temp', 'w+');
         fwrite($out, "\xEF\xBB\xBF");
-        fputcsv($out, [$first['mode'] === 'soferi' ? 'Șofer' : 'Vehicul', $first['mode'] === 'soferi' ? 'Vehicule' : 'Șofer', 'Tip transport', 'Km', 'Curse', 'Venit (lei)',
+        $heads = ['vehicule' => ['Vehicul', 'Șofer'], 'soferi' => ['Șofer', 'Vehicule'],
+            'locatii' => [LocationDimensionService::DIMENSIONS[$first['aplicat']['dim']] ?? 'Locație', 'Vehicule']][$first['mode']];
+        fputcsv($out, [$heads[0], $heads[1], 'Tip transport', 'Km', 'Curse', 'Venit (lei)',
             'Cost vehicul (lei)', 'Cost șofer (lei)', 'Cost vehicul/km', 'Cost șofer/km', 'Cost total/km', 'Venit/km', 'Rezultat/km', 'Acoperire %', 'Date incomplete'], ';');
         foreach ($rows as $r) {
             fputcsv($out, [$r['label'], $r['drivers'], $r['transport_label'] ?? '', $fmt($r['km'], 0), $r['trips'], $fmt($r['revenue']), $fmt($r['cost_vehicle']), $fmt($r['cost_driver']),

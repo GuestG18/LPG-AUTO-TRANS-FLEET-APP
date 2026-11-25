@@ -1,0 +1,188 @@
+{
+  "room": "sediu",
+  "maxPlayers": 16,
+  "avatars": [
+    "avaturn_a",
+    "avaturn_b"
+  ],
+  "//scale": "Modelul biroului e la ~85% din mărimea reală (birou 0,64 m, ușă 1,80 m); coordonatele de mai jos sunt în unitățile modelului și se înmulțesc cu scale la încărcare (client + server).",
+  "scale": 1.17,
+  "player": {
+    "radius": 0.22,
+    "walkSpeed": 1.7,
+    "runSpeed": 3.4,
+    "maxServerSpeed": 4.2
+  },
+  "walkable": {
+    "minX": -3.03,
+    "maxX": 2.8,
+    "minZ": -4.02,
+    "maxZ": 4.18
+  },
+  "camera": {
+    "minX": -3,
+    "maxX": 3.08,
+    "minY": 0.3,
+    "maxY": 2.2,
+    "minZ": -3.98,
+    "maxZ": 4.45
+  },
+  "obstacles": [
+    { "id": "birou_1", "minX": -0.17, "maxX": 2.28, "minZ": -0.46, "maxZ": 0.47, "height": 0.75 },
+    { "id": "birou_2", "minX": -0.17, "maxX": 2.28, "minZ": 2.22, "maxZ": 3.15, "height": 0.75 },
+    { "id": "birou_3", "minX": -2.48, "maxX": -1.55, "minZ": 0.98, "maxZ": 3.42, "height": 0.75 },
+    { "id": "scaun_1", "minX": 0.26, "maxX": 0.72, "minZ": -0.94, "maxZ": -0.48, "height": 0.83 },
+    { "id": "scaun_2", "minX": 1.12, "maxX": 1.59, "minZ": -0.94, "maxZ": -0.48, "height": 0.83 },
+    { "id": "scaun_3", "minX": 0.89, "maxX": 1.36, "minZ": 0.41, "maxZ": 0.87, "height": 0.83 },
+    { "id": "scaun_4", "minX": 0.03, "maxX": 0.5, "minZ": 0.41, "maxZ": 0.87, "height": 0.83 },
+    { "id": "scaun_5", "minX": 0.26, "maxX": 0.72, "minZ": 1.74, "maxZ": 2.2, "height": 0.83 },
+    { "id": "scaun_6", "minX": 1.12, "maxX": 1.59, "minZ": 1.74, "maxZ": 2.2, "height": 0.83 },
+    { "id": "scaun_7", "minX": 0.89, "maxX": 1.36, "minZ": 3.09, "maxZ": 3.55, "height": 0.83 },
+    { "id": "scaun_8", "minX": -0.1, "maxX": 0.36, "minZ": 3.09, "maxZ": 3.55, "height": 0.83 },
+    { "id": "scaun_9", "minX": -2.82, "maxX": -2.36, "minZ": 2.11, "maxZ": 2.58, "height": 0.83 },
+    { "id": "scaun_10", "minX": -1.47, "maxX": -1.01, "minZ": 1.23, "maxZ": 1.7, "height": 0.83 },
+    { "id": "scaun_11", "minX": 2.11, "maxX": 2.57, "minZ": -0.34, "maxZ": 0.12, "height": 0.83 },
+    { "id": "scaun_12", "minX": 2.11, "maxX": 2.57, "minZ": 2.29, "maxZ": 2.76, "height": 0.83 },
+    { "id": "scaun_13", "minX": -2.08, "maxX": -1.61, "minZ": 3.3, "maxZ": 3.76, "height": 0.83 },
+    { "id": "canapea", "minX": 0.31, "maxX": 1.8, "minZ": -2.03, "maxZ": -1.41, "height": 0.58 },
+    { "id": "fotoliu_1", "minX": -0.4, "maxX": 0.23, "minZ": -2.84, "maxZ": -2.17, "height": 0.58 },
+    { "id": "fotoliu_2", "minX": 1.87, "maxX": 2.49, "minZ": -2.83, "maxZ": -2.16, "height": 0.58 },
+    { "id": "masuta_cafea", "minX": 0.55, "maxX": 1.5, "minZ": -2.8, "maxZ": -2.2, "height": 0.45 },
+    { "id": "dozator_apa", "minX": -1, "maxX": -0.29, "minZ": 3.79, "maxZ": 4.16, "height": 1.62 },
+    { "id": "comoda_tv", "minX": 0.49, "maxX": 1.56, "minZ": -3.72, "maxZ": -3.3, "height": 1.41 },
+    { "id": "cos", "minX": 0.11, "maxX": 0.46, "minZ": -4.03, "maxZ": -3.66, "height": 0.58 },
+    { "id": "planta", "minX": -0.32, "maxX": 0.08, "minZ": -3.99, "maxZ": -3.46, "height": 1.15 },
+    { "id": "dulap", "minX": -3.05, "maxX": -1.32, "minZ": -4.05, "maxZ": -3.1, "height": 1.88 },
+    { "id": "corp_sub_panou", "minX": -3.04, "maxX": -2.66, "minZ": -1.1, "maxZ": -0.45, "height": 0.65 }
+  ],
+  "spawns": [
+    {
+      "x": -1.2,
+      "z": -1.3,
+      "ry": 0.6
+    },
+    {
+      "x": -0.3,
+      "z": -1.15,
+      "ry": -0.6
+    }
+  ],
+  "seats": [
+    { "id": "scaun_1", "kind": "scaun", "x": 0.49, "z": -0.74, "ry": 0, "h": 0.42 },
+    { "id": "scaun_2", "kind": "scaun", "x": 1.36, "z": -0.74, "ry": 0, "h": 0.42 },
+    { "id": "scaun_3", "kind": "scaun", "x": 1.12, "z": 0.67, "ry": 3.142, "h": 0.42 },
+    { "id": "scaun_4", "kind": "scaun", "x": 0.26, "z": 0.67, "ry": 3.142, "h": 0.42 },
+    { "id": "scaun_5", "kind": "scaun", "x": 0.49, "z": 1.94, "ry": 0, "h": 0.42 },
+    { "id": "scaun_6", "kind": "scaun", "x": 1.36, "z": 1.94, "ry": 0, "h": 0.42 },
+    { "id": "scaun_7", "kind": "scaun", "x": 1.12, "z": 3.35, "ry": 3.142, "h": 0.42 },
+    { "id": "scaun_8", "kind": "scaun", "x": 0.13, "z": 3.35, "ry": 3.142, "h": 0.42 },
+    { "id": "scaun_9", "kind": "scaun", "x": -2.62, "z": 2.34, "ry": 1.571, "h": 0.42 },
+    { "id": "scaun_10", "kind": "scaun", "x": -1.21, "z": 1.47, "ry": -1.571, "h": 0.42 },
+    { "id": "scaun_11", "kind": "scaun", "x": 2.37, "z": -0.11, "ry": -1.571, "h": 0.42 },
+    { "id": "scaun_12", "kind": "scaun", "x": 2.37, "z": 2.53, "ry": -1.571, "h": 0.42 },
+    { "id": "scaun_13", "kind": "scaun", "x": -1.85, "z": 3.56, "ry": 3.142, "h": 0.42 },
+    { "id": "canapea_1", "kind": "canapea", "x": 0.62, "z": -1.66, "ry": 3.142, "h": 0.33, "watch": true },
+    { "id": "canapea_2", "kind": "canapea", "x": 1.06, "z": -1.66, "ry": 3.142, "h": 0.33, "watch": true },
+    { "id": "canapea_3", "kind": "canapea", "x": 1.5, "z": -1.66, "ry": 3.142, "h": 0.33, "watch": true },
+    { "id": "fotoliu_1", "kind": "fotoliu", "x": -0.12, "z": -2.5, "ry": 1.571, "h": 0.33, "watch": true },
+    { "id": "fotoliu_2", "kind": "fotoliu", "x": 2.21, "z": -2.5, "ry": -1.571, "h": 0.33, "watch": true }
+  ],
+  "interactables": [
+    {
+      "id": "panou_informativ",
+      "type": "noticeboard",
+      "node": "Cube.036",
+      "radius": 1.6,
+      "permission": "view",
+      "prompt": "Deschide panoul informativ",
+      "ui": "notes"
+    },
+    {
+      "id": "laptop_1",
+      "type": "laptop",
+      "position": {
+        "x": 1.29,
+        "y": 0.74,
+        "z": -0.17
+      },
+      "radius": 1.3,
+      "permission": "view",
+      "prompt": "Folosește laptopul",
+      "ui": "laptop"
+    },
+    {
+      "id": "laptop_2",
+      "type": "laptop",
+      "position": {
+        "x": 0.23,
+        "y": 0.74,
+        "z": 0.23
+      },
+      "radius": 1.3,
+      "permission": "view",
+      "prompt": "Folosește laptopul",
+      "ui": "laptop"
+    },
+    {
+      "id": "laptop_3",
+      "type": "laptop",
+      "position": {
+        "x": 1.29,
+        "y": 0.74,
+        "z": 2.49
+      },
+      "radius": 1.3,
+      "permission": "view",
+      "prompt": "Folosește laptopul",
+      "ui": "laptop"
+    },
+    {
+      "id": "laptop_4",
+      "type": "laptop",
+      "position": {
+        "x": 0.23,
+        "y": 0.74,
+        "z": 2.9
+      },
+      "radius": 1.3,
+      "permission": "view",
+      "prompt": "Folosește laptopul",
+      "ui": "laptop"
+    },
+    {
+      "id": "laptop_5",
+      "type": "laptop",
+      "position": {
+        "x": -1.835,
+        "y": 0.74,
+        "z": 2.435
+      },
+      "radius": 1.3,
+      "permission": "view",
+      "prompt": "Folosește laptopul",
+      "ui": "laptop"
+    },
+    {
+      "id": "ecran_prezentare",
+      "type": "screen",
+      "radius": 2.6,
+      "permission": "view",
+      "prompt": "Privește ecranul de prezentare",
+      "ui": "screen"
+    }
+  ],
+  "screen": {
+    "center": {
+      "x": 1.03,
+      "y": 1.105,
+      "z": -3.364
+    },
+    "normal": {
+      "x": 0,
+      "y": 0,
+      "z": 1
+    },
+    "width": 1,
+    "height": 0.555
+  }
+}

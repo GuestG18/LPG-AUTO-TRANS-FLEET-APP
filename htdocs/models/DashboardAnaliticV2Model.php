@@ -131,10 +131,22 @@ class DashboardAnaliticV2Model extends BaseModel
             ORDER BY cc.ordine_afisare ASC, cc.nume ASC
         ")->fetchAll();
 
+        // Traseu: aceeasi eticheta ca in coloana „Traseu” din Dispecer curse.
+        $routeExpr = $this->routeLabelExpr('c');
+        $routes = $this->db->query("
+            SELECT {$routeExpr} AS traseu, COUNT(*) AS curse
+            FROM curse_dispecer c
+            WHERE c.deleted_at IS NULL
+            GROUP BY traseu
+            ORDER BY traseu ASC
+        ")->fetchAll();
+
         return [
             'vehicles' => $vehicles,
             'drivers' => $drivers,
             'beneficiaries' => $beneficiaries,
+            'routes' => $routes,
+            'route_parts' => $this->routePartOptions($this->fromSql(), $this->buildWhere([])),
             'transport_types' => $transportTypes,
             'transport_capacities' => $capacities,
             'capacity_categories' => $capacityCategories,
@@ -179,6 +191,8 @@ class DashboardAnaliticV2Model extends BaseModel
 
         return [
             'fleet' => $fleet,
+            'filter_options' => $this->fetchFacetOptions($filters),
+            'route_changes' => $this->buildRouteChanges($this->fetchRoutePoints($from, $whereData), $period),
             'vehicles' => $vehicles,
             'light_vehicles' => $this->getLightVehicleCosts($period),
             'drivers' => $drivers,
@@ -2714,11 +2728,665 @@ class DashboardAnaliticV2Model extends BaseModel
         $this->appendDecimalFilter($where, $params, 'c.capacitate_transport', (array) ($filters['transport_capacities'] ?? []), 'dash_capacity');
         $this->appendCapacityCategoryFilter($where, $params, (array) ($filters['capacity_categories'] ?? []), 'dash_capacity_category');
         $this->appendStringFilter($where, $params, 'c.status_facturare', (array) ($filters['statuses'] ?? []), 'dash_status');
+        $this->appendStringFilter($where, $params, $this->routeLabelExpr('c'), (array) ($filters['routes'] ?? []), 'dash_route');
+        $this->appendRoutePartsFilter($where, $params, (array) ($filters['route_parts'] ?? []));
 
         return [
             'where' => ' WHERE ' . implode(' AND ', $where),
             'params' => $params,
         ];
+    }
+
+    /**
+     * Eticheta „Traseu” a cursei, construita ca in coloana Traseu din Dispecer curse
+     * (views/dispecer_curse/index.php): „Loc incarcare: X | Zona distributie: Y | …”,
+     * partile goale sau „-” sar, fara nimic = „-”. La compresor, Loc plecare cade pe
+     * locul de incarcare.
+     *
+     * Cursele cu mai multe faze: daca fazele au cel putin doua locuri de incarcare
+     * (sau zone) diferite, valoarea devine lista lor in ordinea fazelor, „A → B”,
+     * pe locul partii existente; daca cursa nu avea partea, se adauga la final.
+     */
+    private function routeLabelExpr(string $alias): string
+    {
+        $part = static function (string $label, string $value): string {
+            return "CASE WHEN NULLIF(NULLIF(TRIM({$value}), ''), '-') IS NOT NULL THEN CONCAT('{$label}: ', TRIM({$value})) END";
+        };
+        $load = "(SELECT rli.nume FROM configurare_locuri_incarcare rli WHERE rli.id = {$alias}.loc_incarcare_id)";
+        $zone = "(SELECT rzd.nume FROM configurare_zone_distributie rzd WHERE rzd.id = {$alias}.zona_distributie_id)";
+        $departure = "COALESCE(NULLIF(TRIM({$alias}.loc_plecare), ''), CASE WHEN {$alias}.tip_transport = 'compresor' THEN {$load} END)";
+
+        $map = $this->segmentRouteMap();
+        $phaseCase = function (string $key) use ($map, $alias): string {
+            $whens = [];
+            foreach ($map as $raceId => $values) {
+                if (($values[$key] ?? null) !== null) {
+                    $whens[] = 'WHEN ' . (int) $raceId . ' THEN ' . $this->db->quote($values[$key]);
+                }
+            }
+
+            return $whens === [] ? 'NULL' : "(CASE {$alias}.id " . implode(' ', $whens) . ' END)';
+        };
+        $phaseLoad = $phaseCase('load');
+        $phaseZone = $phaseCase('zone');
+        $has = static fn (string $value): string => "NULLIF(NULLIF(TRIM({$value}), ''), '-') IS NOT NULL";
+        $withPhases = static function (string $label, string $value, string $phases) use ($part, $has): array {
+            return [
+                // pe locul partii existente
+                "CASE WHEN {$phases} IS NOT NULL AND {$has($value)} THEN CONCAT('{$label}: ', {$phases}) ELSE " . $part($label, $value) . ' END',
+                // cursa fara partea respectiva: lista fazelor merge la final
+                "CASE WHEN {$phases} IS NOT NULL AND NOT ({$has($value)}) THEN CONCAT('{$label}: ', {$phases}) END",
+            ];
+        };
+        [$loadPart, $loadTail] = $withPhases('Loc incarcare', $load, $phaseLoad);
+        [$zonePart, $zoneTail] = $withPhases('Zona distributie', $zone, $phaseZone);
+
+        return "COALESCE(NULLIF(CONCAT_WS(' | ', "
+            . $loadPart . ', '
+            . $zonePart . ', '
+            . $part('Loc plecare', $departure) . ', '
+            . $part('Loc aspirare', "{$alias}.loc_aspirare") . ', '
+            . $part('Loc livrare', "{$alias}.loc_livrare") . ', '
+            . $part('Loc inchidere cursa', "{$alias}.loc_livrare_cursa") . ', '
+            . $loadTail . ', '
+            . $zoneTail
+            . "), ''), '-')";
+    }
+
+    /**
+     * Optiunile fiecarui filtru pentru selectia curenta (filtre fatetate): perioada +
+     * toate celelalte filtre, FARA filtrul respectiv - altfel lista s-ar strange la ce
+     * ai bifat deja. `curse` se numara ca „Curse efectuate” (SUM billing_counts); la
+     * vehicule / soferi, o cursa reluata cu alt sofer sau alta masina conteaza la fiecare.
+     *
+     * @return array<string, list<array{value: string, label: string, curse: int}>>
+     */
+    private function fetchFacetOptions(array $filters): array
+    {
+        $from = $this->fromSql();
+        $legsFrom = $this->legsFromSql();
+        $tripCount = 'SUM(c.billing_counts)';
+        $legTripCount = 'COUNT(DISTINCT CASE WHEN c.billing_counts > 0 THEN c.id END)';
+        $routeExpr = $this->routeLabelExpr('c');
+
+        $facets = [
+            'vehicle_ids' => [
+                'from' => $legsFrom,
+                'value' => $this->legVehicleIdExpr(),
+                'label' => 'MAX(' . $this->legVehicleNameExpr() . ')',
+                'count' => $legTripCount,
+                'order' => 'label',
+            ],
+            'driver_ids' => [
+                'from' => $legsFrom,
+                'value' => $this->legDriverExpr(),
+                'label' => "MAX(COALESCE(NULLIF(TRIM(s.nume), ''), 'Fără șofer'))",
+                'count' => $legTripCount,
+                'order' => 'label',
+            ],
+            'beneficiary_ids' => [
+                'from' => $from,
+                'value' => 'c.beneficiar_id',
+                'label' => "MAX(COALESCE(NULLIF(TRIM(bt.nume), ''), 'Fără beneficiar'))",
+                'count' => $tripCount,
+                'order' => 'label',
+            ],
+            'transport_types' => [
+                'from' => $from,
+                'value' => "NULLIF(TRIM(c.tip_transport), '')",
+                'label' => 'NULL',
+                'count' => $tripCount,
+                'order' => 'value',
+            ],
+            'transport_capacities' => [
+                'from' => $from,
+                'value' => 'CASE WHEN c.capacitate_transport > 0 THEN c.capacitate_transport END',
+                'label' => 'NULL',
+                'count' => $tripCount,
+                'order' => 'value + 0',
+            ],
+            'capacity_categories' => [
+                'from' => $from . $this->capacityCategoryJoinSql(),
+                'value' => 'cap_cc.id',
+                'label' => 'MAX(cap_cc.nume)',
+                'count' => $tripCount,
+                'order' => 'MIN(cap_cc.ordine_afisare), label',
+            ],
+            'statuses' => [
+                'from' => $from,
+                'value' => "NULLIF(TRIM(c.status_facturare), '')",
+                'label' => 'NULL',
+                'count' => $tripCount,
+                'order' => 'value',
+            ],
+            'routes' => [
+                'from' => $from,
+                'value' => $routeExpr,
+                'label' => 'NULL',
+                'count' => $tripCount,
+                'order' => 'value',
+            ],
+        ];
+
+        $result = [];
+        $result['route_parts'] = $this->routePartFacet($from, $filters);
+
+        foreach ($facets as $name => $facet) {
+            $own = $filters;
+            $own[$name] = [];
+            $whereData = $this->buildWhere($own);
+            $rows = $this->fetchAll("
+                SELECT {$facet['value']} AS value, {$facet['label']} AS label, {$facet['count']} AS curse
+                {$facet['from']}
+                {$whereData['where']}
+                GROUP BY value
+                HAVING value IS NOT NULL
+                ORDER BY {$facet['order']}
+            ", $whereData['params']);
+
+            $options = [];
+            foreach ($rows as $row) {
+                $option = $this->facetOption($name, $row);
+                if ($option !== null) {
+                    $options[] = $option;
+                }
+            }
+            $result[$name] = $options;
+        }
+
+        return $result;
+    }
+
+    /** Valoarea si eticheta unei optiuni, in acelasi format ca lista initiala din view. */
+    private function facetOption(string $name, array $row): ?array
+    {
+        $raw = $row['value'];
+        $count = (int) round((float) ($row['curse'] ?? 0));
+
+        switch ($name) {
+            case 'vehicle_ids':
+            case 'driver_ids':
+            case 'beneficiary_ids':
+            case 'capacity_categories':
+                $id = (int) $raw;
+                if ($id <= 0) {
+                    return null;
+                }
+
+                return ['value' => (string) $id, 'label' => (string) $row['label'], 'curse' => $count];
+            case 'transport_types':
+                $value = trim((string) $raw);
+
+                return ['value' => $value, 'label' => self::TRANSPORT_TYPE_LABELS[$value] ?? ucfirst(str_replace('_', ' ', $value)), 'curse' => $count];
+            case 'statuses':
+                $value = trim((string) $raw);
+
+                return ['value' => $value, 'label' => self::STATUS_LABELS[$value] ?? ucfirst(str_replace('_', ' ', $value)), 'curse' => $count];
+            case 'transport_capacities':
+                $number = (float) $raw;
+                if ($number <= 0) {
+                    return null;
+                }
+                $label = function_exists('format_number_ro') ? format_number_ro($number, 2) : number_format($number, 2, ',', '.');
+
+                return ['value' => number_format($number, 2, '.', ''), 'label' => $label . ' t', 'curse' => $count];
+            case 'routes':
+                $value = trim((string) $raw);
+
+                return ['value' => $value, 'label' => $value === '-' ? 'Fără traseu' : $value, 'curse' => $count];
+        }
+
+        return null;
+    }
+
+    // ------------------------------------------------- locuri pe tip de transport
+
+    /** Campurile de traseu ale unei curse, in ordinea din formularul Dispecer. */
+    private const ROUTE_PART_KEYS = ['loc_incarcare', 'zona', 'loc_plecare', 'loc_aspirare', 'loc_livrare', 'loc_livrare_cursa'];
+
+    /** Coloana text a campurilor fara catalog (Compresor, garaj la Primar). */
+    private const ROUTE_TEXT_COLUMNS = [
+        'loc_plecare' => 'loc_plecare',
+        'loc_aspirare' => 'loc_aspirare',
+        'loc_livrare' => 'loc_livrare',
+        'loc_livrare_cursa' => 'loc_livrare_cursa',
+    ];
+
+    /** Eticheta campului pe tipul de transport - aceeasi ca in formularul Dispecer. */
+    private function routePartLabel(string $type, string $part): string
+    {
+        if ($part === 'zona') {
+            return match ($type) {
+                'primar', 'primar_km' => 'Loc descărcare',
+                'primar_tona' => 'Zonă descărcare',
+                default => 'Zonă distribuție',
+            };
+        }
+
+        return [
+            'loc_incarcare' => 'Loc încărcare',
+            'loc_plecare' => 'Loc plecare',
+            'loc_aspirare' => 'Loc aspirare',
+            'loc_livrare' => 'Loc livrare',
+            'loc_livrare_cursa' => 'Loc închidere cursă',
+        ][$part] ?? $part;
+    }
+
+    private function transportTypeLabel(string $type): string
+    {
+        return self::TRANSPORT_TYPE_LABELS[$type] ?? ($type === '' ? 'Fără tip' : ucfirst(str_replace('_', ' ', $type)));
+    }
+
+    /** @var array{loc: array<int, string>, zona: array<int, string>}|null */
+    private ?array $routeCatalogNames = null;
+
+    private function routeCatalogNames(): array
+    {
+        if ($this->routeCatalogNames === null) {
+            $this->routeCatalogNames = [
+                'loc' => $this->db->query('SELECT id, TRIM(nume) FROM configurare_locuri_incarcare')->fetchAll(PDO::FETCH_KEY_PAIR),
+                'zona' => $this->db->query('SELECT id, TRIM(nume) FROM configurare_zone_distributie')->fetchAll(PDO::FETCH_KEY_PAIR),
+            ];
+        }
+
+        return $this->routeCatalogNames;
+    }
+
+    /** @var array<int, list<array{0: ?int, 1: ?int}>>|null locul / zona fiecarei faze (curse cu 2+ faze) */
+    private ?array $segmentRoutePoints = null;
+
+    private function segmentRoutePoints(): array
+    {
+        if ($this->segmentRoutePoints !== null) {
+            return $this->segmentRoutePoints;
+        }
+        $this->segmentRoutePoints = [];
+        if (!$this->segmentsAvailable()) {
+            return $this->segmentRoutePoints;
+        }
+
+        $rows = $this->db->query("
+            SELECT seg.cursa_id, seg.loc_incarcare_id, seg.zona_distributie_id
+            FROM curse_segmente seg
+            INNER JOIN (
+                SELECT cursa_id FROM curse_segmente WHERE deleted_at IS NULL GROUP BY cursa_id HAVING COUNT(*) >= 2
+            ) multi ON multi.cursa_id = seg.cursa_id
+            WHERE seg.deleted_at IS NULL
+        ")->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($rows as $row) {
+            $this->segmentRoutePoints[(int) $row['cursa_id']][] = [
+                $row['loc_incarcare_id'] !== null ? (int) $row['loc_incarcare_id'] : null,
+                $row['zona_distributie_id'] !== null ? (int) $row['zona_distributie_id'] : null,
+            ];
+        }
+
+        return $this->segmentRoutePoints;
+    }
+
+    /**
+     * Cursele selectiei, o data fiecare, cu campurile lor de traseu (cursa + fazele ei).
+     *
+     * @return array<int, array{type: string, beneficiar_id: int, beneficiar: string, counts: bool, date: string, points: array<string, array<string, string>>}>
+     */
+    private function fetchRoutePoints(string $from, array $whereData): array
+    {
+        $rows = $this->fetchAll("
+            SELECT c.id, MAX(COALESCE(c.tip_transport, '')) AS tip_transport, MAX(c.beneficiar_id) AS beneficiar_id,
+                   MAX(COALESCE(NULLIF(TRIM(bt.nume), ''), 'Fără beneficiar')) AS beneficiar,
+                   SUM(c.billing_counts) AS billing_counts,
+                   MIN(DATE(c.billing_date)) AS data_raport,
+                   MAX(c.loc_incarcare_id) AS loc_incarcare_id, MAX(c.zona_distributie_id) AS zona_distributie_id,
+                   MAX(c.loc_plecare) AS loc_plecare, MAX(c.loc_aspirare) AS loc_aspirare,
+                   MAX(c.loc_livrare) AS loc_livrare, MAX(c.loc_livrare_cursa) AS loc_livrare_cursa
+            {$from}
+            {$whereData['where']}
+            GROUP BY c.id
+        ", $whereData['params']);
+
+        $names = $this->routeCatalogNames();
+        $segments = $this->segmentRoutePoints();
+        $trips = [];
+        foreach ($rows as $row) {
+            $id = (int) $row['id'];
+            $points = [];
+            $addId = static function (string $part, $value, array $catalog) use (&$points): void {
+                // Cheia e numele (nu id-ul): catalogul are acelasi loc de mai multe ori,
+                // pe beneficiari diferiti, si ar aparea dublat / ca „schimbare” falsa.
+                $name = trim((string) ($catalog[(int) $value] ?? ''));
+                if ((int) $value > 0 && $name !== '') {
+                    $points[$part][mb_strtolower($name)] = $name;
+                }
+            };
+            $addId('loc_incarcare', $row['loc_incarcare_id'], $names['loc']);
+            $addId('zona', $row['zona_distributie_id'], $names['zona']);
+            foreach ($segments[$id] ?? [] as [$segmentLoad, $segmentZone]) {
+                $addId('loc_incarcare', $segmentLoad, $names['loc']);
+                $addId('zona', $segmentZone, $names['zona']);
+            }
+            foreach (self::ROUTE_TEXT_COLUMNS as $part => $column) {
+                $text = trim((string) ($row[$column] ?? ''));
+                if ($text !== '' && $text !== '-') {
+                    $points[$part][$text] = $text;
+                }
+            }
+
+            $trips[$id] = [
+                'type' => (string) $row['tip_transport'],
+                'beneficiar_id' => (int) $row['beneficiar_id'],
+                'beneficiar' => (string) $row['beneficiar'],
+                'counts' => (float) $row['billing_counts'] > 0,
+                'date' => (string) $row['data_raport'],
+                'points' => $points,
+            ];
+        }
+
+        return $trips;
+    }
+
+    /** Valoarea unei optiuni „loc pe tip”: tip|camp|cheie (cheia = numele cu litere mici din catalog, sau textul). */
+    private static function routePartValue(string $type, string $part, string $key): string
+    {
+        return $type . '|' . $part . '|' . $key;
+    }
+
+    /** Optiunile filtrului „Locuri pe tip transport”, grupate pe tip si pe camp. */
+    private function routePartOptions(string $from, array $whereData, bool $keepSort = false): array
+    {
+        $order = array_flip(array_keys(self::TRANSPORT_TYPE_LABELS));
+        $partOrder = array_flip(self::ROUTE_PART_KEYS);
+        $options = [];
+        foreach ($this->fetchRoutePoints($from, $whereData) as $id => $trip) {
+            foreach ($trip['points'] as $part => $values) {
+                foreach ($values as $key => $label) {
+                    $value = self::routePartValue($trip['type'], $part, (string) $key);
+                    if (!isset($options[$value])) {
+                        $options[$value] = [
+                            'value' => $value,
+                            'label' => $label,
+                            'group' => $this->transportTypeLabel($trip['type']),
+                            'subgroup' => $this->routePartLabel($trip['type'], $part),
+                            'curse' => 0,
+                            '_sort' => [$order[$trip['type']] ?? 99, $partOrder[$part] ?? 99, mb_strtolower($label)],
+                        ];
+                    }
+                    if ($trip['counts']) {
+                        $options[$value]['curse']++;
+                    }
+                }
+            }
+        }
+
+        usort($options, static fn (array $a, array $b): int => $a['_sort'] <=> $b['_sort']);
+        if ($keepSort) {
+            return array_values($options);
+        }
+
+        return array_map(static function (array $option): array {
+            unset($option['_sort']);
+
+            return $option;
+        }, $options);
+    }
+
+    /**
+     * Optiunile „Locuri pe tip transport” pentru selectia curenta, in cascada:
+     * valorile unui camp (ex. Zona distributie la Distributie) se restrang dupa ce ai
+     * bifat in CELELALTE campuri ale ACELUIASI tip (ex. Loc incarcare = Adegas Caracal ->
+     * raman doar zonele folosite cu el). Campul isi ignora propriile bife, ca sa poti
+     * adauga variante. Tipurile se combina cu SAU, deci bifele unui tip nu restrang
+     * listele celorlalte tipuri.
+     */
+    private function routePartFacet(string $from, array $filters): array
+    {
+        $selected = [];
+        foreach ((array) ($filters['route_parts'] ?? []) as $value) {
+            $pieces = explode('|', (string) $value, 3);
+            if (count($pieces) === 3) {
+                $selected[$pieces[0]][$pieces[1]][] = (string) $value;
+            }
+        }
+
+        $optionsFor = function (array $routeParts) use ($from, $filters): array {
+            $own = $filters;
+            $own['route_parts'] = $routeParts;
+
+            return $this->routePartOptions($from, $this->buildWhere($own), true);
+        };
+        $keep = static function (array $options, callable $accept): array {
+            return array_values(array_filter($options, static function (array $option) use ($accept): bool {
+                [$type, $part] = explode('|', $option['value'], 3);
+
+                return $accept($type, $part);
+            }));
+        };
+
+        // tipurile fara bife: lista neconditionata de locuri
+        $result = $keep($optionsFor([]), static fn (string $type): bool => !isset($selected[$type]));
+
+        foreach ($selected as $type => $parts) {
+            // campurile nebifate ale tipului: restranse de toate bifele tipului
+            $all = array_merge(...array_values($parts));
+            $result = array_merge($result, $keep($optionsFor($all),
+                static fn (string $t, string $p): bool => $t === $type && !isset($parts[$p])));
+
+            // fiecare camp bifat: restrans doar de bifele din celelalte campuri ale tipului
+            foreach ($parts as $part => $values) {
+                $others = $parts;
+                unset($others[$part]);
+                $otherValues = $others === [] ? [] : array_merge(...array_values($others));
+                $result = array_merge($result, $keep($optionsFor($otherValues),
+                    static fn (string $t, string $p): bool => $t === $type && $p === $part));
+            }
+        }
+
+        usort($result, static fn (array $a, array $b): int => $a['_sort'] <=> $b['_sort']);
+
+        return array_map(static function (array $option): array {
+            unset($option['_sort']);
+
+            return $option;
+        }, $result);
+    }
+
+    /**
+     * Filtrul „Locuri pe tip transport”. Valorile vin ca tip|camp|cheie.
+     * In acelasi camp: oricare dintre valori (SAU); intre campurile aceluiasi tip: toate (SI);
+     * intre tipuri de transport: SAU. Locul / zona se cauta si pe fazele cursei.
+     */
+    private function appendRoutePartsFilter(array &$where, array &$params, array $values): void
+    {
+        $selected = [];
+        foreach ($values as $value) {
+            $parts = explode('|', (string) $value, 3);
+            if (count($parts) !== 3) {
+                continue;
+            }
+            [$type, $part, $key] = $parts;
+            if (preg_match('/^[a-z_]*$/', $type) !== 1 || !in_array($part, self::ROUTE_PART_KEYS, true) || trim($key) === '') {
+                continue;
+            }
+            $selected[$type][$part][$key] = $key;
+        }
+        if ($selected === []) {
+            return;
+        }
+
+        $segments = $this->segmentsAvailable();
+        $typeClauses = [];
+        $index = 0;
+        foreach ($selected as $type => $partsByName) {
+            $typeKey = ':dash_rp_type_' . $index;
+            $params[$typeKey] = $type;
+            $clauses = ["COALESCE(c.tip_transport, '') = {$typeKey}"];
+            foreach ($partsByName as $part => $keys) {
+                $placeholders = [];
+                $segmentPlaceholders = [];
+                foreach (array_values($keys) as $keyIndex => $key) {
+                    $placeholder = ':dash_rp_' . $index . '_' . $part . '_' . $keyIndex;
+                    $placeholders[] = $placeholder;
+                    $isCatalog = $part === 'loc_incarcare' || $part === 'zona';
+                    $params[$placeholder] = $isCatalog ? mb_strtolower($key) : $key;
+                    if ($isCatalog && $segments) {
+                        $segmentPlaceholder = $placeholder . '_seg';
+                        $segmentPlaceholders[] = $segmentPlaceholder;
+                        $params[$segmentPlaceholder] = mb_strtolower($key);
+                    }
+                }
+                $list = implode(', ', $placeholders);
+                if ($part === 'loc_incarcare' || $part === 'zona') {
+                    // potrivire pe NUME: toate intrarile din catalog cu acelasi nume
+                    $column = $part === 'loc_incarcare' ? 'loc_incarcare_id' : 'zona_distributie_id';
+                    $catalog = $part === 'loc_incarcare' ? 'configurare_locuri_incarcare' : 'configurare_zone_distributie';
+                    $clause = "c.{$column} IN (SELECT rp_cat.id FROM {$catalog} rp_cat WHERE LOWER(TRIM(rp_cat.nume)) IN ({$list}))";
+                    if ($segmentPlaceholders !== []) {
+                        $clause = "({$clause} OR EXISTS (SELECT 1 FROM curse_segmente rp_sg INNER JOIN {$catalog} rp_scat ON rp_scat.id = rp_sg.{$column}"
+                            . " WHERE rp_sg.cursa_id = c.id AND rp_sg.deleted_at IS NULL"
+                            . ' AND LOWER(TRIM(rp_scat.nume)) IN (' . implode(', ', $segmentPlaceholders) . ')))';
+                    }
+                } else {
+                    $clause = 'TRIM(c.' . self::ROUTE_TEXT_COLUMNS[$part] . ") IN ({$list})";
+                }
+                $clauses[] = $clause;
+            }
+            $typeClauses[] = '(' . implode(' AND ', $clauses) . ')';
+            $index++;
+        }
+
+        $where[] = '(' . implode(' OR ', $typeClauses) . ')';
+    }
+
+    /**
+     * Ce locuri / zone a folosit fiecare beneficiar, pe tip de transport si camp, in selectie.
+     * Intra doar combinatiile cu cel putin doua valori. „schimbare” = o valoare a inceput dupa
+     * ce alta se oprise (folosire succesiva); altfel „paralel” (folosite in acelasi timp).
+     */
+    private function buildRouteChanges(array $trips, array $period): array
+    {
+        $groups = [];
+        foreach ($trips as $trip) {
+            if ($trip['date'] === '') {
+                continue;
+            }
+            foreach ($trip['points'] as $part => $values) {
+                $groupKey = $trip['beneficiar_id'] . '|' . $trip['type'] . '|' . $part;
+                if (!isset($groups[$groupKey])) {
+                    $groups[$groupKey] = [
+                        'beneficiar_id' => $trip['beneficiar_id'],
+                        'beneficiar' => $trip['beneficiar'],
+                        'tip_transport' => $trip['type'],
+                        'tip_label' => $this->transportTypeLabel($trip['type']),
+                        'camp' => $part,
+                        'camp_label' => $this->routePartLabel($trip['type'], $part),
+                        'values' => [],
+                    ];
+                }
+                foreach ($values as $key => $label) {
+                    $value = &$groups[$groupKey]['values'][(string) $key];
+                    $value ??= [
+                        'value' => self::routePartValue($trip['type'], $part, (string) $key),
+                        'label' => $label, 'curse' => 0, 'prima' => $trip['date'], 'ultima' => $trip['date'],
+                    ];
+                    $value['curse'] += $trip['counts'] ? 1 : 0;
+                    $value['prima'] = min($value['prima'], $trip['date']);
+                    $value['ultima'] = max($value['ultima'], $trip['date']);
+                    unset($value);
+                }
+            }
+        }
+
+        $result = [];
+        foreach ($groups as $group) {
+            if (count($group['values']) < 2) {
+                continue;
+            }
+            $values = array_values($group['values']);
+            usort($values, static fn (array $a, array $b): int => [$a['prima'], $a['ultima']] <=> [$b['prima'], $b['ultima']]);
+
+            // Trecerile: valoarea B incepe dupa ultima folosire a valorii A.
+            $changes = [];
+            foreach ($values as $later) {
+                $previous = null;
+                foreach ($values as $earlier) {
+                    if ($earlier['ultima'] < $later['prima'] && ($previous === null || $earlier['ultima'] > $previous['ultima'])) {
+                        $previous = $earlier;
+                    }
+                }
+                if ($previous !== null) {
+                    $changes[] = ['din' => $previous['label'], 'in' => $later['label'], 'ultima_din' => $previous['ultima'], 'prima_in' => $later['prima']];
+                }
+            }
+
+            $group['values'] = $values;
+            $group['schimbari'] = $changes;
+            $group['tip_modificare'] = $changes !== [] ? 'schimbare' : 'paralel';
+            $group['curse'] = array_sum(array_column($values, 'curse'));
+            $result[] = $group;
+        }
+
+        usort($result, static fn (array $a, array $b): int =>
+            [$a['tip_modificare'] === 'schimbare' ? 0 : 1, mb_strtolower($a['beneficiar']), $a['tip_transport'], $a['camp']]
+            <=> [$b['tip_modificare'] === 'schimbare' ? 0 : 1, mb_strtolower($b['beneficiar']), $b['tip_transport'], $b['camp']]);
+
+        return [
+            'start' => $period['start']->format('Y-m-d'),
+            'end' => $period['end']->format('Y-m-d'),
+            'groups' => $result,
+        ];
+    }
+
+    /** @var array<int, array{load: ?string, zone: ?string}>|null */
+    private ?array $segmentRouteMap = null;
+
+    /**
+     * Cursele cu mai multe faze si cel putin doua locuri de incarcare / zone diferite:
+     * lista distincta, in ordinea fazelor, unita cu „ → ” (aceeasi regula ca Dispecer).
+     */
+    private function segmentRouteMap(): array
+    {
+        if ($this->segmentRouteMap !== null) {
+            return $this->segmentRouteMap;
+        }
+        $this->segmentRouteMap = [];
+        if (!$this->segmentsAvailable()) {
+            return $this->segmentRouteMap;
+        }
+
+        $rows = $this->db->query("
+            SELECT seg.cursa_id, li.nume AS loc, zd.nume AS zona
+            FROM curse_segmente seg
+            LEFT JOIN configurare_locuri_incarcare li ON li.id = seg.loc_incarcare_id
+            LEFT JOIN configurare_zone_distributie zd ON zd.id = seg.zona_distributie_id
+            WHERE seg.deleted_at IS NULL
+            ORDER BY seg.cursa_id ASC, seg.ordine ASC, seg.id ASC
+        ")->fetchAll(PDO::FETCH_ASSOC);
+
+        $byRace = [];
+        foreach ($rows as $row) {
+            $raceId = (int) $row['cursa_id'];
+            $byRace[$raceId]['n'] = ($byRace[$raceId]['n'] ?? 0) + 1;
+            foreach (['load' => 'loc', 'zone' => 'zona'] as $key => $column) {
+                $name = trim((string) ($row[$column] ?? ''));
+                if ($name !== '') {
+                    $byRace[$raceId][$key][$name] = $name;
+                }
+            }
+        }
+
+        foreach ($byRace as $raceId => $info) {
+            if ($info['n'] < 2) {
+                continue;
+            }
+            $entry = [];
+            foreach (['load', 'zone'] as $key) {
+                $names = $info[$key] ?? [];
+                $entry[$key] = count($names) >= 2 ? implode(' → ', $names) : null;
+            }
+            if ($entry['load'] !== null || $entry['zone'] !== null) {
+                $this->segmentRouteMap[$raceId] = $entry;
+            }
+        }
+
+        return $this->segmentRouteMap;
     }
 
     /**

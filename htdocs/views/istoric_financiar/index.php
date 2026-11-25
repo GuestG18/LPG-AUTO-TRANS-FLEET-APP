@@ -29,11 +29,11 @@ $jsVersion = (string) @filemtime(BASE_PATH . '/assets/js/istoric-financiar.js');
 <div class="ifv" id="ifvRoot">
     <!-- A. Antet -->
     <nav class="ifv-crumbs" aria-label="breadcrumb">
-        <span>Financiar</span><i class="bi bi-chevron-right" aria-hidden="true"></i><strong>Istoric Financiar Vehicul</strong>
+        <span>Financiar</span><i class="bi bi-chevron-right" aria-hidden="true"></i><strong>Istoric Vehicul</strong>
     </nav>
     <div class="ifv-head">
         <div>
-            <h1 class="ifv-title">Istoric Financiar Vehicul</h1>
+            <h1 class="ifv-title">Istoric Vehicul</h1>
             <p class="ifv-subtitle">Dosare de achiziție, investiții, costuri și evoluția valorii fiecărui vehicul.</p>
         </div>
         <div class="ifv-head-actions">
@@ -49,29 +49,13 @@ $jsVersion = (string) @filemtime(BASE_PATH . '/assets/js/istoric-financiar.js');
     </div>
 
     <!-- B. Carduri -->
+    <?php /* Cardurile KPI: dimensiuni fixe, navigare internă (assets/js/ifv-kpi-cards.js pe MorphCard). */ ?>
     <div class="ifv-kpis" id="ifvKpis">
-        <button type="button" class="ifv-kpi" data-kpi-tab="toate">
-            <span class="ifv-kpi-icon is-blue"><i class="bi bi-truck" aria-hidden="true"></i></span>
-            <span class="ifv-kpi-body"><span class="ifv-kpi-label">Total vehicule</span><span class="ifv-kpi-value" data-kpi="vehicule">—</span></span>
-            <i class="bi bi-truck-front ifv-kpi-watermark" aria-hidden="true"></i>
-        </button>
-        <?php /* „Valoare inițială (total)”: card cu dimensiuni fixe și navigare internă (assets/js/ifv-value-card.js). */ ?>
-        <div class="ifv-kpi ifv-kpi-morph" id="ifvValueCard" role="group" aria-label="Valoare inițială (total)">
-            <div class="mc-stage" data-stage></div>
-        </div>
-        <button type="button" class="ifv-kpi is-green" data-kpi-tab="finalizate">
-            <span class="ifv-kpi-icon is-green"><i class="bi bi-bar-chart-line" aria-hidden="true"></i></span>
-            <span class="ifv-kpi-body"><span class="ifv-kpi-label">Valoare capitalizată</span><span class="ifv-kpi-value" data-kpi="capitalizat">—</span><span class="ifv-kpi-note" data-kpi="capitalizat_note"></span></span>
-        </button>
-        <button type="button" class="ifv-kpi is-orange" data-kpi-tab="toate">
-            <span class="ifv-kpi-icon is-orange"><i class="bi bi-coin" aria-hidden="true"></i></span>
-            <span class="ifv-kpi-body"><span class="ifv-kpi-label">Cheltuieli necapitalizabile</span><span class="ifv-kpi-value" data-kpi="necapitalizabile">—</span></span>
-        </button>
-        <button type="button" class="ifv-kpi" data-kpi-tab="derulare">
-            <span class="ifv-kpi-icon is-blue"><i class="bi bi-bullseye" aria-hidden="true"></i></span>
-            <span class="ifv-kpi-body"><span class="ifv-kpi-label">Dosare în derulare</span><span class="ifv-kpi-value" data-kpi="derulare">—</span></span>
-            <i class="bi bi-chevron-right ifv-kpi-chevron" aria-hidden="true"></i>
-        </button>
+        <div class="ifv-kpi ifv-kpi-morph" data-ifv-card="vehicule" role="group" aria-label="Total vehicule"><div class="mc-stage" data-stage></div></div>
+        <div class="ifv-kpi ifv-kpi-morph" data-ifv-card="valoare_initiala" role="group" aria-label="Valoare inițială (total)"><div class="mc-stage" data-stage></div></div>
+        <div class="ifv-kpi ifv-kpi-morph is-green" data-ifv-card="capitalizat" role="group" aria-label="Valoare capitalizată"><div class="mc-stage" data-stage></div></div>
+        <div class="ifv-kpi ifv-kpi-morph is-orange" data-ifv-card="necapitalizabile" role="group" aria-label="Cheltuieli necapitalizabile"><div class="mc-stage" data-stage></div></div>
+        <div class="ifv-kpi ifv-kpi-morph" data-ifv-card="derulare" role="group" aria-label="Dosare în derulare"><div class="mc-stage" data-stage></div></div>
     </div>
 
     <!-- C. Filtre -->
@@ -178,7 +162,7 @@ $jsVersion = (string) @filemtime(BASE_PATH . '/assets/js/istoric-financiar.js');
 
 <script>window.IFV_CONFIG = <?= json_encode($config, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP) ?>;</script>
 <script src="<?= e(url('assets/js/morph-card.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/morph-card.js'))) ?>" defer></script>
-<script src="<?= e(url('assets/js/ifv-value-card.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/ifv-value-card.js'))) ?>" defer></script>
+<script src="<?= e(url('assets/js/ifv-kpi-cards.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/ifv-kpi-cards.js'))) ?>" defer></script>
 <script src="<?= e(url('assets/js/istoric-financiar.js?v=' . $jsVersion)) ?>" defer></script>
 <?php /* Fisa inregistrarii de cost: acelasi panou ca fisa cursei din Dispecer curse. */ ?>
 <link rel="stylesheet" href="<?= e(url('assets/css/race-view-overlay.css?v=' . (string) @filemtime(BASE_PATH . '/assets/css/race-view-overlay.css'))) ?>">

@@ -48,6 +48,7 @@ $explorerAsset = static fn (string $path): string => url($path . '?v=' . (string
         <script src="<?= e($explorerAsset('assets/js/tire-fleet.js')) ?>"></script>
         <script src="<?= e($explorerAsset('assets/js/datetime-picker-field.js')) ?>"></script>
         <script src="<?= e($explorerAsset('assets/js/vehicle-xray-engine.js')) ?>"></script>
+        <script src="<?= e($explorerAsset('assets/js/vehicle-xray-traced-data.js')) ?>"></script>
         <script src="<?= e($explorerAsset('assets/js/vehicle-xray-art.js')) ?>"></script>
         <script src="<?= e($explorerAsset('assets/js/vehicle-xray.js')) ?>"></script>
         <script src="<?= e($explorerAsset('assets/js/auto-vehicle-explorer.js')) ?>"></script>

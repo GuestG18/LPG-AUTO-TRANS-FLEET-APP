@@ -141,5 +141,56 @@ try {
 }
 check('categorie inexistenta refuzata', $refused);
 
+echo "\nCelelalte carduri: capitalizat / necapitalizabil / vehicule / dosare in derulare\n";
+foreach (['capitalizabil' => 'capitalizat', 'necapitalizabil' => 'necapitalizabile'] as $measure => $kpiKey) {
+    $m = $svc->initialValueBreakdown($page, null, null, $measure);
+    check("$kpiKey: nivelul 0 = KPI-ul paginii", near($m['kpi'], $list['kpis'][$kpiKey]), $m['kpi'] . ' vs ' . $list['kpis'][$kpiKey]);
+    check("$kpiKey: categoriile se reconciliaza (diferenta 0) si insumeaza totalul", abs($m['reconciliere']['diferenta']) < 0.015 && near(array_sum(array_column($m['randuri'], 'total')), $m['total']));
+    $okM = true;
+    foreach ($m['randuri'] as $cat) {
+        $b = $svc->initialValueBreakdown($page, $cat['id'], null, $measure);
+        $leafRows = $b['nivel'] === 'tranzactii' ? $b['randuri'] : [];
+        if ($b['nivel'] === 'tipuri') {
+            foreach ($b['randuri'] as $t) {
+                $leafRows = array_merge($leafRows, $svc->initialValueBreakdown($page, $cat['id'], $t['id'], $measure)['randuri']);
+            }
+        }
+        $sum = array_sum(array_map(static fn (array $l): float => $l['in_valoare'] ? (float) $l['suma'] : 0.0, $leafRows));
+        $wrongTreatment = array_filter($leafRows, static fn (array $l): bool => $l['tratament'] !== ($measure === 'capitalizabil' ? 'capitalizabil' : 'cheltuiala'));
+        if (!near($sum, $cat['total']) || $wrongTreatment !== []) {
+            $okM = false;
+        }
+        $f = $svc->list($page + ['per_page' => 50, 'fin_node' => $cat['id'], 'fin_masura' => $measure]);
+        if (!near($f['categorie']['total'], $cat['total'])) {
+            $okM = false;
+        }
+    }
+    check("$kpiKey: tranzactiile au doar tratamentul cardului, dau totalul categoriei; tabelul pe categorie", $okM);
+}
+$veh = $svc->vehicleBreakdown($page);
+check('vehicule: tipurile insumeaza KPI-ul „Total vehicule”', array_sum(array_column($veh['randuri'], 'value')) === $list['kpis']['vehicule'] && $veh['kpi'] === $list['kpis']['vehicule'],
+    array_sum(array_column($veh['randuri'], 'value')) . ' vs ' . $list['kpis']['vehicule']);
+$g = $veh['randuri'][0];
+$vg = $svc->vehicleBreakdown($page, $g['id']);
+check('vehicule: tipul ales → vehiculele lui (o data fiecare), titlul nivelului', $vg['nivel'] === 'randuri' && count($vg['randuri']) === $g['value'] && $vg['titlu'] === $g['label']
+    && count(array_unique(array_column($vg['randuri'], 'label'))) === count($vg['randuri']));
+$tv = $svc->list($page + ['per_page' => 50, 'tip_vehicul' => $g['id']]);
+check('vehicule: tipul ales restrange tabelul la acel tip', $tv['rows'] !== [] && array_filter($tv['rows'], static fn (array $r): bool => $r['tip'] !== $g['id']) === []
+    && near($tv['kpis']['valoare_initiala'], $list['kpis']['valoare_initiala']));
+$der = $svc->dossierBreakdown($page);
+check('dosare in derulare: etapele insumeaza KPI-ul', array_sum(array_column($der['randuri'], 'value')) === $list['kpis']['derulare'] && $der['kpi'] === $list['kpis']['derulare']);
+$st = $der['randuri'][0];
+$dg = $svc->dossierBreakdown($page, $st['id']);
+$ds = $svc->list(['tab' => 'derulare', 'status' => $st['id'], 'per_page' => 50]);
+check('dosare in derulare: etapa aleasa → dosarele ei = tabelul cu fila In derulare + status', count($dg['randuri']) === $st['value'] && $dg['titlu'] === $st['label']
+    && array_column($dg['randuri'], 'row_key') == array_column($ds['rows'], 'key'));
+$refused = false;
+try {
+    $svc->dossierBreakdown($page, 'nimic');
+} catch (InvalidArgumentException) {
+    $refused = true;
+}
+check('etapa necunoscuta refuzata', $refused);
+
 echo "\n" . ($failed === 0 ? 'TOATE TESTELE AU TRECUT' : "ESUATE: $failed") . " ($passed ok)\n";
 exit($failed === 0 ? 0 : 1);

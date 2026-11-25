@@ -213,6 +213,16 @@ class DashboardAnaliticV2Controller
             // curse intra in raport; nu schimba numitorul gradului de umplere.
             'capacity_categories' => $this->parseIntList($input['capacity_categories'] ?? ($input['categorie_capacitate_id'] ?? '')),
             'statuses' => $this->parseStringList($input['statuses'] ?? ($input['status'] ?? '')),
+            // Traseul din Desfasurator curse; etichetele pot contine virgule, deci doar liste reale.
+            // Locuri pe tip transport: tip|camp|cheie; si aici doar liste reale (textele pot avea virgule).
+            'route_parts' => array_values(array_unique(array_filter(array_map(
+                static fn ($v) => trim((string) $v),
+                is_array($input['route_parts'] ?? null) ? $input['route_parts'] : (trim((string) ($input['route_parts'] ?? '')) !== '' ? [(string) $input['route_parts']] : [])
+            ), static fn ($v) => $v !== ''))),
+            'routes' => array_values(array_unique(array_filter(array_map(
+                static fn ($v) => trim((string) $v),
+                is_array($input['routes'] ?? null) ? $input['routes'] : (trim((string) ($input['routes'] ?? '')) !== '' ? [(string) $input['routes']] : [])
+            ), static fn ($v) => $v !== ''))),
             // pragurile intervalelor de km; modelul le valideaza si revine la cele implicite
             'km_bands' => $this->parseIntList($input['km_bands'] ?? ''),
         ];

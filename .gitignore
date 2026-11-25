@@ -37,3 +37,6 @@ htdocs/uploads/
 # Test / generated artifacts
 playwright-artifacts/
 test-results/
+
+# Chat Interactiv: capturi test de acceptanta
+chat_interactiv_server/tests/out/

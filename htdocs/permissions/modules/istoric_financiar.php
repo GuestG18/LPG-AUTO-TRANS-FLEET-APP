@@ -9,7 +9,7 @@ declare(strict_types=1);
  */
 return [
     'key'         => 'istoric_financiar',
-    'label'       => 'Istoric Financiar Vehicul',
+    'label'       => 'Istoric Vehicul',
     'description' => 'Dosare de achiziție, investiții (GPL), costuri și valoarea fiecărui vehicul',
     'section'     => 'contabilitate',
     'icon'        => 'bi-layers',

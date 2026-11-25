@@ -1,0 +1,1082 @@
+{
+ "configs": [
+  {
+   "name": "Cap tractor 2 axe",
+   "metrics": {
+    "SVG DOM nodes (scheme)": {
+     "before": {
+      "m": 134,
+      "pm": 0
+     },
+     "now": {
+      "m": 134,
+      "pm": 0
+     }
+    },
+    "Scheme DOM nodes (all)": {
+     "before": {
+      "m": 343,
+      "pm": 0
+     },
+     "now": {
+      "m": 344,
+      "pm": 0
+     }
+    },
+    "Load: wall to art painted (ms)": {
+     "before": {
+      "m": 2331,
+      "pm": 0
+     },
+     "now": {
+      "m": 877,
+      "pm": 0
+     }
+    },
+    "Load: raster (ms)": {
+     "before": {
+      "m": 676.4,
+      "pm": 0
+     },
+     "now": {
+      "m": 234.5,
+      "pm": 0
+     }
+    },
+    "Load: image decode (ms)": {
+     "before": {
+      "m": 170.2,
+      "pm": 0
+     },
+     "now": {
+      "m": 42.9,
+      "pm": 0
+     }
+    },
+    "Tyre selection median (ms)": {
+     "before": {
+      "m": 109.7,
+      "pm": 0
+     },
+     "now": {
+      "m": 39.9,
+      "pm": 0
+     }
+    },
+    "Tyre selection worst (ms)": {
+     "before": {
+      "m": 232.4,
+      "pm": 0
+     },
+     "now": {
+      "m": 49.2,
+      "pm": 0
+     }
+    },
+    "Avg frame, all interactions (ms)": {
+     "before": {
+      "m": 21.6,
+      "pm": 0
+     },
+     "now": {
+      "m": 17.4,
+      "pm": 0
+     }
+    },
+    "Worst frame, all interactions (ms)": {
+     "before": {
+      "m": 200,
+      "pm": 0
+     },
+     "now": {
+      "m": 116.8,
+      "pm": 0
+     }
+    },
+    "Dropped frames, all interactions": {
+     "before": {
+      "m": 377,
+      "pm": 0
+     },
+     "now": {
+      "m": 48,
+      "pm": 0
+     }
+    },
+    "Zoom: avg frame (ms)": {
+     "before": {
+      "m": 18.3,
+      "pm": 0
+     },
+     "now": {
+      "m": 16.8,
+      "pm": 0
+     }
+    },
+    "Zoom: worst frame (ms)": {
+     "before": {
+      "m": 99.9,
+      "pm": 0
+     },
+     "now": {
+      "m": 49.9,
+      "pm": 0
+     }
+    },
+    "Zoom: dropped frames": {
+     "before": {
+      "m": 73,
+      "pm": 0
+     },
+     "now": {
+      "m": 5,
+      "pm": 0
+     }
+    },
+    "Hover: dropped frames": {
+     "before": {
+      "m": 98,
+      "pm": 0
+     },
+     "now": {
+      "m": 0,
+      "pm": 0
+     }
+    },
+    "JS scripting, interactions (ms)": {
+     "before": {
+      "m": 1014.4,
+      "pm": 0
+     },
+     "now": {
+      "m": 348.9,
+      "pm": 0
+     }
+    },
+    "Style + layout, interactions (ms)": {
+     "before": {
+      "m": 1518.1,
+      "pm": 0
+     },
+     "now": {
+      "m": 1231.5,
+      "pm": 0
+     }
+    },
+    "Paint, interactions (ms)": {
+     "before": {
+      "m": 1270,
+      "pm": 0
+     },
+     "now": {
+      "m": 999.2,
+      "pm": 0
+     }
+    },
+    "Raster, interactions (ms)": {
+     "before": {
+      "m": 12165.7,
+      "pm": 0
+     },
+     "now": {
+      "m": 2740.6,
+      "pm": 0
+     }
+    },
+    "Long tasks >50 ms, interactions": {
+     "before": {
+      "m": 1,
+      "pm": 0
+     },
+     "now": {
+      "m": 0,
+      "pm": 0
+     }
+    },
+    "Longest task (ms)": {
+     "before": {
+      "m": 57,
+      "pm": 0
+     },
+     "now": {
+      "m": 0,
+      "pm": 0
+     }
+    },
+    "JS heap after load (MB)": {
+     "before": {
+      "m": 3,
+      "pm": 0
+     },
+     "now": {
+      "m": 3,
+      "pm": 0
+     }
+    },
+    "JS heap after 4 cycles (MB)": {
+     "before": {
+      "m": 3.4,
+      "pm": 0
+     },
+     "now": {
+      "m": 3.4,
+      "pm": 0
+     }
+    },
+    "Documents after cycles": {
+     "before": {
+      "m": 10,
+      "pm": 0
+     },
+     "now": {
+      "m": 1,
+      "pm": 0
+     }
+    },
+    "JS event listeners after cycles": {
+     "before": {
+      "m": 176,
+      "pm": 0
+     },
+     "now": {
+      "m": 176,
+      "pm": 0
+     }
+    }
+   }
+  },
+  {
+   "name": "Camion 4 axe",
+   "metrics": {
+    "SVG DOM nodes (scheme)": {
+     "before": {
+      "m": 195,
+      "pm": 0
+     },
+     "now": {
+      "m": 195,
+      "pm": 0
+     }
+    },
+    "Scheme DOM nodes (all)": {
+     "before": {
+      "m": 414,
+      "pm": 0
+     },
+     "now": {
+      "m": 415,
+      "pm": 0
+     }
+    },
+    "Load: wall to art painted (ms)": {
+     "before": {
+      "m": 1701,
+      "pm": 0
+     },
+     "now": {
+      "m": 877,
+      "pm": 0
+     }
+    },
+    "Load: raster (ms)": {
+     "before": {
+      "m": 779.5,
+      "pm": 0
+     },
+     "now": {
+      "m": 218.4,
+      "pm": 0
+     }
+    },
+    "Load: image decode (ms)": {
+     "before": {
+      "m": 229.3,
+      "pm": 0
+     },
+     "now": {
+      "m": 64.5,
+      "pm": 0
+     }
+    },
+    "Tyre selection median (ms)": {
+     "before": {
+      "m": 56.5,
+      "pm": 0
+     },
+     "now": {
+      "m": 49.4,
+      "pm": 0
+     }
+    },
+    "Tyre selection worst (ms)": {
+     "before": {
+      "m": 84.6,
+      "pm": 0
+     },
+     "now": {
+      "m": 72.1,
+      "pm": 0
+     }
+    },
+    "Avg frame, all interactions (ms)": {
+     "before": {
+      "m": 28.2,
+      "pm": 0
+     },
+     "now": {
+      "m": 17.2,
+      "pm": 0
+     }
+    },
+    "Worst frame, all interactions (ms)": {
+     "before": {
+      "m": 300,
+      "pm": 0
+     },
+     "now": {
+      "m": 150.1,
+      "pm": 0
+     }
+    },
+    "Dropped frames, all interactions": {
+     "before": {
+      "m": 609,
+      "pm": 0
+     },
+     "now": {
+      "m": 34,
+      "pm": 0
+     }
+    },
+    "Zoom: avg frame (ms)": {
+     "before": {
+      "m": 21.8,
+      "pm": 0
+     },
+     "now": {
+      "m": 16.9,
+      "pm": 0
+     }
+    },
+    "Zoom: worst frame (ms)": {
+     "before": {
+      "m": 233.3,
+      "pm": 0
+     },
+     "now": {
+      "m": 50.1,
+      "pm": 0
+     }
+    },
+    "Zoom: dropped frames": {
+     "before": {
+      "m": 153,
+      "pm": 0
+     },
+     "now": {
+      "m": 8,
+      "pm": 0
+     }
+    },
+    "Hover: dropped frames": {
+     "before": {
+      "m": 187,
+      "pm": 0
+     },
+     "now": {
+      "m": 2,
+      "pm": 0
+     }
+    },
+    "JS scripting, interactions (ms)": {
+     "before": {
+      "m": 924.3,
+      "pm": 0
+     },
+     "now": {
+      "m": 344.3,
+      "pm": 0
+     }
+    },
+    "Style + layout, interactions (ms)": {
+     "before": {
+      "m": 1440,
+      "pm": 0
+     },
+     "now": {
+      "m": 1376.6,
+      "pm": 0
+     }
+    },
+    "Paint, interactions (ms)": {
+     "before": {
+      "m": 1117.1,
+      "pm": 0
+     },
+     "now": {
+      "m": 1178.5,
+      "pm": 0
+     }
+    },
+    "Raster, interactions (ms)": {
+     "before": {
+      "m": 15386,
+      "pm": 0
+     },
+     "now": {
+      "m": 3044.7,
+      "pm": 0
+     }
+    },
+    "Long tasks >50 ms, interactions": {
+     "before": {
+      "m": 3,
+      "pm": 0
+     },
+     "now": {
+      "m": 0,
+      "pm": 0
+     }
+    },
+    "Longest task (ms)": {
+     "before": {
+      "m": 77,
+      "pm": 0
+     },
+     "now": {
+      "m": 0,
+      "pm": 0
+     }
+    },
+    "JS heap after load (MB)": {
+     "before": {
+      "m": 3,
+      "pm": 0
+     },
+     "now": {
+      "m": 3,
+      "pm": 0
+     }
+    },
+    "JS heap after 4 cycles (MB)": {
+     "before": {
+      "m": 3.4,
+      "pm": 0
+     },
+     "now": {
+      "m": 3.5,
+      "pm": 0
+     }
+    },
+    "Documents after cycles": {
+     "before": {
+      "m": 25,
+      "pm": 0
+     },
+     "now": {
+      "m": 1,
+      "pm": 0
+     }
+    },
+    "JS event listeners after cycles": {
+     "before": {
+      "m": 175,
+      "pm": 0
+     },
+     "now": {
+      "m": 176,
+      "pm": 0
+     }
+    }
+   }
+  },
+  {
+   "name": "Semiremorcă 6 axe",
+   "metrics": {
+    "SVG DOM nodes (scheme)": {
+     "before": {
+      "m": 225,
+      "pm": 0
+     },
+     "now": {
+      "m": 225,
+      "pm": 0
+     }
+    },
+    "Scheme DOM nodes (all)": {
+     "before": {
+      "m": 416,
+      "pm": 0
+     },
+     "now": {
+      "m": 417,
+      "pm": 0
+     }
+    },
+    "Load: wall to art painted (ms)": {
+     "before": {
+      "m": 1192,
+      "pm": 0
+     },
+     "now": {
+      "m": 1432,
+      "pm": 0
+     }
+    },
+    "Load: raster (ms)": {
+     "before": {
+      "m": 374.1,
+      "pm": 0
+     },
+     "now": {
+      "m": 334.6,
+      "pm": 0
+     }
+    },
+    "Load: image decode (ms)": {
+     "before": {
+      "m": 139.2,
+      "pm": 0
+     },
+     "now": {
+      "m": 67.4,
+      "pm": 0
+     }
+    },
+    "Tyre selection median (ms)": {
+     "before": {
+      "m": 43.6,
+      "pm": 0
+     },
+     "now": {
+      "m": 35.8,
+      "pm": 0
+     }
+    },
+    "Tyre selection worst (ms)": {
+     "before": {
+      "m": 50.8,
+      "pm": 0
+     },
+     "now": {
+      "m": 85.2,
+      "pm": 0
+     }
+    },
+    "Avg frame, all interactions (ms)": {
+     "before": {
+      "m": 23.4,
+      "pm": 0
+     },
+     "now": {
+      "m": 17.3,
+      "pm": 0
+     }
+    },
+    "Worst frame, all interactions (ms)": {
+     "before": {
+      "m": 200,
+      "pm": 0
+     },
+     "now": {
+      "m": 100.1,
+      "pm": 0
+     }
+    },
+    "Dropped frames, all interactions": {
+     "before": {
+      "m": 357,
+      "pm": 0
+     },
+     "now": {
+      "m": 36,
+      "pm": 0
+     }
+    },
+    "Zoom: avg frame (ms)": {
+     "before": {
+      "m": 20.4,
+      "pm": 0
+     },
+     "now": {
+      "m": 16.8,
+      "pm": 0
+     }
+    },
+    "Zoom: worst frame (ms)": {
+     "before": {
+      "m": 200,
+      "pm": 0
+     },
+     "now": {
+      "m": 33.3,
+      "pm": 0
+     }
+    },
+    "Zoom: dropped frames": {
+     "before": {
+      "m": 112,
+      "pm": 0
+     },
+     "now": {
+      "m": 3,
+      "pm": 0
+     }
+    },
+    "Hover: dropped frames": {
+     "before": {
+      "m": 124,
+      "pm": 0
+     },
+     "now": {
+      "m": 5,
+      "pm": 0
+     }
+    },
+    "JS scripting, interactions (ms)": {
+     "before": {
+      "m": 779.8,
+      "pm": 0
+     },
+     "now": {
+      "m": 340.7,
+      "pm": 0
+     }
+    },
+    "Style + layout, interactions (ms)": {
+     "before": {
+      "m": 1280.7,
+      "pm": 0
+     },
+     "now": {
+      "m": 1416.4,
+      "pm": 0
+     }
+    },
+    "Paint, interactions (ms)": {
+     "before": {
+      "m": 1235.4,
+      "pm": 0
+     },
+     "now": {
+      "m": 1066.8,
+      "pm": 0
+     }
+    },
+    "Raster, interactions (ms)": {
+     "before": {
+      "m": 11668,
+      "pm": 0
+     },
+     "now": {
+      "m": 3042.1,
+      "pm": 0
+     }
+    },
+    "Long tasks >50 ms, interactions": {
+     "before": {
+      "m": 3,
+      "pm": 0
+     },
+     "now": {
+      "m": 1,
+      "pm": 0
+     }
+    },
+    "Longest task (ms)": {
+     "before": {
+      "m": 86,
+      "pm": 0
+     },
+     "now": {
+      "m": 58,
+      "pm": 0
+     }
+    },
+    "JS heap after load (MB)": {
+     "before": {
+      "m": 2.9,
+      "pm": 0
+     },
+     "now": {
+      "m": 2.9,
+      "pm": 0
+     }
+    },
+    "JS heap after 4 cycles (MB)": {
+     "before": {
+      "m": 3.4,
+      "pm": 0
+     },
+     "now": {
+      "m": 3.4,
+      "pm": 0
+     }
+    },
+    "Documents after cycles": {
+     "before": {
+      "m": 32,
+      "pm": 0
+     },
+     "now": {
+      "m": 1,
+      "pm": 0
+     }
+    },
+    "JS event listeners after cycles": {
+     "before": {
+      "m": 176,
+      "pm": 0
+     },
+     "now": {
+      "m": 176,
+      "pm": 0
+     }
+    }
+   }
+  },
+  {
+   "name": "Ansamblu B 105 NET + B 935 NET",
+   "metrics": {
+    "SVG DOM nodes (scheme)": {
+     "before": {
+      "m": 252,
+      "pm": 0
+     },
+     "now": {
+      "m": 252,
+      "pm": 0
+     }
+    },
+    "Scheme DOM nodes (all)": {
+     "before": {
+      "m": 520,
+      "pm": 0
+     },
+     "now": {
+      "m": 521,
+      "pm": 0
+     }
+    },
+    "Load: wall to art painted (ms)": {
+     "before": {
+      "m": 2139,
+      "pm": 0
+     },
+     "now": {
+      "m": 896,
+      "pm": 0
+     }
+    },
+    "Load: raster (ms)": {
+     "before": {
+      "m": 755.2,
+      "pm": 0
+     },
+     "now": {
+      "m": 190,
+      "pm": 0
+     }
+    },
+    "Load: image decode (ms)": {
+     "before": {
+      "m": 266.3,
+      "pm": 0
+     },
+     "now": {
+      "m": 60.9,
+      "pm": 0
+     }
+    },
+    "Tyre selection median (ms)": {
+     "before": {
+      "m": 62.9,
+      "pm": 0
+     },
+     "now": {
+      "m": 76.4,
+      "pm": 0
+     }
+    },
+    "Tyre selection worst (ms)": {
+     "before": {
+      "m": 186.5,
+      "pm": 0
+     },
+     "now": {
+      "m": 78.9,
+      "pm": 0
+     }
+    },
+    "Avg frame, all interactions (ms)": {
+     "before": {
+      "m": 34.9,
+      "pm": 0
+     },
+     "now": {
+      "m": 18.7,
+      "pm": 0
+     }
+    },
+    "Worst frame, all interactions (ms)": {
+     "before": {
+      "m": 383.3,
+      "pm": 0
+     },
+     "now": {
+      "m": 150,
+      "pm": 0
+     }
+    },
+    "Dropped frames, all interactions": {
+     "before": {
+      "m": 678,
+      "pm": 0
+     },
+     "now": {
+      "m": 144,
+      "pm": 0
+     }
+    },
+    "Zoom: avg frame (ms)": {
+     "before": {
+      "m": 36.6,
+      "pm": 0
+     },
+     "now": {
+      "m": 18.8,
+      "pm": 0
+     }
+    },
+    "Zoom: worst frame (ms)": {
+     "before": {
+      "m": 333.3,
+      "pm": 0
+     },
+     "now": {
+      "m": 116.7,
+      "pm": 0
+     }
+    },
+    "Zoom: dropped frames": {
+     "before": {
+      "m": 315,
+      "pm": 0
+     },
+     "now": {
+      "m": 81,
+      "pm": 0
+     }
+    },
+    "Hover: dropped frames": {
+     "before": {
+      "m": 97,
+      "pm": 0
+     },
+     "now": {
+      "m": 1,
+      "pm": 0
+     }
+    },
+    "JS scripting, interactions (ms)": {
+     "before": {
+      "m": 998.6,
+      "pm": 0
+     },
+     "now": {
+      "m": 577.1,
+      "pm": 0
+     }
+    },
+    "Style + layout, interactions (ms)": {
+     "before": {
+      "m": 1839.5,
+      "pm": 0
+     },
+     "now": {
+      "m": 2627.9,
+      "pm": 0
+     }
+    },
+    "Paint, interactions (ms)": {
+     "before": {
+      "m": 1245,
+      "pm": 0
+     },
+     "now": {
+      "m": 1515.3,
+      "pm": 0
+     }
+    },
+    "Raster, interactions (ms)": {
+     "before": {
+      "m": 14328.4,
+      "pm": 0
+     },
+     "now": {
+      "m": 5152.7,
+      "pm": 0
+     }
+    },
+    "Long tasks >50 ms, interactions": {
+     "before": {
+      "m": 7,
+      "pm": 0
+     },
+     "now": {
+      "m": 4,
+      "pm": 0
+     }
+    },
+    "Longest task (ms)": {
+     "before": {
+      "m": 116,
+      "pm": 0
+     },
+     "now": {
+      "m": 62,
+      "pm": 0
+     }
+    },
+    "JS heap after load (MB)": {
+     "before": {
+      "m": 3,
+      "pm": 0
+     },
+     "now": {
+      "m": 3,
+      "pm": 0
+     }
+    },
+    "JS heap after 4 cycles (MB)": {
+     "before": {
+      "m": 3.5,
+      "pm": 0
+     },
+     "now": {
+      "m": 3.6,
+      "pm": 0
+     }
+    },
+    "Documents after cycles": {
+     "before": {
+      "m": 26,
+      "pm": 0
+     },
+     "now": {
+      "m": 1,
+      "pm": 0
+     }
+    },
+    "JS event listeners after cycles": {
+     "before": {
+      "m": 175,
+      "pm": 0
+     },
+     "now": {
+      "m": 172,
+      "pm": 0
+     }
+    }
+   }
+  }
+ ],
+ "totals": {
+  "SVG DOM nodes (scheme)": {
+   "before": 201.5,
+   "now": 201.5
+  },
+  "Scheme DOM nodes (all)": {
+   "before": 423.3,
+   "now": 424.3
+  },
+  "Load: wall to art painted (ms)": {
+   "before": 1840.8,
+   "now": 1020.5
+  },
+  "Load: raster (ms)": {
+   "before": 646.3,
+   "now": 244.4
+  },
+  "Load: image decode (ms)": {
+   "before": 201.3,
+   "now": 58.9
+  },
+  "Tyre selection median (ms)": {
+   "before": 68.2,
+   "now": 50.4
+  },
+  "Tyre selection worst (ms)": {
+   "before": 138.6,
+   "now": 71.4
+  },
+  "Avg frame, all interactions (ms)": {
+   "before": 27,
+   "now": 17.7
+  },
+  "Worst frame, all interactions (ms)": {
+   "before": 270.8,
+   "now": 129.3
+  },
+  "Dropped frames, all interactions": {
+   "before": 505.3,
+   "now": 65.5
+  },
+  "Zoom: avg frame (ms)": {
+   "before": 24.3,
+   "now": 17.3
+  },
+  "Zoom: worst frame (ms)": {
+   "before": 216.6,
+   "now": 62.5
+  },
+  "Zoom: dropped frames": {
+   "before": 163.3,
+   "now": 24.3
+  },
+  "Hover: dropped frames": {
+   "before": 126.5,
+   "now": 2
+  },
+  "JS scripting, interactions (ms)": {
+   "before": 929.3,
+   "now": 402.8
+  },
+  "Style + layout, interactions (ms)": {
+   "before": 1519.6,
+   "now": 1663.1
+  },
+  "Paint, interactions (ms)": {
+   "before": 1216.9,
+   "now": 1190
+  },
+  "Raster, interactions (ms)": {
+   "before": 13387,
+   "now": 3495
+  },
+  "Long tasks >50 ms, interactions": {
+   "before": 3.5,
+   "now": 1.3
+  },
+  "Longest task (ms)": {
+   "before": 84,
+   "now": 30
+  },
+  "JS heap after load (MB)": {
+   "before": 3,
+   "now": 3
+  },
+  "JS heap after 4 cycles (MB)": {
+   "before": 3.4,
+   "now": 3.5
+  },
+  "Documents after cycles": {
+   "before": 23.3,
+   "now": 1
+  },
+  "JS event listeners after cycles": {
+   "before": 175.5,
+   "now": 175
+  }
+ }
+}

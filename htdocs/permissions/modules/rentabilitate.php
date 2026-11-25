@@ -21,8 +21,10 @@ return [
     'actions'     => [
         'view'   => ['label' => 'Vizualizare rentabilitate (costuri, venituri, șoferi)', 'sensitive' => true],
         'export' => ['label' => 'Export CSV', 'group' => 'export', 'default_admin' => true, 'sensitive' => true],
+        'locatii' => ['label' => 'Gestionare locații fizice (Origine / Destinație / Depozit)', 'default_admin' => true],
     ],
     'endpoints'   => [
         'export' => 'export',
+        'save_location' => 'locatii',
     ],
 ];

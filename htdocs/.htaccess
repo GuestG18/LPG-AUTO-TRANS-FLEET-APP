@@ -1,5 +1,12 @@
 Options -Indexes
 
+# Desenele exploratorului (assets/img/xray-traced, WebP) au URL-uri cu ?v=<hash>: pot sta in cache.
+<IfModule mod_headers.c>
+    <If "%{REQUEST_URI} =~ m#/assets/img/xray-traced/#">
+        Header set Cache-Control "public, max-age=2592000"
+    </If>
+</IfModule>
+
 <IfModule mod_rewrite.c>
     RewriteEngine On
 
@@ -10,6 +17,7 @@ Options -Indexes
     RewriteRule ^api/concedii/?$ index.php?page=programare_concedii&action=api_collection [QSA,L]
 
     RewriteRule ^api/assistant/ index.php [QSA,L]
+    RewriteRule ^api/chat-interactiv/ index.php [QSA,L]
 
     RewriteCond %{REQUEST_FILENAME} !-f
     RewriteCond %{REQUEST_FILENAME} !-d

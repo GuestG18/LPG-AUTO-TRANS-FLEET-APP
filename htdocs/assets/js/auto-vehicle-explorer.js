@@ -164,7 +164,7 @@
 
     // Tabelul pe tipuri de axa si sectiunile sistemelor sunt mai jos in pagina decat acest script.
     var whenReady = function () {
-        matrix = document.getElementById('piese-pe-tip-axa');
+        matrix = document.getElementById('piese-pe-axa');
         var head = xraySection.querySelector('.repair-auto-xray-head');
         if (focusMode && matrix && head) {
             matrixBtn = document.createElement('button');
@@ -172,12 +172,12 @@
             matrixBtn.className = 'repair-auto-xray-toggle repair-auto-xray-matrix-btn';
             matrixBtn.setAttribute('aria-pressed', 'false');
             matrixBtn.hidden = holder.hidden;
-            matrixBtn.innerHTML = '<i class="bi bi-grid-3x3-gap" aria-hidden="true"></i><span>Piese pe tip de axă</span>';
+            matrixBtn.innerHTML = '<i class="bi bi-grid-3x3-gap" aria-hidden="true"></i><span>Piese pe axă</span>';
             matrixBtn.addEventListener('click', function () { dockSection(matrix); });
             head.insertBefore(matrixBtn, head.querySelector('[data-auto-xray-toggle]'));
         }
 
-        // Dupa o salvare, pagina revine cu #sistem-... / #piese-pe-tip-axa: acel panou se redeschide sub schema.
+        // Dupa o salvare, pagina revine cu #sistem-... / #piese-pe-axa: acel panou se redeschide sub schema.
         if (focusMode && !holder.hidden && window.location.hash) {
             var target = document.getElementById(decodeURIComponent(window.location.hash.slice(1)));
             if (target && (target === matrix || target.matches('[data-as-section]'))) {

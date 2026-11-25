@@ -1,0 +1,266 @@
+[
+ {
+  "variant": "phase4",
+  "errors": [],
+  "components": "7/7/5/11",
+  "picks": [
+   "franare:A2-L>",
+   "suspensie:A1>",
+   "rulare:A2-L>",
+   "motor:vehicul>"
+  ],
+  "dbg": [
+   [
+    "franare:A2-L",
+    null,
+    false
+   ],
+   [
+    "suspensie:A1",
+    null,
+    false
+   ],
+   [
+    "rulare:A2-L",
+    null,
+    false
+   ],
+   [
+    "motor:vehicul",
+    null,
+    false
+   ]
+  ],
+  "componentEls": 23,
+  "stageComponentEls": 15,
+  "dom": 4756,
+  "listMs": [
+   601,
+   538,
+   543,
+   578
+  ],
+  "listPaintMs": [
+   629,
+   553,
+   560,
+   605
+  ],
+  "styleRecalcs": 1249,
+  "layouts": 1084,
+  "styleMs": 2004,
+  "layoutMs": 577,
+  "scriptMs": 1838,
+  "taskMs": 13864,
+  "paints": 926,
+  "invalidations": 12991,
+  "gpuMs": 27627,
+  "frames": {
+   "frames": 168,
+   "p50": 16.7,
+   "p95": 100,
+   "p99": 166.6,
+   "max": 166.6,
+   "dropped": 121
+  },
+  "heapMB": 3.4
+ },
+ {
+  "variant": "current",
+  "errors": [],
+  "components": "7/7/5/11",
+  "picks": [
+   "franare:A2-L>",
+   "suspensie:A1>",
+   "rulare:A2-L>",
+   "motor:vehicul>"
+  ],
+  "dbg": [
+   [
+    "franare:A2-L",
+    false,
+    false
+   ],
+   [
+    "suspensie:A1",
+    false,
+    false
+   ],
+   [
+    "rulare:A2-L",
+    false,
+    false
+   ],
+   [
+    "motor:vehicul",
+    false,
+    false
+   ]
+  ],
+  "componentEls": 37,
+  "stageComponentEls": 0,
+  "dom": 4772,
+  "listMs": [
+   45,
+   74,
+   62,
+   45
+  ],
+  "listPaintMs": [
+   93,
+   111,
+   118,
+   82
+  ],
+  "styleRecalcs": 1646,
+  "layouts": 1481,
+  "styleMs": 2111,
+  "layoutMs": 587,
+  "scriptMs": 2744,
+  "taskMs": 20063,
+  "paints": 877,
+  "invalidations": 12436,
+  "gpuMs": 27128,
+  "frames": {
+   "frames": 158,
+   "p50": 16.7,
+   "p95": 166.6,
+   "p99": 183.4,
+   "max": 199.9,
+   "dropped": 147
+  },
+  "heapMB": 3.4
+ },
+ {
+  "variant": "current",
+  "errors": [],
+  "components": "7/7/5/11",
+  "picks": [
+   "franare:A2-L>",
+   "suspensie:A1>",
+   "rulare:A2-L>",
+   "motor:vehicul>"
+  ],
+  "dbg": [
+   [
+    "franare:A2-L",
+    false,
+    false
+   ],
+   [
+    "suspensie:A1",
+    false,
+    false
+   ],
+   [
+    "rulare:A2-L",
+    false,
+    false
+   ],
+   [
+    "motor:vehicul",
+    false,
+    false
+   ]
+  ],
+  "componentEls": 37,
+  "stageComponentEls": 0,
+  "dom": 4772,
+  "listMs": [
+   40,
+   38,
+   33,
+   40
+  ],
+  "listPaintMs": [
+   85,
+   66,
+   63,
+   83
+  ],
+  "styleRecalcs": 1818,
+  "layouts": 1656,
+  "styleMs": 1880,
+  "layoutMs": 585,
+  "scriptMs": 2300,
+  "taskMs": 18772,
+  "paints": 1068,
+  "invalidations": 13914,
+  "gpuMs": 28188,
+  "frames": {
+   "frames": 197,
+   "p50": 16.7,
+   "p95": 83.3,
+   "p99": 133.3,
+   "max": 166.7,
+   "dropped": 97
+  },
+  "heapMB": 3.4
+ },
+ {
+  "variant": "phase4",
+  "errors": [],
+  "components": "7/7/5/11",
+  "picks": [
+   "franare:A2-L>",
+   "suspensie:A1>",
+   "rulare:A2-L>",
+   "motor:vehicul>"
+  ],
+  "dbg": [
+   [
+    "franare:A2-L",
+    null,
+    false
+   ],
+   [
+    "suspensie:A1",
+    null,
+    false
+   ],
+   [
+    "rulare:A2-L",
+    null,
+    false
+   ],
+   [
+    "motor:vehicul",
+    null,
+    false
+   ]
+  ],
+  "componentEls": 23,
+  "stageComponentEls": 15,
+  "dom": 4756,
+  "listMs": [
+   484,
+   526,
+   497,
+   485
+  ],
+  "listPaintMs": [
+   561,
+   541,
+   508,
+   492
+  ],
+  "styleRecalcs": 1254,
+  "layouts": 1087,
+  "styleMs": 1434,
+  "layoutMs": 449,
+  "scriptMs": 1186,
+  "taskMs": 9450,
+  "paints": 1193,
+  "invalidations": 14654,
+  "gpuMs": 28326,
+  "frames": {
+   "frames": 220,
+   "p50": 16.7,
+   "p95": 66.6,
+   "p99": 116.7,
+   "max": 149.9,
+   "dropped": 75
+  },
+  "heapMB": 3.4
+ }
+]

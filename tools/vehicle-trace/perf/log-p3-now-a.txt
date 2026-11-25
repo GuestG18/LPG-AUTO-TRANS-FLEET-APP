@@ -1,0 +1,17 @@
+Cap tractor 2 axe {"load":{"wallMs":1476,"domContentLoaded":1253,"scripting":243.4,"styleLayout":298.4,"paint":33.4,"raster":268.2,"imageDecode":62.8,"parse":207.5,"layoutCount":22,"longestLayout":54.1},"sel":{"n":6,"median":53.3,"avg":52.2,"worst":79.5},"zoom":{"avg":17.4,"worst":83.4,"dropped":31},"mem":[2.9,3.4],"nodes":134}
+Camion 4 axe {"load":{"wallMs":1342,"domContentLoaded":1029,"scripting":334.5,"styleLayout":343.1,"paint":44.6,"raster":272.1,"imageDecode":460.1,"parse":211.4,"layoutCount":26,"longestLayout":54.9},"sel":{"n":6,"median":52.5,"avg":51.7,"worst":80.7},"zoom":{"avg":17.3,"worst":66.7,"dropped":29},"mem":[2.8,3.4],"nodes":195}
+Semiremorcă 6 axe {"load":{"wallMs":1242,"domContentLoaded":1017,"scripting":246.7,"styleLayout":317.9,"paint":32.6,"raster":248.7,"imageDecode":122.5,"parse":149,"layoutCount":21,"longestLayout":79.5},"sel":{"n":6,"median":37.1,"avg":41.2,"worst":58.8},"zoom":{"avg":16.8,"worst":33.4,"dropped":3},"mem":[2.9,3.4],"nodes":225}
+node:internal/process/promises:394
+    triggerUncaughtException(err, true /* fromPromise */);
+    ^
+
+page.waitForSelector: Timeout 30000ms exceeded.
+Call log:
+[2m  - waiting for locator('.fx-explorer .fx-svg') to be visible[22m
+
+    at C:\laragon\www\aplicatie_fleet\tools\vehicle-trace\perf\bench.js:276:28 {
+  log: [ "  - waiting for locator('.fx-explorer .fx-svg') to be visible" ],
+  name: 'TimeoutError'
+}
+
+Node.js v24.13.0

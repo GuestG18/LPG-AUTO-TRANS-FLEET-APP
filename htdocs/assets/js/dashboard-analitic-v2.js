@@ -275,6 +275,15 @@
         return params;
     }
 
+    /** Eticheta optiunii, fara numarul de curse afisat langa ea (la liste grupate: cu grupul). */
+    function optionLabel(input) {
+        if (input.getAttribute('data-full')) {
+            return input.getAttribute('data-full');
+        }
+        var text = input.parentNode.querySelector('.da2-ms-text, span');
+        return (text || input.parentNode).textContent.trim();
+    }
+
     function updateMultiSelectSummaries() {
         $$('[data-ms]', form).forEach(function (ms) {
             var checked = $$('input[type="checkbox"]:checked', ms);
@@ -283,7 +292,7 @@
                 valueEl.textContent = 'Toate';
                 ms.classList.remove('is-filtered');
             } else if (checked.length === 1) {
-                valueEl.textContent = checked[0].parentNode.textContent.trim();
+                valueEl.textContent = optionLabel(checked[0]);
                 ms.classList.add('is-filtered');
             } else {
                 valueEl.textContent = checked.length + ' selectate';
@@ -312,7 +321,7 @@
                     type: 'ms',
                     name: ms.getAttribute('data-name'),
                     value: input.value,
-                    label: label + ': ' + input.parentNode.textContent.trim()
+                    label: label + ': ' + optionLabel(input)
                 });
             });
         });
@@ -810,6 +819,7 @@
             });
         }).then(function (result) {
             state.data = result.payload;
+            renderFacetOptions(result.payload.filter_options);
             if (!result.ok || result.payload.error) {
                 showError(result.payload.error || 'Serverul a returnat o eroare.');
             }
@@ -826,6 +836,221 @@
             setLoading(false);
         });
     }
+
+    /*
+     * Listele filtrelor urmeaza selectia curenta (perioada + celelalte filtre): serverul
+     * trimite pentru fiecare filtru doar valorile care au curse sub restul filtrelor.
+     * Valorile deja bifate raman in lista, chiar fara curse, ca sa le poti debifa.
+     */
+    function renderFacetOptions(facets) {
+        if (!facets || typeof facets !== 'object') {
+            return;
+        }
+        Object.keys(facets).forEach(function (name) {
+            var ms = $('[data-ms][data-name="' + name + '"]', form);
+            if (ms && Array.isArray(facets[name])) {
+                renderMsOptions(ms, name, facets[name]);
+            }
+        });
+    }
+
+    function renderMsOptions(ms, name, options) {
+        var list = $('[data-ms-list]', ms);
+        var checked = {};
+        $$('input[type="checkbox"]:checked', list).forEach(function (input) {
+            checked[input.value] = optionLabel(input);
+        });
+
+        var rows = options.map(function (row) {
+            var group = row.group ? String(row.group) : '';
+            var subgroup = row.subgroup ? String(row.subgroup) : '';
+            return {
+                value: String(row.value),
+                label: String(row.label),
+                group: group,
+                subgroup: subgroup,
+                full: group ? group + ' · ' + (subgroup ? subgroup + ': ' : '') + String(row.label) : '',
+                count: num(row.curse)
+            };
+        }).filter(function (row) {
+            // fara curse in selectie = nu e o varianta disponibila: nu o aratam (doar daca e bifata)
+            return row.count > 0 || checked[row.value] !== undefined;
+        });
+        var present = {};
+        rows.forEach(function (row) { present[row.value] = true; });
+        Object.keys(checked).forEach(function (value) {
+            if (!present[value]) {
+                // valoare bifata fara curse acum: o pastram sub grupul ei, din eticheta completa
+                var pieces = String(checked[value]).split(' · ');
+                var tail = pieces.length > 1 ? pieces.slice(1).join(' · ') : '';
+                var colon = tail.indexOf(': ');
+                rows.push(pieces.length > 1 ? {
+                    value: value,
+                    group: pieces[0],
+                    subgroup: colon !== -1 ? tail.slice(0, colon) : '',
+                    label: colon !== -1 ? tail.slice(colon + 2) : tail,
+                    full: checked[value],
+                    count: 0
+                } : { value: value, label: checked[value], group: '', subgroup: '', full: '', count: 0 });
+            }
+        });
+
+        var search = $('[data-ms-search]', ms);
+        var needle = search ? search.value.toLowerCase() : '';
+        var scrollTop = list.scrollTop;
+
+        if (!rows.length) {
+            list.innerHTML = '<p class="da2-ms-empty">Nimic în selecția curentă.</p>';
+            return;
+        }
+
+        var lastGroup = null;
+        var lastSubgroup = null;
+        list.innerHTML = rows.map(function (row) {
+            var text = (row.full || row.label).toLowerCase();
+            var hidden = needle !== '' && text.indexOf(needle) === -1;
+            var head = '';
+            if (row.group && row.group !== lastGroup) {
+                head += '<div class="da2-ms-group" data-ms-group>' + escapeHtml(row.group) + '</div>';
+                lastSubgroup = null;
+            }
+            if (row.subgroup && (row.subgroup !== lastSubgroup || row.group !== lastGroup)) {
+                head += '<div class="da2-ms-subgroup" data-ms-group="sub">' + escapeHtml(row.subgroup) + '</div>';
+            }
+            lastGroup = row.group;
+            lastSubgroup = row.subgroup;
+            return head + '<label class="da2-ms-option' + (row.group ? ' is-grouped' : '') + (row.count === 0 ? ' is-empty' : '') + '" data-ms-option data-text="' + escapeHtml(text) + '"' + (hidden ? ' hidden' : '') + '>' +
+                '<input type="checkbox" name="' + escapeHtml(name) + '[]" value="' + escapeHtml(row.value) + '"' + (row.full ? ' data-full="' + escapeHtml(row.full) + '"' : '') + (checked[row.value] !== undefined ? ' checked' : '') + '>' +
+                '<span class="da2-ms-text">' + escapeHtml(row.label) + '</span>' +
+                '<span class="da2-ms-count" title="Curse în selecția curentă">' + row.count + '</span>' +
+                '</label>';
+        }).join('');
+        syncMsGroups(list);
+        list.scrollTop = scrollTop;
+    }
+
+    /** Ascunde titlurile de grup / camp ramase fara nicio optiune vizibila (dupa cautare). */
+    function syncMsGroups(list) {
+        var heads = $$('[data-ms-group]', list);
+        heads.forEach(function (head) {
+            var isSub = head.getAttribute('data-ms-group') === 'sub';
+            var visible = false;
+            var node = head.nextElementSibling;
+            while (node) {
+                // un titlu de camp se opreste la orice titlu; un titlu de tip doar la urmatorul tip
+                if (node.hasAttribute('data-ms-group') && (isSub || node.getAttribute('data-ms-group') !== 'sub')) {
+                    break;
+                }
+                if (node.hasAttribute('data-ms-option') && !node.hidden) {
+                    visible = true;
+                    break;
+                }
+                node = node.nextElementSibling;
+            }
+            head.hidden = !visible;
+        });
+    }
+
+    // ------------------------------------------------ locuri / zone pe beneficiar
+
+    var routeChangesOnly = document.getElementById('da2-route-changes-only');
+    var routeChangesSearch = document.getElementById('da2-route-changes-search');
+
+    function renderRouteChanges() {
+        var container = document.getElementById('da2-route-changes');
+        var badge = document.getElementById('da2-route-changes-count');
+        if (!container) {
+            return;
+        }
+        var data = (state.data && state.data.route_changes) || { groups: [] };
+        var groups = data.groups || [];
+        var switches = groups.filter(function (group) { return group.tip_modificare === 'schimbare'; }).length;
+        if (badge) {
+            badge.hidden = switches === 0;
+            badge.textContent = String(switches);
+        }
+
+        var needle = routeChangesSearch ? routeChangesSearch.value.trim().toLowerCase() : '';
+        var onlySwitches = routeChangesOnly && routeChangesOnly.checked;
+        var shown = groups.filter(function (group) {
+            if (onlySwitches && group.tip_modificare !== 'schimbare') {
+                return false;
+            }
+            if (needle === '') {
+                return true;
+            }
+            var haystack = [group.beneficiar, group.tip_label, group.camp_label].concat(group.values.map(function (v) { return v.label; })).join(' ').toLowerCase();
+            return haystack.indexOf(needle) !== -1;
+        });
+
+        if (!shown.length) {
+            container.innerHTML = '<p class="da2-empty">' + (groups.length
+                ? 'Nimic pentru căutarea / bifa curentă.'
+                : 'În selecția curentă fiecare beneficiar a folosit un singur loc / o singură zonă pe fiecare tip de transport.') + '</p>';
+            return;
+        }
+
+        var start = Date.parse(data.start + 'T00:00:00');
+        var end = Date.parse(data.end + 'T00:00:00') + 86400000;
+        var span = Math.max(end - start, 86400000);
+        var pos = function (iso, addDay) {
+            var t = Date.parse(iso + 'T00:00:00') + (addDay ? 86400000 : 0);
+            return Math.min(100, Math.max(0, (t - start) / span * 100));
+        };
+
+        container.innerHTML = '<div class="da2-rc-axis"><span>' + escapeHtml(fmtDateRo(data.start)) + '</span><span>' + escapeHtml(fmtDateRo(data.end)) + '</span></div>' +
+            shown.map(function (group) {
+                var isSwitch = group.tip_modificare === 'schimbare';
+                var transitions = (group.schimbari || []).map(function (change) {
+                    return '<li><strong>' + escapeHtml(change.din) + '</strong> (ultima: ' + escapeHtml(fmtDateRo(change.ultima_din)) + ') → <strong>' +
+                        escapeHtml(change.in) + '</strong> (de la: ' + escapeHtml(fmtDateRo(change.prima_in)) + ')</li>';
+                }).join('');
+                return '<section class="da2-rc-group' + (isSwitch ? ' is-switch' : '') + '">' +
+                    '<header class="da2-rc-head">' +
+                        '<span class="da2-rc-badge">' + (isSwitch ? 'Schimbare' : 'În paralel') + '</span>' +
+                        '<strong>' + escapeHtml(group.beneficiar) + '</strong>' +
+                        '<span class="da2-rc-meta">' + escapeHtml(group.tip_label) + ' · ' + escapeHtml(group.camp_label) + ' · ' + group.values.length + ' valori · ' + fmt(group.curse, 'int') + ' curse</span>' +
+                    '</header>' +
+                    (transitions ? '<ul class="da2-rc-transitions">' + transitions + '</ul>' : '') +
+                    group.values.map(function (value) {
+                        var left = pos(value.prima, false);
+                        var width = Math.max(pos(value.ultima, true) - left, 0.8);
+                        var range = value.prima === value.ultima ? fmtDateRo(value.prima) : fmtDateRo(value.prima) + ' – ' + fmtDateRo(value.ultima);
+                        return '<button type="button" class="da2-rc-row" data-route-part="' + escapeHtml(value.value) + '" title="Filtrează pe ' + escapeHtml(group.camp_label + ': ' + value.label) + '">' +
+                            '<span class="da2-rc-label">' + escapeHtml(value.label) + '</span>' +
+                            '<span class="da2-rc-track"><span class="da2-rc-bar" style="left:' + left.toFixed(2) + '%;width:' + width.toFixed(2) + '%"></span></span>' +
+                            '<span class="da2-rc-range">' + escapeHtml(range) + '</span>' +
+                            '<span class="da2-rc-count">' + fmt(value.curse, 'int') + ' curse</span>' +
+                        '</button>';
+                    }).join('') +
+                '</section>';
+            }).join('');
+    }
+
+    if (routeChangesOnly) {
+        routeChangesOnly.addEventListener('change', renderRouteChanges);
+    }
+    if (routeChangesSearch) {
+        routeChangesSearch.addEventListener('input', renderRouteChanges);
+    }
+    document.addEventListener('click', function (event) {
+        var row = event.target.closest('[data-route-part]');
+        if (!row) {
+            return;
+        }
+        var ms = $('[data-ms][data-name="route_parts"]', form);
+        if (!ms) {
+            return;
+        }
+        var value = row.getAttribute('data-route-part');
+        var input = $$('input[type="checkbox"]', ms).filter(function (item) { return item.value === value; })[0];
+        if (input) {
+            input.checked = true;
+            updateMultiSelectSummaries();
+            renderChips();
+            scheduleReload(0);
+        }
+    });
 
     // ---------------------------------------------------------------- randare
 
@@ -848,6 +1073,7 @@
         renderEntityTable('drivers');
         renderEntityTable('beneficiaries');
         renderLightVehicles();
+        renderRouteChanges();
         renderAlerts();
     }
 
@@ -6093,6 +6319,7 @@
             $$('[data-ms-option]', list).forEach(function (option) {
                 option.hidden = needle !== '' && option.getAttribute('data-text').indexOf(needle) === -1;
             });
+            syncMsGroups(list);
         }
     });
 

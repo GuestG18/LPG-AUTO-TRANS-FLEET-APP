@@ -52,7 +52,10 @@ final class OperationalProfitabilityService
     private const SEMI_TYPES = ['semiremorca', 'semiremorca_primar', 'semiremorca_distributie'];
     /** Elemente pe evenimente: „lipsa” inseamna doar ca nu au existat evenimente in luna, nu date lipsa. */
     private const EVENT_ELEMENTS = ['reparatii', 'revizii', 'carburant', 'adblue', 'diurna', 'taxe_drum_realizate', 'taxe_drum_autorizatii', 'piese_ocr'];
-    private const CACHE_VERSION = 'v3';
+    private const CACHE_VERSION = 'v5'; // v4: by_seg (beneficiar|tip|loc|zona); v5: + tone / clienti / capacitate pe segment
+    /** Valorile unui segment by_seg (beneficiar|tip|loc|zona): activitate + incarcare (tone, capacitate, clienti). */
+    public const SEG_ZERO = ['km' => 0.0, 'trips' => 0, 'revenue' => 0.0, 'tone_inc' => 0.0, 'tone_liv' => 0.0, 'cap' => 0.0,
+        'tone_lipsa' => 0.0, 'tone_peste' => 0.0, 'clienti' => 0.0, 'cap_neconf' => 0];
 
     private OperationalCostService $engine;
     private ?array $couplings = null;
@@ -148,6 +151,12 @@ final class OperationalProfitabilityService
                         $acc['by_bt'][$bt][$k] += $val;
                     }
                 }
+                foreach ($v['by_seg'] ?? [] as $seg => $a) {
+                    $acc['by_seg'][$seg] ??= self::SEG_ZERO;
+                    foreach ($a as $k => $val) {
+                        $acc['by_seg'][$seg][$k] = ($acc['by_seg'][$seg][$k] ?? 0) + $val;
+                    }
+                }
                 foreach ($v['by_type'] as $type => $a) {
                     $acc['by_type'][$type] ??= ['km' => 0.0, 'trips' => 0, 'revenue' => 0.0];
                     foreach ($a as $k => $val) {
@@ -206,7 +215,7 @@ final class OperationalProfitabilityService
     {
         return $info + ['km_real' => 0.0, 'km_facturat' => 0.0, 'km_dislocare' => 0.0, 'trips' => 0, 'revenue' => 0.0, 'tone' => 0.0, 'costs' => [], 'driver_costs' => [],
             'semi_costs' => [], 'semi_km' => [], 'allocated_to' => [], 'own_cost' => 0.0, 'unallocated_semi_cost' => 0.0, 'by_driver' => [], 'by_benef' => [],
-            'by_type' => [], 'by_bt' => [], 'trip_ids' => [], 'flags' => []];
+            'by_type' => [], 'by_bt' => [], 'by_seg' => [], 'trip_ids' => [], 'flags' => []];
     }
 
     private function finalizeVehicle(array $v, array $missing): array
@@ -289,7 +298,7 @@ final class OperationalProfitabilityService
                 $vehicles[$vid] = ['info' => $info[$vid] ?? ['vehicle_id' => $vid, 'nr' => '#' . $vid, 'model' => '', 'tip_vehicul' => '', 'status' => ''],
                     'km_real' => 0.0, 'km_facturat' => 0.0, 'km_dislocare' => 0.0, 'trips' => 0, 'revenue' => 0.0, 'tone' => 0.0, 'costs' => [], 'driver_costs' => [],
                     'semi_costs' => [], 'semi_km' => [], 'allocated_to' => [], 'own_cost' => 0.0, 'unallocated_semi_cost' => 0.0,
-                    'by_driver' => [], 'by_benef' => [], 'by_type' => [], 'by_bt' => [], 'trip_ids' => [], 'flags' => []];
+                    'by_driver' => [], 'by_benef' => [], 'by_type' => [], 'by_bt' => [], 'by_seg' => [], 'trip_ids' => [], 'flags' => []];
             }
         };
         $semiKmByTractor = [];   // semi => tractor => km
@@ -321,6 +330,17 @@ final class OperationalProfitabilityService
             $v['by_bt'][$btKey]['km'] += (float) $l['km_real'];
             $v['by_bt'][$btKey]['trips'] += (int) $l['cursa'];
             $v['by_bt'][$btKey]['revenue'] += (float) $l['venit'];
+            // locurile brute ale cursei (rezolvate in locuri fizice la citire: LocationDimensionService)
+            $segKey = $btKey . '|' . (int) ($l['loc_incarcare_id'] ?? 0) . '|' . (int) ($l['zona_distributie_id'] ?? 0);
+            $v['by_seg'][$segKey] ??= self::SEG_ZERO;
+            $v['by_seg'][$segKey]['km'] += (float) $l['km_real'];
+            $v['by_seg'][$segKey]['trips'] += (int) $l['cursa'];
+            $v['by_seg'][$segKey]['revenue'] += (float) $l['venit'];
+            // incarcarea (tone incarcate / livrate, capacitatea cursei, tone lipsa / peste capacitate, clienti)
+            foreach (['tone_inc', 'tone_liv', 'cap', 'tone_lipsa', 'tone_peste', 'clienti'] as $k) {
+                $v['by_seg'][$segKey][$k] += (float) $l[$k];
+            }
+            $v['by_seg'][$segKey]['cap_neconf'] += (int) $l['cap_neconf'];
             $did = (int) ($l['driver_id'] ?? 0);
             if ($did > 0) {
                 $v['by_driver'][$did] ??= ['km' => 0.0, 'trips' => 0, 'revenue' => 0.0];
@@ -480,7 +500,7 @@ final class OperationalProfitabilityService
             "SELECT c.id AS cursa_id,
                     COALESCE(s.vehicle_id, c.vehicle_id) AS vehicle_id,
                     COALESCE(s.driver_id, c.driver_id) AS driver_id,
-                    c.beneficiar_id, c.tip_transport, c.status_facturare, c.data_inceput,
+                    c.beneficiar_id, c.tip_transport, c.status_facturare, c.data_inceput, c.loc_incarcare_id, c.zona_distributie_id,
                     CONCAT(COALESCE(s.data_inceput, c.data_inceput), ' ', COALESCE(s.ora_inceput, c.ora_inceput, '12:00:00')) AS moment,
                     CASE WHEN seg.cursa_id IS NULL OR s.ordine = 1 THEN 1 ELSE 0 END AS cursa,
                     ($kmReal) * $share AS km_real,
@@ -488,6 +508,15 @@ final class OperationalProfitabilityService
                     COALESCE(c.km_dislocare, 0) * $share AS km_dislocare,
                     COALESCE(c.total_facturare, 0) * $share AS venit,
                     COALESCE(c.tona_livrata, c.cantitate_incarcata, 0) * $share AS tone,
+                    COALESCE(c.cantitate_incarcata, 0) * $share AS tone_inc,
+                    COALESCE(c.tona_livrata, c.cantitate_incarcata, 0) * $share AS tone_liv,
+                    COALESCE(c.nr_clienti, 0) * $share AS clienti,
+                    -- capacitatea = instantaneul cursei (nu fisa de azi a vehiculului); doar cursele cu incarcare si capacitate
+                    CASE WHEN c.capacitate_transport > 0 AND c.cantitate_incarcata > 0 THEN c.capacitate_transport ELSE 0 END * $share AS cap,
+                    CASE WHEN c.capacitate_transport > 0 AND c.cantitate_incarcata > 0 THEN GREATEST(c.capacitate_transport - c.cantitate_incarcata, 0) ELSE 0 END * $share AS tone_lipsa,
+                    CASE WHEN c.capacitate_transport > 0 AND c.cantitate_incarcata > 0 THEN GREATEST(c.cantitate_incarcata - c.capacitate_transport, 0) ELSE 0 END * $share AS tone_peste,
+                    CASE WHEN (seg.cursa_id IS NULL OR s.ordine = 1) AND c.capacitate_transport > 0 AND c.cantitate_incarcata > 0
+                              AND COALESCE(c.capacitate_transport_confirmata, 0) = 0 THEN 1 ELSE 0 END AS cap_neconf,
                     c.durata_cursa_minute
                FROM curse_dispecer c
                LEFT JOIN (SELECT cursa_id, SUM(COALESCE(km, 0)) AS km_total FROM curse_segmente

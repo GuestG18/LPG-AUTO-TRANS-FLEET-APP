@@ -1,0 +1,182 @@
+{
+ "systems": [
+  {
+   "cat": "franare",
+   "member": "31",
+   "hitUnderMouse": "franare/franare:A1-L",
+   "open": true,
+   "name": "Frânare",
+   "sub": "B 105 NET · Axa 1 stânga",
+   "count": "7",
+   "rows": 7,
+   "groups": 0,
+   "search": false,
+   "selected": [],
+   "legendVisible": false,
+   "stageCallouts": 0,
+   "zoomed": true,
+   "xpRect": [
+    262,
+    366
+   ],
+   "stageH": 366
+  },
+  {
+   "cat": "franare",
+   "member": "31",
+   "hitUnderMouse": "franare/franare:A1-R",
+   "open": true,
+   "name": "Frânare",
+   "sub": "B 105 NET · Axa 1 dreapta",
+   "count": "7",
+   "rows": 7,
+   "groups": 0,
+   "search": false,
+   "selected": [],
+   "legendVisible": false,
+   "stageCallouts": 0,
+   "zoomed": true,
+   "xpRect": [
+    262,
+    366
+   ],
+   "stageH": 366
+  },
+  {
+   "cat": "franare",
+   "member": "31",
+   "hitUnderMouse": "franare/franare:A2-L",
+   "open": true,
+   "name": "Frânare",
+   "sub": "B 105 NET · Axa 2 stânga",
+   "count": "7",
+   "rows": 7,
+   "groups": 0,
+   "search": false,
+   "selected": [],
+   "legendVisible": false,
+   "stageCallouts": 0,
+   "zoomed": true,
+   "xpRect": [
+    262,
+    366
+   ],
+   "stageH": 366
+  },
+  {
+   "cat": "franare",
+   "member": "31",
+   "hitUnderMouse": "franare/franare:A2-R",
+   "open": true,
+   "name": "Frânare",
+   "sub": "B 105 NET · Axa 2 dreapta",
+   "count": "7",
+   "rows": 7,
+   "groups": 0,
+   "search": false,
+   "selected": [],
+   "legendVisible": false,
+   "stageCallouts": 0,
+   "zoomed": true,
+   "xpRect": [
+    262,
+    366
+   ],
+   "stageH": 366
+  }
+ ],
+ "interact": {
+  "system": "franare",
+  "count": "7",
+  "wearShown": {
+   "total": 8,
+   "none": 8
+  },
+  "inspectorOpenMs": 367,
+  "afterRow": {
+   "open": true,
+   "name": "Frânare",
+   "sub": "B 105 NET · Axa 1 stânga",
+   "count": "7",
+   "rows": 7,
+   "groups": 0,
+   "search": false,
+   "selected": [
+    "3-1"
+   ],
+   "legendVisible": false,
+   "stageCallouts": 0,
+   "zoomed": true,
+   "xpRect": [
+    673,
+    258
+   ],
+   "stageH": 680
+  },
+  "inspectorTitle": "Se încarcă componenta...",
+  "secondRow": {
+   "want": "3-2",
+   "selected": [
+    "3-2"
+   ]
+  },
+  "afterInspectorClose": {
+   "open": true,
+   "name": "Frânare",
+   "sub": "B 105 NET · Axa 1 stânga",
+   "count": "7",
+   "rows": 7,
+   "groups": 0,
+   "search": false,
+   "selected": [],
+   "legendVisible": false,
+   "stageCallouts": 0,
+   "zoomed": true,
+   "xpRect": [
+    262,
+    366
+   ],
+   "stageH": 366
+  },
+  "afterClose": {
+   "open": false,
+   "rows": 0,
+   "groups": 0,
+   "search": false,
+   "selected": [],
+   "legendVisible": true,
+   "stageCallouts": 0,
+   "zoomed": false,
+   "xpRect": [
+    0,
+    0
+   ],
+   "stageH": 366
+  }
+ },
+ "rapidTarget": {
+  "hidden": "fx-hot fx-hot-franare",
+  "under": ""
+ },
+ "rapid": {
+  "want": "franare:A1-R",
+  "got": "B 105 NET · Axa 1 stânga",
+  "open": true,
+  "selectedHot": "franare:A1-L"
+ },
+ "trailer": {
+  "member": "32",
+  "cat": "franare",
+  "name": "Frânare",
+  "sub": "B 935 NET · Axa 1 stânga",
+  "count": "7"
+ },
+ "errors": [],
+ "driver": {
+  "id": 14,
+  "mounted": true,
+  "xpOpen": 0,
+  "xpOpenAfterClick": 0,
+  "errors": []
+ }
+}

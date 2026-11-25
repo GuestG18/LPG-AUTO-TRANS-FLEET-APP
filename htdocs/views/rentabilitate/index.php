@@ -20,6 +20,8 @@ $config = [
     'from' => $from,
     'to' => $to,
     'canExport' => !empty($canExport),
+    'canEditLocations' => !empty($canEditLocations),
+    'csrf' => csrf_token(),
     'beneficiaries' => $beneficiaries ?? [],
 ];
 $links = $links ?? [];
@@ -43,13 +45,13 @@ $jsVersion = (string) @filemtime(BASE_PATH . '/assets/js/rentabilitate.js');
         <div class="rop-mode" role="tablist" aria-label="Perspectivă">
             <button type="button" class="rop-mode-btn is-active" data-mode="vehicule" role="tab"><i class="bi bi-truck"></i>Vehicule</button>
             <button type="button" class="rop-mode-btn" data-mode="soferi" role="tab"><i class="bi bi-person"></i>Șoferi</button>
+            <button type="button" class="rop-mode-btn" data-mode="locatii" role="tab"><i class="bi bi-geo-alt"></i>Locații</button>
         </div>
         <label class="rop-search" for="ropSearch">
             <i class="bi bi-search" aria-hidden="true"></i>
             <input type="search" id="ropSearch" placeholder="Caută vehicul, șofer, beneficiar..." autocomplete="off">
         </label>
         <label class="rop-select"><select id="ropTip" aria-label="Tip transport"><option value="">Tip transport</option></select></label>
-        <label class="rop-select"><select id="ropBenef" aria-label="Beneficiar"><option value="">Beneficiar</option></select></label>
         <label class="rop-select rop-select-sm"><select id="ropStatus" aria-label="Status">
             <option value="">Status</option>
             <option value="profitabil">Profitabil</option>
@@ -88,6 +90,21 @@ $jsVersion = (string) @filemtime(BASE_PATH . '/assets/js/rentabilitate.js');
         </div>
     </div>
 
+    <?php /* Filtrele cu selectie multipla (rentabilitate.js, MultiFilter): Beneficiar, Vehicule, Șoferi, Loc încărcare,
+             Zonă distribuție, Depozit. Valorile = liste "3,5,8" in URL; serverul le valideaza (aplicat). */ ?>
+    <div class="rop-mf" id="ropMulti" role="group" aria-label="Filtre cu selecție multiplă"></div>
+
+    <?php /* Modul Locatii: aceeasi cursa privita dupa locul fizic, cu rolul dat de tipul de transport (LocationDimensionService). */ ?>
+    <div class="rop-dims" id="ropDims" hidden>
+        <div class="rop-dims-seg" role="tablist" aria-label="Grupare pe locație">
+            <button type="button" data-dim="origine" role="tab"><i class="bi bi-box-arrow-right"></i>Loc încărcare</button>
+            <button type="button" data-dim="destinatie" role="tab"><i class="bi bi-geo-alt"></i>Zonă distribuție</button>
+            <button type="button" data-dim="depozit" role="tab"><i class="bi bi-building"></i>Depozit / Bază</button>
+        </div>
+        <span class="rop-dims-hint" id="ropDimHint"></span>
+        <button type="button" class="rop-btn-outline rop-btn-sm" data-manage-locations><i class="bi bi-diagram-3"></i><span><?= !empty($canEditLocations) ? 'Gestionează locațiile' : 'Locații fizice' ?></span></button>
+    </div>
+
     <?php /* Cardurile KPI (assets/js/rentabilitate-kpi.js): filtrele lor sunt starea paginii (aceeasi ca bara de sus si tabelul). */ ?>
     <section id="ropKpis" aria-label="Indicatori de rentabilitate"></section>
     <div class="rop-active" id="ropActive" hidden></div>
@@ -95,6 +112,8 @@ $jsVersion = (string) @filemtime(BASE_PATH . '/assets/js/rentabilitate.js');
     <div class="rop-quality" id="ropQuality" hidden></div>
 
     <div class="rop-card">
+        <?php /* Bara selectiei din tabel (bifele): filtrare pe selectie / export al selectiei. */ ?>
+        <div class="rop-selbar" id="ropSelBar" hidden></div>
         <table class="rop-table" id="ropTable">
             <colgroup>
                 <col style="width:3.4%"><col style="width:4%"><col style="width:12.2%"><col style="width:13.8%"><col style="width:10.6%"><col style="width:8.8%">

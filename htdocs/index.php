@@ -19,6 +19,14 @@ if (PHP_SAPI !== 'cli' && str_starts_with($requestPath, $whatsAppBotApiPrefix)) 
     $whatsAppBotApiPath = substr($requestPath, strlen($whatsAppBotApiPrefix));
 }
 
+// Chat Interactiv (/api/chat-interactiv/...): serverul multiplayer salveaza mesajele, server-to-server.
+$chatInteractivApiPath = null;
+$chatInteractivApiPrefix = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/') . '/api/chat-interactiv/';
+if (PHP_SAPI !== 'cli' && str_starts_with($requestPath, $chatInteractivApiPrefix)) {
+    define('FLEET_STATELESS_REQUEST', true);
+    $chatInteractivApiPath = substr($requestPath, strlen($chatInteractivApiPrefix));
+}
+
 require_once __DIR__ . '/config/config.php';
 require_once __DIR__ . '/config/database.php';
 $composerAutoload = dirname(__DIR__) . '/vendor/autoload.php';
@@ -460,6 +468,7 @@ require_once __DIR__ . '/controllers/VehicleFinancialHistoryController.php';
 require_once __DIR__ . '/controllers/ProfitabilityController.php';
 require_once __DIR__ . '/controllers/DevOcrTestController.php';
 require_once __DIR__ . '/controllers/OcrPartsController.php';
+require_once __DIR__ . '/controllers/ChatInteractivController.php';
 
 if ($assistantApiPath !== null) {
     require_once __DIR__ . '/models/AssistantChannelModel.php';
@@ -473,6 +482,12 @@ if ($whatsAppBotApiPath !== null) {
     require_once __DIR__ . '/models/BaseModel.php';
     require_once __DIR__ . '/controllers/WhatsAppBotApiController.php';
     (new WhatsAppBotApiController())->handle($whatsAppBotApiPath);
+    exit;
+}
+
+if ($chatInteractivApiPath !== null) {
+    require_once __DIR__ . '/controllers/ChatInteractivApiController.php';
+    (new ChatInteractivApiController())->handle($chatInteractivApiPath);
     exit;
 }
 
@@ -862,6 +877,12 @@ try {
         case 'rentabilitate':
             require_auth();
             (new ProfitabilityController($db))->handle($action);
+            break;
+
+        // LPG Connect: lumea 3D multiplayer (panou informativ + chat). Serverul WS: chat_interactiv_server/.
+        case 'chat_interactiv':
+            require_auth();
+            (new ChatInteractivController($db))->handle((string) $action);
             break;
 
         case 'notificari':

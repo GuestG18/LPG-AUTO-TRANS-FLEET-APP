@@ -13,7 +13,11 @@
     var nf3 = new Intl.NumberFormat('ro-RO', { minimumFractionDigits: 3, maximumFractionDigits: 3 });
     var qs = new URLSearchParams(location.search);
     var state = {
-        mode: qs.get('mode') === 'soferi' ? 'soferi' : 'vehicule',
+        mode: ['soferi', 'locatii'].indexOf(qs.get('mode')) >= 0 ? qs.get('mode') : 'vehicule',
+        // Locatii: dimensiunea randurilor + filtrele de locatie (aplicabile in orice mod; -1 = fara loc)
+        dim: ['origine', 'destinatie', 'depozit'].indexOf(qs.get('dim')) >= 0 ? qs.get('dim') : 'depozit',
+        origine: qs.get('origine') || '', destinatie: qs.get('destinatie') || '', depozit: qs.get('depozit') || '',
+        ruta: qs.get('ruta') || '', // rute exacte „loc:zona,loc:zona” (Loc încărcare → Zonă distribuție)
         q: qs.get('q') || '', tip: qs.get('tip') || '', beneficiar: qs.get('beneficiar') || '', status: qs.get('status') || '',
         from: qs.get('from') || CFG.from, to: qs.get('to') || CFG.to, page: parseInt(qs.get('p') || '1', 10) || 1,
         per_page: parseInt(qs.get('per_page') || '25', 10) || 25, sort: qs.get('sort') || '',
@@ -37,6 +41,10 @@
         { key: 'beneficiari', label: 'Beneficiari', icon: 'bi-people' }, { key: 'investitii', label: 'Investiții', icon: 'bi-box-seam' },
         { key: 'documente', label: 'Documente', icon: 'bi-file-earmark-text' }, { key: 'soferi', label: 'Șoferi / Simulare', icon: 'bi-person-gear' }
     ];
+    var LOC_KEYS = ['origine', 'destinatie', 'depozit', 'ruta'];
+    var DIM_LABELS = { origine: 'Loc încărcare', destinatie: 'Zonă distribuție', depozit: 'Depozit / Bază' };
+    var MODE_UNITS = { vehicule: 'vehicule', soferi: 'șoferi', locatii: 'locații' };
+    function locParams() { var o = {}; LOC_KEYS.forEach(function (k) { o[k] = state[k]; }); if (state.mode === 'locatii') { o.dim = state.dim; } return o; }
     var DRIVER_TABS = [
         { key: 'costuri', label: 'Costuri', icon: 'bi-layers' }, { key: 'activitate', label: 'Curse', icon: 'bi-bezier2' },
         { key: 'vehicule', label: 'Vehicule', icon: 'bi-truck' }, { key: 'beneficiari', label: 'Beneficiari', icon: 'bi-people' },
@@ -102,16 +110,10 @@
     // ------------------------------------------------------------------ bara de instrumente
     var search = document.getElementById('ropSearch');
     var selTip = document.getElementById('ropTip');
-    var selBenef = document.getElementById('ropBenef');
     var selStatus = document.getElementById('ropStatus');
     search.value = state.q;
     selStatus.value = state.status;
-    var benefOptions = '<option value="">Beneficiar</option>';
-    Object.keys(CFG.beneficiaries || {}).sort(function (a, b) { return String(CFG.beneficiaries[a]).localeCompare(CFG.beneficiaries[b]); })
-        .forEach(function (id) { benefOptions += '<option value="' + esc(id) + '">' + esc(CFG.beneficiaries[id]) + '</option>'; });
-    selBenef.innerHTML = benefOptions;
-    selBenef.value = state.beneficiar;
-    function markSet() { [selTip, selBenef, selStatus].forEach(function (s) { s.classList.toggle('is-set', !!s.value); }); }
+    function markSet() { [selTip, selStatus].forEach(function (s) { s.classList.toggle('is-set', !!s.value); }); if (multi) { multi.render(); } }
 
     root.querySelectorAll('.rop-mode-btn').forEach(function (b) {
         b.classList.toggle('is-active', b.dataset.mode === state.mode);
@@ -121,13 +123,29 @@
             root.querySelectorAll('.rop-mode-btn').forEach(function (x) { x.classList.toggle('is-active', x === b); });
             var tb = document.getElementById('ropRows');
             tb.classList.add('is-morph');
-            search.placeholder = state.mode === 'soferi' ? 'Caută șofer, vehicul, beneficiar...' : 'Caută vehicul, șofer, beneficiar...';
+            syncModeUi();
             setTimeout(function () { load(); }, 160);
         });
     });
+    var dimBar = document.getElementById('ropDims');
+    function syncModeUi() {
+        search.placeholder = { soferi: 'Caută șofer, vehicul, beneficiar...', locatii: 'Caută locație, vehicul, beneficiar...' }[state.mode] || 'Caută vehicul, șofer, beneficiar...';
+        if (!dimBar) { return; }
+        dimBar.hidden = state.mode !== 'locatii';
+        dimBar.querySelectorAll('[data-dim]').forEach(function (b) { b.classList.toggle('is-active', b.dataset.dim === state.dim); b.setAttribute('aria-selected', String(b.dataset.dim === state.dim)); });
+        var hint = document.getElementById('ropDimHint');
+        if (hint && lastList && lastList.optiuni && lastList.optiuni.dimensiuni_info) { hint.textContent = lastList.optiuni.dimensiuni_info[state.dim] || ''; }
+    }
+    if (dimBar) {
+        dimBar.addEventListener('click', function (e) {
+            var b = e.target.closest('[data-dim]');
+            if (b && b.dataset.dim !== state.dim) { state.dim = b.dataset.dim; state.page = 1; state.sort = ''; open = {}; syncModeUi(); load(); }
+            if (e.target.closest('[data-manage-locations]')) { openLocationManager(); }
+        });
+    }
+    syncModeUi();
     search.addEventListener('input', debounce(function () { state.q = search.value.trim(); state.page = 1; load(); }, 300));
     selTip.addEventListener('change', function () { state.tip = selTip.value; state.page = 1; load(); });
-    selBenef.addEventListener('change', function () { state.beneficiar = selBenef.value; state.page = 1; load(); });
     selStatus.addEventListener('change', function () { state.status = selStatus.value; state.page = 1; load(); });
 
     // interval
@@ -167,8 +185,8 @@
     var exportBtn = document.getElementById('ropExport');
     if (exportBtn) {
         exportBtn.addEventListener('click', function () {
-            location.href = u({ action: 'export', mode: state.mode, q: state.q, tip: state.tip, beneficiar: state.beneficiar, status: state.status, from: state.from, to: state.to,
-                vehicle_id: state.vehicle_id, driver_id: state.driver_id });
+            location.href = u(Object.assign({ action: 'export', mode: state.mode, q: state.q, tip: state.tip, beneficiar: state.beneficiar, status: state.status, from: state.from, to: state.to,
+                vehicle_id: state.vehicle_id, driver_id: state.driver_id }, locParams()));
             toast('Exportul CSV pornește (filtrele curente).');
         });
     }
@@ -181,18 +199,19 @@
         return '<th class="' + (cls || 'is-num') + '" data-sort="' + key + '">' + html + cur + '</th>';
     }
     function renderHead() {
-        var v = state.mode === 'vehicule';
+        var v = state.mode === 'vehicule', l = state.mode === 'locatii';
         head.innerHTML = '<tr><th><input type="checkbox" class="rop-check" id="ropAll" aria-label="Selectează tot"></th><th></th>'
-            + sortTh('label', v ? 'Vehicul' : 'Șofer', '') + '<th>' + (v ? 'Șofer' : 'Vehicule') + '</th><th>Tip transport</th>'
+            + sortTh('label', l ? DIM_LABELS[state.dim] : (v ? 'Vehicul' : 'Șofer'), '') + '<th>' + (v ? 'Șofer' : 'Vehicule') + '</th><th>Tip transport</th>'
             + sortTh('km', 'Km total')
             + sortTh('cost_vehicle_km', 'Cost vehicul<small>(lei/km)</small>') + sortTh('cost_driver_km', 'Cost șofer<small>(lei/km)</small>')
             + sortTh('cost_total_km', 'Cost total<small>(lei/km)</small>') + sortTh('revenue_km', 'Venit<small>(lei/km)</small>')
-            + sortTh('result_km', (v ? 'Rezultat' : 'Contribuție') + '<small>(lei/km)</small>') + sortTh('coverage', 'Acoperire') + '<th>Acțiuni</th></tr>';
+            + sortTh('result_km', (v || l ? 'Rezultat' : 'Contribuție') + '<small>(lei/km)</small>') + sortTh('coverage', 'Acoperire') + '<th>Acțiuni</th></tr>';
         var all = document.getElementById('ropAll');
         all.addEventListener('click', function (e) {
             e.stopPropagation();
-            Object.keys(rowsByKey).forEach(function (k) { if (all.checked) { selected[k] = true; } else { delete selected[k]; } });
+            Object.keys(rowsByKey).forEach(function (k) { if (all.checked) { selected[k] = rowsByKey[k]; } else { delete selected[k]; } });
             tbody.querySelectorAll('.rop-row .rop-check').forEach(function (c) { c.checked = all.checked; });
+            renderSelBar();
         });
     }
     head.addEventListener('click', function (e) {
@@ -205,8 +224,9 @@
 
     function syncUrl() {
         var url = new URL(location.href);
-        ['mode', 'q', 'tip', 'beneficiar', 'status', 'from', 'to', 'sort', 'vehicle_id', 'driver_id'].forEach(function (k) {
-            if (state[k] && !(k === 'mode' && state[k] === 'vehicule')) { url.searchParams.set(k, state[k]); } else { url.searchParams.delete(k); }
+        ['mode', 'q', 'tip', 'beneficiar', 'status', 'from', 'to', 'sort', 'vehicle_id', 'driver_id', 'dim'].concat(LOC_KEYS).forEach(function (k) {
+            var keep = state[k] && !(k === 'mode' && state[k] === 'vehicule') && !(k === 'dim' && state.mode !== 'locatii');
+            if (keep) { url.searchParams.set(k, state[k]); } else { url.searchParams.delete(k); }
         });
         if (state.page > 1) { url.searchParams.set('p', state.page); } else { url.searchParams.delete('p'); }
         history.replaceState(null, '', url.toString());
@@ -219,18 +239,20 @@
         tbody.classList.add('is-busy');
         if (kpis) { kpis.update(null, true); }
         var keep = keepFilter; keepFilter = '';
-        return get('list', { mode: state.mode, q: state.q, tip: state.tip, beneficiar: state.beneficiar, status: state.status, p: state.page, per_page: state.per_page, sort: state.sort,
-            vehicle_id: state.vehicle_id, driver_id: state.driver_id, keep: keep }, abort.signal)
+        return get('list', Object.assign({ mode: state.mode, q: state.q, tip: state.tip, beneficiar: state.beneficiar, status: state.status, p: state.page, per_page: state.per_page, sort: state.sort,
+            vehicle_id: state.vehicle_id, driver_id: state.driver_id, keep: keep }, locParams()), abort.signal)
             .then(function (d) {
                 tbody.classList.remove('is-busy', 'is-morph');
                 if (!d.ok) { tbody.innerHTML = emptyRow('bi-exclamation-triangle', d.message || 'Eroare.'); if (kpis) { kpis.update(null, false); } return; }
                 lastList = d;
                 state.from = d.from; state.to = d.to; rangeLabel();
                 applyServerFilters(d);
+                syncModeUi();
                 renderTypes(d.optiuni.tipuri);
                 if (kpis) { kpis.update(d, false); }
                 renderActive(d);
                 renderQuality(d);
+                Object.keys(open).forEach(function (k) { open[k].loc = null; }); // detaliul locatiei urmeaza filtrele
                 renderRows(d.rows);
                 renderPager(d);
             })
@@ -240,14 +262,15 @@
     // ------------------------------------------------------------------ starea comuna a filtrelor
     // Sursa de adevar: ce a aplicat serverul (d.aplicat). O selectie incompatibila (ex. vehicul fara curse de
     // Distributie) e scoasa de server si anuntata aici; bara de sus, cardurile si tabelul se aliniaza la ea.
-    var FILTER_LABELS = { tip: 'Tip transport', beneficiar: 'Beneficiar', vehicle_id: 'Vehicul', driver_id: 'Șofer' };
+    var FILTER_LABELS = { tip: 'Tip transport', beneficiar: 'Beneficiar', vehicle_id: 'Vehicul', driver_id: 'Șofer', origine: 'Loc încărcare', destinatie: 'Zonă distribuție', depozit: 'Depozit', ruta: 'Rute' };
     function applyServerFilters(d) {
         var a = d.aplicat || {};
         state.tip = a.tip || '';
         state.beneficiar = a.beneficiar ? String(a.beneficiar) : '';
         state.vehicle_id = a.vehicle_id ? String(a.vehicle_id) : '';
         state.driver_id = a.driver_id ? String(a.driver_id) : '';
-        selBenef.value = state.beneficiar;
+        LOC_KEYS.forEach(function (k) { state[k] = a[k] ? String(a[k]) : ''; });
+        if (a.dim) { state.dim = a.dim; }
         markSet(); syncUrl();
         if (d.anulate && d.anulate.length) {
             toast(d.anulate.map(function (k) { return FILTER_LABELS[k] || k; }).join(', ') + ': fără activitate pentru filtrele alese — selecția a fost scoasă.');
@@ -256,7 +279,6 @@
     function setFilters(patch, key) {
         Object.keys(patch).forEach(function (k) { state[k] = patch[k] == null ? '' : String(patch[k]); });
         if (patch.tip !== undefined) { selTip.value = state.tip; }
-        if (patch.beneficiar !== undefined) { selBenef.value = state.beneficiar; }
         if (patch.status !== undefined) { selStatus.value = state.status; }
         if (patch.q !== undefined) { search.value = state.q; }
         keepFilter = key || '';
@@ -274,25 +296,29 @@
     var activeBox = document.getElementById('ropActive');
     function renderActive(d) {
         var a = d.aplicat || {}, o = d.optiuni || {}, chips = [];
-        var find = function (list, id) { return (list || []).filter(function (x) { return String(x.id) === String(id); })[0]; };
         if (a.tip) { chips.push(['tip', 'bi-truck', (o.tipuri || {})[a.tip] || a.tip]); }
-        if (a.beneficiar) { chips.push(['beneficiar', 'bi-people', (o.beneficiari || {})[a.beneficiar] || ('#' + a.beneficiar)]); }
-        if (a.vehicle_id) { var v = find(o.vehicule, a.vehicle_id); chips.push(['vehicle_id', 'bi-box', v ? v.label : '#' + a.vehicle_id]); }
-        if (a.driver_id) { var s = find(o.soferi, a.driver_id); chips.push(['driver_id', 'bi-person', s ? s.label : '#' + a.driver_id]); }
+        // filtrele cu selectie multipla: un cip pe filtru („Vehicule: B 1, B 2 +3”), x scoate toata selectia
+        MULTI.forEach(function (m) {
+            var ids = splitIds(a[m.key]);
+            if (!ids.length) { return; }
+            var names = ids.map(function (id) { return optionLabel(m, id, d); });
+            var text = names.length === 1 ? names[0] : names.slice(0, 2).join(', ') + (names.length > 2 ? ' +' + (names.length - 2) : '');
+            chips.push([m.key, m.icon, (ids.length > 1 || LOC_KEYS.indexOf(m.key) >= 0 ? m.label + ': ' : '') + text, names.join(', ')]);
+        });
         if (state.status) { chips.push(['status', 'bi-flag', selStatus.options[selStatus.selectedIndex] ? selStatus.options[selStatus.selectedIndex].text : state.status]); }
         if (state.q) { chips.push(['q', 'bi-search', '„' + state.q + '”']); }
         // randul ramane mereu afisat (fara filtre: „toata flota”), ca tabelul sa nu sara cand apare / dispare un filtru
         activeBox.hidden = false;
         activeBox.classList.toggle('is-empty', chips.length === 0);
         activeBox.innerHTML = '<i class="bi bi-funnel"></i><b>Filtre active:</b>' + (chips.length ? chips.map(function (c) {
-            return '<span class="rop-chip"><i class="bi ' + c[1] + '"></i>' + esc(c[2]) + '<button type="button" data-chip="' + c[0] + '" aria-label="Scoate filtrul ' + esc(c[2]) + '"><i class="bi bi-x"></i></button></span>';
+            return '<span class="rop-chip"' + (c[3] ? ' title="' + esc(c[3]) + '"' : '') + '><i class="bi ' + c[1] + '"></i>' + esc(c[2]) + '<button type="button" data-chip="' + c[0] + '" aria-label="Scoate filtrul ' + esc(c[2]) + '"><i class="bi bi-x"></i></button></span>';
         }).join('') + '<button type="button" class="rop-active-reset" data-chip-all><i class="bi bi-arrow-counterclockwise"></i>Resetează toate filtrele</button>'
-            : '<span class="rop-active-none">Niciun filtru · ' + (state.mode === 'soferi' ? 'toți șoferii' : 'toată flota') + '</span>');
+            : '<span class="rop-active-none">Niciun filtru · ' + (state.mode === 'soferi' ? 'toți șoferii' : (state.mode === 'locatii' ? 'toate locațiile' : 'toată flota')) + '</span>');
     }
     activeBox.addEventListener('click', function (e) {
         var c = e.target.closest('[data-chip]');
         if (c) { var p = {}; p[c.dataset.chip] = ''; setFilters(p); return; }
-        if (e.target.closest('[data-chip-all]')) { setFilters({ tip: '', beneficiar: '', vehicle_id: '', driver_id: '', status: '', q: '' }); }
+        if (e.target.closest('[data-chip-all]')) { setFilters({ tip: '', beneficiar: '', vehicle_id: '', driver_id: '', status: '', q: '', origine: '', destinatie: '', depozit: '', ruta: '' }); }
     });
 
     function renderTypes(types) {
@@ -308,10 +334,13 @@
         var t = d.kpi || d.totals, missing = d.lipsa || [];
         var parts = [];
         if (t.km > 0) {
-            parts.push('<b>' + (state.mode === 'vehicule' ? (t.unitati) + ' vehicule' : (t.unitati) + ' șoferi') + '</b> · ' + nf0.format(t.km) + ' km · venit ' + nf0.format(t.revenue)
+            parts.push('<b>' + t.unitati + ' ' + MODE_UNITS[state.mode] + '</b> · ' + nf0.format(t.km) + ' km · venit ' + nf0.format(t.revenue)
                 + ' lei · cost ' + nf0.format(t.cost) + ' lei · <b>' + (t.result < 0 ? '' : '+') + nf0.format(t.result) + ' lei</b> (' + (t.coverage !== null ? nf1.format(t.coverage) + '% acoperire' : '—') + ')');
         }
         parts.push('Venitul = tariful cursei (nefacturat încă), nu încasarea.');
+        if (state.mode === 'locatii') {
+            parts.push('Costul unei locații = costul / km al fiecărui vehicul × km-ii curselor lui din acea locație (costul vehiculelor fără curse și al semiremorcilor necuplate nu ține de nicio locație).');
+        }
         if (missing.length) {
             parts.push('<b>Cost parțial / Date incomplete:</b> ' + missing.slice(0, 6).map(function (m) { return esc(m.nume); }).join(', ') + (missing.length > 6 ? ' și încă ' + (missing.length - 6) : '') + ' fără sursă sau valoare (nu sunt tratate ca 0).');
         }
@@ -324,10 +353,11 @@
         var typePill = r.is_semi ? '<span class="rop-pill t-semi">Semiremorcă</span>' : (r.transport ? '<span class="rop-pill t-' + esc(r.transport) + '">' + esc(r.transport_label) + '</span>' : '<span class="rop-na">—</span>');
         var warn = r.incomplet && r.incomplet.length ? ' <i class="bi bi-exclamation-triangle rop-warn" title="' + esc('Date incomplete: ' + r.incomplet.join('; ')) + '"></i>' : '';
         var person = v ? (r.driver_count > 1 ? 'bi-people' : 'bi-person') : 'bi-truck';
+        var sub = r.is_semi || state.mode === 'locatii' ? r.tip_label : '';
         return '<tr class="rop-row' + (isOpen ? ' is-open' : '') + '" data-key="' + esc(r.key) + '">'
             + '<td><input type="checkbox" class="rop-check" aria-label="Selectează"' + (selected[r.key] ? ' checked' : '') + '></td>'
             + '<td><button type="button" class="rop-exp" data-exp aria-expanded="' + isOpen + '" aria-label="Detalii"><i class="bi bi-chevron-right"></i></button></td>'
-            + '<td><div class="rop-veh"><span class="rop-dot is-' + esc(r.activitate) + '" title="' + esc({ activ: 'Activ în perioadă', fara_activitate: 'Fără curse în perioadă', inactiv: 'Inactiv' }[r.activitate]) + '"></span><span class="rop-veh-text"><b>' + esc(r.label) + '</b>' + (r.is_semi ? '<small>' + esc(r.tip_label) + '</small>' : '') + '</span></div></td>'
+            + '<td><div class="rop-veh"><span class="rop-dot is-' + esc(r.activitate) + '" title="' + esc({ activ: 'Activ în perioadă', fara_activitate: 'Fără curse în perioadă', inactiv: 'Inactiv' }[r.activitate]) + '"></span><span class="rop-veh-text"><b>' + esc(r.label) + '</b>' + (sub ? '<small>' + esc(sub) + '</small>' : '') + '</span></div></td>'
             + '<td><div class="rop-person"><i class="bi ' + person + '"></i><span title="' + esc(r.drivers) + '">' + esc(r.drivers) + '</span></div></td>'
             + '<td>' + typePill + '</td>'
             + '<td class="is-num">' + km(r.km) + '</td>'
@@ -343,7 +373,7 @@
     function renderRows(rows) {
         rowsByKey = {};
         if (!rows.length) {
-            tbody.innerHTML = emptyRow('bi-inboxes', state.q || state.tip || state.beneficiar || state.status ? 'Niciun rezultat pentru filtrele alese.' : 'Nicio activitate în perioada aleasă.');
+            tbody.innerHTML = emptyRow('bi-inboxes', state.q || state.tip || state.beneficiar || state.status || state.origine || state.destinatie || state.depozit || state.ruta ? 'Niciun rezultat pentru filtrele alese.' : 'Nicio activitate în perioada aleasă.');
             return;
         }
         var html = '';
@@ -354,11 +384,12 @@
         });
         tbody.innerHTML = html;
         Object.keys(open).forEach(function (k) { if (!rowsByKey[k]) { delete open[k]; } else { loadSummary(k); } });
+        renderSelBar();
     }
 
     function renderPager(d) {
         var el = document.getElementById('ropPager');
-        if (d.total <= d.per_page) { el.innerHTML = '<span><b>' + d.total + '</b> ' + (state.mode === 'vehicule' ? 'vehicule' : 'șoferi') + ' · ' + dt(d.from) + ' – ' + dt(d.to) + '</span>'; return; }
+        if (d.total <= d.per_page) { el.innerHTML = '<span><b>' + d.total + '</b> ' + MODE_UNITS[state.mode] + ' · ' + dt(d.from) + ' – ' + dt(d.to) + '</span>'; return; }
         var b = '<button type="button" data-page="' + (d.page - 1) + '"' + (d.page <= 1 ? ' disabled' : '') + '><i class="bi bi-chevron-left"></i></button>';
         for (var p = 1; p <= d.pages; p++) { b += '<button type="button" data-page="' + p + '" class="' + (p === d.page ? 'is-active' : '') + '">' + p + '</button>'; }
         b += '<button type="button" data-page="' + (d.page + 1) + '"' + (d.page >= d.pages ? ' disabled' : '') + '><i class="bi bi-chevron-right"></i></button>';
@@ -376,16 +407,17 @@
         var tr = e.target.closest('tr.rop-row');
         if (!tr) { return; }
         var key = tr.dataset.key, r = rowsByKey[key];
-        if (e.target.matches('.rop-check')) { e.stopPropagation(); if (e.target.checked) { selected[key] = true; } else { delete selected[key]; } return; }
+        if (e.target.matches('.rop-check')) { e.stopPropagation(); if (e.target.checked) { selected[key] = r; } else { delete selected[key]; } renderSelBar(); return; }
         if (e.target.closest('[data-menu]')) { e.stopPropagation(); rowMenu(e.target.closest('[data-menu]'), r); return; }
         open[key] ? collapse(key) : expand(key);
     });
 
     function rowMenu(anchor, r) {
+        if (state.mode === 'locatii') { return locationMenu(anchor, r); }
         var veh = state.mode === 'vehicule';
         showMenu(anchor, [
             { icon: 'bi-arrows-angle-expand', label: open[r.key] ? 'Restrânge detaliile' : 'Deschide detaliile', run: function () { open[r.key] ? collapse(r.key) : expand(r.key); } },
-            veh ? { icon: 'bi-layers', label: 'Istoric Financiar Vehicul', href: link(CFG.urls.istoric, { q: r.label }) } : null,
+            veh ? { icon: 'bi-layers', label: 'Istoric Vehicul', href: link(CFG.urls.istoric, { q: r.label }) } : null,
             veh ? { icon: 'bi-truck', label: 'Fișa vehiculului', href: link(location.pathname, { page: 'vehicule', action: 'show', id: r.id }) } : { icon: 'bi-person-vcard', label: 'Fișa șoferului', href: link(location.pathname, { page: 'soferi', action: 'show', id: r.id }) },
             { icon: 'bi-funnel', label: 'Doar acest rând', run: function () { search.value = r.label; state.q = r.label; state.page = 1; load(); } },
             '-',
@@ -421,6 +453,7 @@
     function loadSummary(key) {
         var st = open[key], r = rowsByKey[key];
         if (!st || !r) { return; }
+        if (state.mode === 'locatii') { loadLocation(key); return; }
         if (st.summary) { renderWs(key); return; }
         get(state.mode === 'vehicule' ? 'vehicle' : 'driver', { id: r.id }).then(function (d) {
             if (!open[key]) { return; }
@@ -754,7 +787,7 @@
         return rows.map(function (v) {
             var s = v.sumar, val = v.valoare || {};
             var done = (v.stadii || []).filter(function (x) { return x.state === 'done'; }).length;
-            var head = '<h5>' + (v.semiremorca ? 'Semiremorcă ' : '') + esc(v.nr) + (v.dosar ? ' · dosar ' + esc(v.dosar.cod) : '') + '<a href="' + esc(link(CFG.urls.istoric, { q: v.nr })) + '" target="_blank" rel="noopener">Deschide în Istoric Financiar ↗</a></h5>';
+            var head = '<h5>' + (v.semiremorca ? 'Semiremorcă ' : '') + esc(v.nr) + (v.dosar ? ' · dosar ' + esc(v.dosar.cod) : '') + '<a href="' + esc(link(CFG.urls.istoric, { q: v.nr })) + '" target="_blank" rel="noopener">Deschide în Istoric Vehicul ↗</a></h5>';
             var acq = v.dosar ? '<table class="rop-list"><tbody>'
                 + '<tr><td>Valoare de achiziție (preț + costuri aducere)</td><td class="is-num"><b>' + lei(val.cost_initial) + '</b></td></tr>'
                 + '<tr><td>Capitalizat la achiziție (confirmat)</td><td class="is-num">' + lei(s ? s.cost_initial_capitalizabil : null) + '</td></tr>'
@@ -885,6 +918,347 @@
                 if (inp) { inp.focus(); }
             }
         }, 500));
+    }
+
+    // ------------------------------------------------------------------ Locatii (Origine / Destinatie / Depozit)
+    // Filtrul unei locatii pe dimensiunea curenta (-1 = fara loc) — la fel in modurile Vehicule / Soferi.
+    function locationFilter(r) { var p = { origine: '', destinatie: '', depozit: '' }; p[state.dim] = r.id > 0 ? r.id : -1; return p; }
+    function switchMode(mode, patch) {
+        state.mode = mode; state.sort = ''; open = {}; selected = {};
+        root.querySelectorAll('.rop-mode-btn').forEach(function (x) { x.classList.toggle('is-active', x.dataset.mode === mode); });
+        syncModeUi();
+        setFilters(patch);
+    }
+    function locationMenu(anchor, r) {
+        showMenu(anchor, [
+            { icon: 'bi-arrows-angle-expand', label: open[r.key] ? 'Restrânge detaliile' : 'Vehicule și rute', run: function () { open[r.key] ? collapse(r.key) : expand(r.key); } },
+            { icon: 'bi-truck', label: 'Vehiculele din această locație', run: function () { switchMode('vehicule', locationFilter(r)); } },
+            { icon: 'bi-person', label: 'Șoferii din această locație', run: function () { switchMode('soferi', locationFilter(r)); } },
+            { icon: 'bi-funnel', label: 'Restrânge la această locație', run: function () { setFilters(locationFilter(r)); } },
+            CFG.canEditLocations ? '-' : null,
+            CFG.canEditLocations ? { icon: 'bi-geo-alt', label: 'Gestionează locațiile fizice', run: function () { openLocationManager(r.id); } } : null,
+            CFG.canExport ? { icon: 'bi-download', label: 'Exportă rezultatele filtrate', run: function () { exportBtn && exportBtn.click(); } } : null
+        ]);
+    }
+    function loadLocation(key) {
+        var st = open[key], r = rowsByKey[key];
+        if (st.loc) { renderLocation(key); return; }
+        get('location_detail', Object.assign({ id: r.id, mode: 'locatii', tip: state.tip, beneficiar: state.beneficiar, vehicle_id: state.vehicle_id, driver_id: state.driver_id }, locParams()))
+            .then(function (d) {
+                if (!open[key]) { return; }
+                if (!d.ok) { ws(key).innerHTML = '<div class="rop-note is-warn">' + esc(d.message) + '</div>'; return; }
+                st.loc = d; renderLocation(key);
+            });
+    }
+    // Incarcarea pe vehicul (Pe vehicule): tone incarcate / livrate, clienti, tone lipsa fata de capacitatea cursei.
+    function tons(v) { return v ? nf2.format(v) : '<span class="rop-na">—</span>'; }
+    function loadCells(x) {
+        var fill = x.grad_umplere === null || x.grad_umplere === undefined ? '' : '<small class="rop-fill ' + (x.grad_umplere < 95 ? 'is-low' : '') + '">' + nf1.format(x.grad_umplere) + '% umplere</small>';
+        var warn = x.cap_neconfirmata > 0 ? ' <i class="bi bi-exclamation-triangle rop-warn" title="' + esc('Capacitate neconfirmată pe ' + x.cap_neconfirmata + ' curse (instantaneul cursei; verifică în Management capacități)') + '"></i>' : '';
+        var over = x.tone_peste > 0.005 ? '<small class="rop-over" title="Tone încărcate peste capacitatea cursei (nu compensează lipsa altor curse)">+' + nf2.format(x.tone_peste) + ' t peste</small>' : '';
+        return '<td class="is-num">' + tons(x.tone_inc) + '</td><td class="is-num">' + tons(x.tone_liv) + '</td>'
+            + '<td class="is-num">' + (x.clienti ? nf0.format(x.clienti) : '<span class="rop-na">—</span>') + '</td>'
+            + '<td class="is-num rop-lipsa"><b class="' + (x.tone_lipsa > 0.005 ? 'is-neg' : '') + '">' + (x.capacitate > 0 ? nf2.format(x.tone_lipsa) : '<span class="rop-na">—</span>') + '</b>' + warn + fill + over + '</td>';
+    }
+    function locTable(title, first, second, rows, routes) {
+        if (!rows.length) { return ''; }
+        var load = !routes; // coloanele de incarcare: doar pe vehicule
+        var body = rows.map(function (x) {
+            return '<tr class="is-click" ' + (routes ? 'data-loc-route="' + x.origine + ':' + x.destinatie + '"' : 'data-loc-vehicle="' + x.id + '"') + '><td><b>' + esc(x.label) + '</b>' + (x.model ? ' <small class="rop-muted">' + esc(x.model) + '</small>' : '') + '</td>'
+                + '<td>' + esc(x.drivers || '') + '</td><td class="is-num">' + x.trips + '</td><td class="is-num">' + nf0.format(x.km) + '</td>'
+                + (load ? loadCells(x) : '')
+                + '<td class="is-num">' + n2(x.cost_total_km) + '</td><td class="is-num">' + n2(x.revenue_km) + '</td>'
+                + '<td class="is-num"><span class="rop-res ' + resClass(x.result_km) + '" style="height:24px;min-width:60px;font-size:13.5px">' + signed(x.result_km) + '</span></td>'
+                + '<td class="is-num ' + (x.result < 0 ? 'rop-neg' : 'rop-pos') + '">' + signed(x.result) + '</td></tr>';
+        }).join('');
+        var foot = '';
+        if (load && rows.length > 1) {
+            // totalul vehiculelor (tone si capacitate insumate; umplerea = ponderata, nu medie de procente)
+            var t = { trips: 0, km: 0, tone_inc: 0, tone_liv: 0, clienti: 0, capacitate: 0, tone_lipsa: 0, tone_peste: 0, cap_neconfirmata: 0, result: 0, cost: 0, revenue: 0 };
+            rows.forEach(function (x) { Object.keys(t).forEach(function (k) { t[k] += Number(k === 'cost' ? x.cost_total : x[k]) || 0; }); });
+            t.grad_umplere = t.capacitate > 0 ? (t.capacitate - t.tone_lipsa + t.tone_peste) / t.capacitate * 100 : null;
+            foot = '<tfoot><tr><td><b>Total</b></td><td></td><td class="is-num">' + t.trips + '</td><td class="is-num">' + nf0.format(t.km) + '</td>' + loadCells(t)
+                + '<td class="is-num">' + n2(t.km > 0 ? t.cost / t.km : null) + '</td><td class="is-num">' + n2(t.km > 0 ? t.revenue / t.km : null) + '</td>'
+                + '<td class="is-num">' + (t.km > 0 ? signed((t.revenue - t.cost) / t.km) : '—') + '</td><td class="is-num ' + (t.result < 0 ? 'rop-neg' : 'rop-pos') + '"><b>' + signed(t.result) + '</b></td></tr></tfoot>';
+        }
+        return '<h5 class="rop-loc-h">' + esc(title) + '</h5><table class="rop-list' + (load ? ' rop-list-load' : '') + '"><thead><tr><th>' + esc(first) + '</th><th>' + esc(second) + '</th><th class="is-num">Curse</th><th class="is-num">Km</th>'
+            + (load ? '<th class="is-num">Tone încărcate</th><th class="is-num">Tone livrate</th><th class="is-num" title="Puncte de livrare">Clienți</th>'
+                + '<th class="is-num" title="Capacitatea cursei − tone încărcate, însumat pe cursele sub capacitate">Tone lipsă</th>' : '')
+            + '<th class="is-num">Cost/km</th><th class="is-num">Venit/km</th><th class="is-num">Rezultat/km</th><th class="is-num">Rezultat total (lei)</th></tr></thead><tbody>' + body + '</tbody>' + foot + '</table>';
+    }
+    function renderLocation(key) {
+        var st = open[key], d = st.loc, r = rowsByKey[key], box = ws(key);
+        if (!box || !d) { return; }
+        var sum = '<div class="rop-sum">'
+            + sumItem('bi-geo-alt', DIM_LABELS[state.dim], esc(r.label), 'is-ident')
+            + sumItem('bi-truck', 'Vehicule', String(d.vehicles.length))
+            + sumItem('bi-signpost-split', 'Curse', nf0.format(r.trips))
+            + sumItem('bi-speedometer2', 'Km', km(r.km))
+            + sumItem('bi-cash-stack', 'Rezultat', lei(r.result), r.result < 0 ? 'is-bad' : 'is-good')
+            + '</div>';
+        box.innerHTML = sum
+            + locTable('Rute (Loc încărcare → Zonă distribuție)', 'Rută', 'Vehicule', d.routes, true)
+            + locTable('Pe vehicule', 'Vehicul', 'Beneficiari', d.vehicles, false)
+            + '<div class="rop-note">Tone livrate = tonele înregistrate la livrare; unde nu s-au înregistrat separat, sunt egale cu cele încărcate. Tone lipsă = capacitatea cursei (instantaneul ei, nu fișa de azi a vehiculului) − tonele încărcate, doar pe cursele sub capacitate; supraîncărcarea apare separat („peste”) și nu compensează lipsa. Clic pe o rută: vehiculele acelei rute exacte. Clic pe un vehicul: îl deschide în modul Vehicule, restrâns la această locație. Rezultatul pe rută / vehicul = venitul curselor − costul / km al vehiculului × km-ii lor.</div>';
+        box.onclick = function (e) {
+            var t = e.target.closest('[data-loc-vehicle]');
+            if (t) { var p = locationFilter(r); p.vehicle_id = t.dataset.locVehicle; switchMode('vehicule', p); return; }
+            var rt = e.target.closest('[data-loc-route]');
+            if (rt) { var pr = locationFilter(r); pr[state.dim] = ''; pr.ruta = rt.dataset.locRoute; switchMode('vehicule', pr); }
+        };
+    }
+
+    // ---- Gestionarea locurilor fizice (strat de raportare: nu schimba tarifele sau configurarea transportului)
+    var locModal = null;
+    function post(payload) {
+        return fetch(u({ action: 'save_location' }), { method: 'POST', credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-CSRF-Token': CFG.csrf || '' }, body: JSON.stringify(payload) })
+            .then(function (r) { return r.json().catch(function () { return { ok: false, message: 'Răspuns invalid (' + r.status + ').' }; }); });
+    }
+    function openLocationManager(focusId) {
+        if (!locModal) {
+            locModal = document.createElement('div');
+            locModal.className = 'rop-lm';
+            locModal.innerHTML = '<div class="rop-lm-box" role="dialog" aria-modal="true" aria-labelledby="ropLmTitle">'
+                + '<div class="rop-lm-head"><div><h3 id="ropLmTitle">Locații fizice</h3><p>Fiecare loc de încărcare și fiecare zonă de distribuție (definite per beneficiar) aparține unui singur loc fizic. '
+                + 'Rapoartele pe Origine / Destinație / Depozit grupează după aceste locuri. Tarifele și configurarea transportului nu se schimbă.</p></div>'
+                + '<button type="button" class="rop-lm-x" data-lm-close aria-label="Închide"><i class="bi bi-x-lg"></i></button></div>'
+                + '<div class="rop-lm-tools"><label class="rop-search"><i class="bi bi-search"></i><input type="search" data-lm-q placeholder="Caută locație, beneficiar..." autocomplete="off"></label></div>'
+                + '<div class="rop-lm-body" data-lm-body><span class="rop-spinner"></span> Se încarcă…</div></div>';
+            document.body.appendChild(locModal);
+            locModal.addEventListener('click', onLmClick);
+            locModal.addEventListener('change', onLmChange);
+            locModal.querySelector('[data-lm-q]').addEventListener('input', debounce(renderLm, 200));
+            document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && locModal && locModal.classList.contains('is-open')) { closeLm(); } });
+        }
+        locModal.dataset.focus = focusId || '';
+        locModal.classList.add('is-open');
+        document.body.classList.add('rop-lm-lock');
+        get('locations', {}).then(function (d) { if (d.ok) { locModal._data = d; renderLm(); } else { locModal.querySelector('[data-lm-body]').innerHTML = '<div class="rop-note is-warn">' + esc(d.message) + '</div>'; } });
+    }
+    function closeLm() {
+        locModal.classList.remove('is-open');
+        document.body.classList.remove('rop-lm-lock');
+        if (locModal._dirty) { locModal._dirty = false; open = {}; load(); }
+    }
+    function renderLm() {
+        var d = locModal._data, body = locModal.querySelector('[data-lm-body]');
+        if (!d) { return; }
+        var q = (locModal.querySelector('[data-lm-q]').value || '').trim().toLowerCase();
+        var edit = !!d.canEdit, places = d.places;
+        var options = places.map(function (p) { return '<option value="' + p.id + '">' + esc(p.nume) + '</option>'; }).join('');
+        var sug = (d.suggestions || []).map(function (s) {
+            return '<li><i class="bi bi-lightbulb"></i><span>' + esc(s.text) + '</span>' + (edit ? '<button type="button" class="rop-link-btn" data-lm-merge="' + s.from + '" data-lm-into="' + s.into + '">Unește</button>' : '') + '</li>';
+        }).join('');
+        var html = sug ? '<div class="rop-lm-sug"><b>Posibile dubluri</b> — nu se unesc automat (pot fi terminale diferite din același oraș):<ul>' + sug + '</ul></div>' : '';
+        html += places.filter(function (p) {
+            if (!q) { return true; }
+            return (p.nume + ' ' + p.surse.map(function (s) { return s.nume + ' ' + s.beneficiar; }).join(' ')).toLowerCase().indexOf(q) >= 0;
+        }).map(function (p) {
+            var head = edit
+                ? '<input type="text" class="rop-lm-name" data-lm-name="' + p.id + '" value="' + esc(p.nume) + '" maxlength="120" aria-label="Numele locației">'
+                    + '<select data-lm-type="' + p.id + '" aria-label="Tip"><option value="punct"' + (p.tip === 'punct' ? ' selected' : '') + '>Punct fizic</option><option value="regiune"' + (p.tip === 'regiune' ? ' selected' : '') + '>Regiune</option></select>'
+                : '<b>' + esc(p.nume) + '</b><span class="rop-badge is-gray">' + (p.tip === 'regiune' ? 'Regiune' : 'Punct fizic') + '</span>';
+            var roles = p.roluri.length ? p.roluri.map(function (x) { return '<span class="rop-badge">' + esc(x) + '</span>'; }).join(' ') : '<span class="rop-badge is-gray">Fără curse</span>';
+            var srcs = p.surse.map(function (s) {
+                var move = edit ? '<select data-lm-move="' + s.sursa + ':' + s.sursa_id + '" aria-label="Mută la altă locație"><option value="">Mută la…</option><option value="0">+ Locație nouă (separată)</option>' + options.replace('<option value="' + p.id + '">', '<option value="' + p.id + '" disabled>') + '</select>' : '';
+                return '<tr><td>' + esc(s.sursa_label) + '</td><td><b>' + esc(s.nume) + '</b>' + (s.activ ? '' : ' <span class="rop-badge is-gray">inactiv</span>') + (s.manual ? ' <i class="bi bi-hand-index rop-muted" title="Legat manual"></i>' : '') + '</td><td>' + esc(s.beneficiar) + '</td><td class="is-num">' + s.curse + '</td><td>' + move + '</td></tr>';
+            }).join('');
+            return '<section class="rop-lm-place' + (String(p.id) === locModal.dataset.focus ? ' is-focus' : '') + '" data-lm-place="' + p.id + '"><div class="rop-lm-ph">' + head + '<span class="rop-lm-trips">' + nf0.format(p.curse) + ' curse</span></div>'
+                + '<div class="rop-lm-roles">' + roles + '</div>'
+                + '<table class="rop-list"><thead><tr><th>Sursă</th><th>Nume în configurare</th><th>Beneficiar</th><th class="is-num">Curse</th><th>' + (edit ? 'Acțiune' : '') + '</th></tr></thead><tbody>' + srcs + '</tbody></table></section>';
+        }).join('');
+        body.innerHTML = html || '<div class="rop-note">Nicio locație.</div>';
+        var f = body.querySelector('.is-focus');
+        if (f) { f.scrollIntoView({ block: 'center' }); locModal.dataset.focus = ''; }
+    }
+    function lmSave(payload, msg) {
+        post(payload).then(function (d) {
+            if (!d.ok) { toast(d.message || 'Eroare.'); return; }
+            locModal._data = d; locModal._dirty = true; renderLm(); toast(msg);
+        });
+    }
+    function onLmClick(e) {
+        if (e.target === locModal || e.target.closest('[data-lm-close]')) { closeLm(); return; }
+        var m = e.target.closest('[data-lm-merge]');
+        if (m) { lmSave({ op: 'merge', from: Number(m.dataset.lmMerge), into: Number(m.dataset.lmInto) }, 'Locațiile au fost unite.'); }
+    }
+    function onLmChange(e) {
+        var t = e.target, id;
+        if (t.matches('[data-lm-move]') && t.value !== '') {
+            var parts = t.dataset.lmMove.split(':');
+            lmSave({ op: 'move', sursa: parts[0], sursa_id: Number(parts[1]), tinta: Number(t.value) }, t.value === '0' ? 'Mutată într-o locație nouă.' : 'Mutată.');
+            return;
+        }
+        if (t.matches('[data-lm-name]') || t.matches('[data-lm-type]')) {
+            id = t.dataset.lmName || t.dataset.lmType;
+            var sec = locModal.querySelector('[data-lm-place="' + id + '"]');
+            lmSave({ op: 'update', id: Number(id), nume: sec.querySelector('[data-lm-name]').value, tip: sec.querySelector('[data-lm-type]').value }, 'Salvat.');
+        }
+    }
+
+    // ------------------------------------------------------------------ filtre cu selectie multipla
+    // Beneficiar / Vehicule / Șoferi / Loc încărcare / Zonă distribuție / Depozit: liste "3,5,8" in starea paginii
+    // (aceeasi stare ca bara de sus, cardurile KPI si tabelul). Bifele se aplica la „Aplică” sau la inchidere.
+    var MULTI = [
+        { key: 'beneficiar', label: 'Beneficiar', plural: 'beneficiari', icon: 'bi-people' },
+        { key: 'vehicle_id', label: 'Vehicule', plural: 'vehicule', icon: 'bi-truck' },
+        { key: 'driver_id', label: 'Șoferi', plural: 'șoferi', icon: 'bi-person' },
+        { key: 'origine', label: 'Loc încărcare', plural: 'locuri', icon: 'bi-box-arrow-right' },
+        { key: 'destinatie', label: 'Zonă distribuție', plural: 'zone', icon: 'bi-geo-alt' },
+        { key: 'depozit', label: 'Depozit', plural: 'depozite', icon: 'bi-building' },
+        // rute exacte: doar perechile bifate (Contești → Sud), fara combinatiile locuri × zone
+        { key: 'ruta', label: 'Rute', plural: 'rute', icon: 'bi-signpost-split' }
+    ];
+    function splitIds(v) { return String(v || '').split(',').filter(function (x) { return x !== '' && x !== '0'; }); }
+    function optionsOf(m, d) {
+        var o = (d && d.optiuni) || {};
+        if (m.key === 'beneficiar') {
+            var b = o.beneficiari || CFG.beneficiaries || {};
+            return Object.keys(b).map(function (id) { return { id: id, label: String(b[id]) }; })
+                .sort(function (x, y) { return x.label.localeCompare(y.label, 'ro'); });
+        }
+        if (m.key === 'vehicle_id') { return o.vehicule || []; }
+        if (m.key === 'driver_id') { return o.soferi || []; }
+        return (o.locatii_filtru || {})[m.key] || [];
+    }
+    function optionLabel(m, id, d) {
+        var hit = optionsOf(m, d).filter(function (x) { return String(x.id) === String(id); })[0];
+        if (hit) { return hit.label; }
+        if (LOC_KEYS.indexOf(m.key) >= 0) { return ((d && d.optiuni && d.optiuni.locatii) || {})[id] || ('#' + id); }
+        return '#' + id;
+    }
+    var multi = (function () {
+        var box = document.getElementById('ropMulti');
+        if (!box) { return null; }
+        var openKey = null, draft = [], q = '';
+        function render() {
+            var d = lastList;
+            box.innerHTML = MULTI.map(function (m) {
+                var ids = splitIds(state[m.key]);
+                var text = !ids.length ? m.label : (ids.length === 1 ? optionLabel(m, ids[0], d) : m.label + ' (' + ids.length + ')');
+                return '<div class="rop-mf-item' + (openKey === m.key ? ' is-open' : '') + '" data-mf="' + m.key + '">'
+                    + '<button type="button" class="rop-mf-btn' + (ids.length ? ' is-set' : '') + '" data-mf-toggle aria-haspopup="true" aria-expanded="' + (openKey === m.key) + '" title="' + esc(ids.length ? ids.map(function (id) { return optionLabel(m, id, d); }).join(', ') : m.label) + '">'
+                    + '<i class="bi ' + m.icon + '"></i><span>' + esc(text) + '</span><i class="bi bi-chevron-down rop-caret"></i></button>'
+                    + (openKey === m.key ? popHtml(m) : '') + '</div>';
+            }).join('');
+            var input = box.querySelector('[data-mf-q]');
+            if (input) { input.value = q; }
+        }
+        function popHtml(m) {
+            var opts = optionsOf(m, lastList), needle = q.trim().toLowerCase();
+            var sel = {}; draft.forEach(function (id) { sel[id] = true; });
+            // alese primele, apoi restul; cautarea filtreaza doar lista
+            var shown = opts.filter(function (x) { return !needle || x.label.toLowerCase().indexOf(needle) >= 0; })
+                .sort(function (x, y) { return (sel[y.id] ? 1 : 0) - (sel[x.id] ? 1 : 0); });
+            var rows = shown.map(function (x) {
+                return '<label class="rop-mf-opt"><input type="checkbox" class="rop-check" data-mf-id="' + esc(x.id) + '"' + (sel[x.id] ? ' checked' : '') + '><span>' + esc(x.label) + '</span></label>';
+            }).join('');
+            var hint = m.key === 'vehicle_id' || m.key === 'driver_id' ? 'Doar cele cu activitate în perioadă și în filtrele alese.' : '';
+            return '<div class="rop-mf-pop" role="dialog" aria-label="' + esc(m.label) + '">'
+                + '<label class="rop-search rop-mf-search"><i class="bi bi-search"></i><input type="search" data-mf-q placeholder="Caută ' + esc(m.plural) + '..." autocomplete="off"></label>'
+                + '<div class="rop-mf-meta"><span><b>' + draft.length + '</b> din ' + opts.length + ' selectate</span>'
+                + '<button type="button" data-mf-all>Selectează ' + (needle ? 'rezultatele' : 'tot') + '</button><button type="button" data-mf-none>Golește</button></div>'
+                + '<div class="rop-mf-list">' + (rows || '<div class="rop-mf-empty">Nimic de ales în filtrele curente.</div>') + '</div>'
+                + (hint ? '<div class="rop-mf-hint">' + esc(hint) + '</div>' : '')
+                + '<div class="rop-mf-foot"><button type="button" class="rop-btn-outline rop-btn-sm" data-mf-cancel>Anulează</button><button type="button" class="rop-btn-primary rop-btn-sm" data-mf-apply>Aplică</button></div></div>';
+        }
+        function openPop(key) {
+            openKey = key; q = '';
+            draft = splitIds(state[key]);
+            render();
+            var input = box.querySelector('[data-mf-q]');
+            if (input) { input.focus(); }
+        }
+        function close(apply) {
+            if (!openKey) { return; }
+            var key = openKey, next = draft.join(',');
+            openKey = null; q = '';
+            render();
+            if (apply && next !== splitIds(state[key]).join(',')) {
+                var p = {}; p[key] = next;
+                setFilters(p, key === 'vehicle_id' || key === 'driver_id' ? key : '');
+            }
+        }
+        function refreshList() {
+            var m = MULTI.filter(function (x) { return x.key === openKey; })[0], pop = box.querySelector('.rop-mf-pop');
+            if (!m || !pop) { return; }
+            var tmp = document.createElement('div');
+            tmp.innerHTML = popHtml(m);
+            pop.querySelector('.rop-mf-list').replaceWith(tmp.querySelector('.rop-mf-list'));
+            pop.querySelector('.rop-mf-meta').replaceWith(tmp.querySelector('.rop-mf-meta'));
+        }
+        box.addEventListener('click', function (e) {
+            var t = e.target.closest('[data-mf-toggle]');
+            if (t) { var key = t.closest('[data-mf]').dataset.mf; if (openKey === key) { close(true); } else { if (openKey) { close(true); } openPop(key); } return; }
+            if (e.target.closest('[data-mf-apply]')) { close(true); return; }
+            if (e.target.closest('[data-mf-cancel]')) { close(false); return; }
+            if (e.target.closest('[data-mf-none]')) { draft = []; refreshList(); return; }
+            if (e.target.closest('[data-mf-all]')) {
+                Array.prototype.forEach.call(box.querySelectorAll('[data-mf-id]'), function (c) { var id = c.dataset.mfId; if (draft.indexOf(id) < 0) { draft.push(id); } });
+                refreshList(); return;
+            }
+        });
+        box.addEventListener('change', function (e) {
+            var c = e.target.closest('[data-mf-id]');
+            if (!c) { return; }
+            var id = c.dataset.mfId, i = draft.indexOf(id);
+            if (c.checked && i < 0) { draft.push(id); }
+            if (!c.checked && i >= 0) { draft.splice(i, 1); }
+            var meta = box.querySelector('.rop-mf-meta b');
+            if (meta) { meta.textContent = String(draft.length); }
+        });
+        box.addEventListener('input', function (e) { if (e.target.matches('[data-mf-q]')) { q = e.target.value; refreshList(); } });
+        box.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape' && openKey) {
+                e.preventDefault();
+                var key = openKey;
+                close(false); // Esc = renunta la bifele nesalvate
+                var btn = box.querySelector('[data-mf="' + key + '"] [data-mf-toggle]');
+                if (btn) { btn.focus(); }
+            }
+            if (e.key === 'Enter' && e.target.matches('[data-mf-q]')) { e.preventDefault(); close(true); }
+        });
+        // clic in afara = aplica (ca un meniu obisnuit care se inchide)
+        document.addEventListener('mousedown', function (e) { if (openKey && !box.contains(e.target)) { close(true); } });
+        return { render: render };
+    })();
+
+    // ------------------------------------------------------------------ bara selectiei din tabel (bifele)
+    // Bifele devin filtru (Vehicule → vehicle_id, Șoferi → driver_id, Locații → filtrul dimensiunii), deci
+    // cardurile KPI, totalurile si exportul urmeaza selectia. Semiremorcile nu au activitate proprie (sunt ale tractorului).
+    var selBar = document.getElementById('ropSelBar');
+    function selectionFilter() {
+        var rows = Object.keys(selected).map(function (k) { return selected[k]; }).filter(function (r) { return r && typeof r === 'object'; });
+        var usable = rows.filter(function (r) { return !r.is_semi; });
+        var key = state.mode === 'soferi' ? 'driver_id' : (state.mode === 'locatii' ? state.dim : 'vehicle_id');
+        return { rows: rows, key: key, ids: usable.map(function (r) { return r.id; }), skipped: rows.length - usable.length };
+    }
+    function renderSelBar() {
+        if (!selBar) { return; }
+        var s = selectionFilter();
+        selBar.hidden = s.rows.length === 0;
+        if (!s.rows.length) { selBar.innerHTML = ''; return; }
+        selBar.innerHTML = '<i class="bi bi-check2-square"></i><b>' + s.rows.length + ' ' + (s.rows.length === 1 ? 'rând selectat' : 'rânduri selectate') + '</b>'
+            + (s.skipped ? '<span class="rop-muted">(' + s.skipped + ' semiremorci nu se pot filtra separat)</span>' : '')
+            + '<button type="button" class="rop-btn-outline rop-btn-sm" data-sel="filter"' + (s.ids.length ? '' : ' disabled') + '><i class="bi bi-funnel"></i>Arată doar selecția</button>'
+            + (CFG.canExport ? '<button type="button" class="rop-btn-outline rop-btn-sm" data-sel="export"' + (s.ids.length ? '' : ' disabled') + '><i class="bi bi-download"></i>Exportă selecția</button>' : '')
+            + '<button type="button" class="rop-btn-outline rop-btn-sm" data-sel="clear"><i class="bi bi-x"></i>Golește selecția</button>';
+    }
+    if (selBar) {
+        selBar.addEventListener('click', function (e) {
+            var b = e.target.closest('[data-sel]');
+            if (!b || b.disabled) { return; }
+            var s = selectionFilter(), patch = {};
+            if (b.dataset.sel === 'clear') { selected = {}; tbody.querySelectorAll('.rop-check').forEach(function (c) { c.checked = false; }); var all = document.getElementById('ropAll'); if (all) { all.checked = false; } renderSelBar(); return; }
+            patch[s.key] = s.ids.join(',');
+            if (b.dataset.sel === 'filter') { selected = {}; setFilters(patch, s.key === 'driver_id' || s.key === 'vehicle_id' ? s.key : ''); return; }
+            // exportul selectiei: filtrele curente + selectia (fara a schimba pagina)
+            var params = Object.assign({ action: 'export', mode: state.mode, q: state.q, tip: state.tip, beneficiar: state.beneficiar, status: state.status, from: state.from, to: state.to,
+                vehicle_id: state.vehicle_id, driver_id: state.driver_id }, locParams(), patch);
+            location.href = u(params);
+            toast('Exportul CSV pornește (' + s.ids.length + ' rânduri selectate).');
+        });
     }
 
     rangeLabel();

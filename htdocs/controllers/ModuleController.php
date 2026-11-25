@@ -210,6 +210,9 @@ class ModuleController
             case 'show':
                 $this->showAction($moduleKey, $module);
                 return;
+            case 'driver_vehicle_scheme':
+                $this->driverVehicleSchemeAction($moduleKey);
+                return;
             case 'preview':
                 $this->previewDocumentAction($moduleKey, $module);
                 return;
@@ -3548,9 +3551,23 @@ class ModuleController
             $axleAttributes = $componentModel->axleAttributes($vehicleIds);
             $inspections = $componentModel->latestInspections($vehicleIds);
             $structureService = new VehicleStructureService($this->db);
+            // Culorile schemei: consumarea intervalului configurat pe sisteme (aceeasi regula ca panoul).
+            $maintenanceModel = new MaintenanceModel($this->db);
+            $panelService = new VehicleComponentPanelService($this->db, $maintenanceModel, $componentModel);
+            $partIndex = $maintenanceModel->getAutoComponentPartIndex();
+            $vehicleRows = [];
+            foreach ($vehicles as $vehicleRow) {
+                $vehicleRows[(int) $vehicleRow['id']] = $vehicleRow;
+            }
             foreach ($overview['client_units'] as &$clientUnit) {
                 foreach ($clientUnit['members'] as &$clientMember) {
                     $memberId = (int) $clientMember['vehicle_id'];
+                    try {
+                        $clientMember['condition'] = (object) (isset($vehicleRows[$memberId]) ? $panelService->conditionByCategory($vehicleRows[$memberId], $catalog, $partIndex) : []);
+                    } catch (Throwable $exception) {
+                        error_log('[ModuleController][scheme-condition] ' . $exception->getMessage());
+                        $clientMember['condition'] = (object) [];
+                    }
                     $clientMember['axle_attrs'] = (object) ($axleAttributes[$memberId] ?? []);
                     $clientMember['axle_kinds'] = (object) $structureService->axleKinds($memberId);
                     // Schema arata doar ce are vehiculul in configuratia lui (pagina Auto).
@@ -3655,7 +3672,16 @@ class ModuleController
                 // Subcomponenta aleasa la detalierea ansamblului (randul ei e evidentiat).
                 'focusKey' => preg_match('/^\d+-\d+$/', (string) ($_GET['component_key'] ?? '')) === 1 ? (string) $_GET['component_key'] : '',
             ]);
-            $this->tireMountJson(['ok' => true, 'html' => $html]);
+            // Starea sistemului pentru culorile schemei: cea mai mare uzura calculata a componentelor lui
+            // (aceeasi regula ca VehicleComponentPanelService::conditionByCategory); null = fara date (gri).
+            $wears = array_values(array_filter(array_map(static fn (array $item): ?int => $item['wear'], $panel['components']), static fn (?int $wear): bool => $wear !== null));
+            // wear: uzura calculata a fiecarei componente (aceeasi valoare ca in panou; null = fara date), pentru
+            // randurile exploratorului de componente; condition = agregatul sistemului (cea mai mare).
+            $wearByKey = [];
+            foreach ($panel['components'] as $item) {
+                $wearByKey[$item['key']] = $item['wear'];
+            }
+            $this->tireMountJson(['ok' => true, 'html' => $html, 'condition' => $wears === [] ? null : max($wears), 'wear' => (object) $wearByKey]);
         } catch (Throwable $exception) {
             error_log('[tire_fleet_component] ' . $exception->getMessage());
             $this->tireMountJson(['ok' => false, 'error' => 'Datele componentei nu au putut fi încărcate.'], 500);
@@ -5418,10 +5444,258 @@ class ModuleController
 
             $viewData['driverDocuments'] = $driverDocuments;
             $viewData['statusContext'] = $this->entityStatusService->evaluateDriverStatus($id);
+            $viewData['driverDetail'] = $this->buildDriverDetailContext($id);
         }
 
         $viewData['axleKinds'] = $moduleKey === 'vehicule' ? $this->vehicleAxleKindLabels() : [];
         render('module/show.php', $viewData);
+    }
+
+    /**
+     * Datele suplimentare ale fișei „Detalii șofer” (views/module/_driver_detail.php).
+     * Doar citire: vehiculele din soferi_vehicule (+ cuplajul activ), schema vehiculului principal
+     * din exploratorul paginii Auto (fleetExplorerData), alocările de echipament (DriverEquipmentModel)
+     * și cursele din Dispecer. Fiecare sursă e citită doar dacă utilizatorul are dreptul modulului ei.
+     */
+    private function buildDriverDetailContext(int $driverId): array
+    {
+        $vehicles = $this->driverAssignedVehicles($driverId);
+        // Schema se calculează doar pentru vehiculul principal; celelalte vin la cerere (driver_vehicle_scheme).
+        $scheme = $vehicles !== [] && $vehicles[0]['scheme_supported'] ? $this->fleetExplorerData((int) $vehicles[0]['id']) : null;
+
+        return [
+            'vehicles' => $vehicles,
+            'scheme' => $scheme,
+            'equipment' => $this->driverEquipmentContext($driverId),
+            'activity' => $this->driverActivityContext($driverId),
+        ];
+    }
+
+    /**
+     * Vehiculele alocate șoferului (relația many-to-many soferi_vehicule), principalul primul,
+     * cu partenerul din cuplajul activ (cap tractor ↔ semiremorcă). Nu există istoric al alocărilor.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private function driverAssignedVehicles(int $driverId): array
+    {
+        try {
+            $this->moduleModel->getDriverVehicleIds($driverId); // asigură schema (ca la editare)
+            $stmt = $this->db->prepare('
+                SELECT v.id, v.nr_inmatriculare, v.marca, v.model, v.tip_vehicul, v.an_fabricatie,
+                       v.formula_axelor, v.status, sv.is_primary
+                FROM soferi_vehicule sv
+                INNER JOIN vehicule v ON v.id = sv.vehicle_id
+                WHERE sv.driver_id = :driver_id
+                ORDER BY sv.is_primary DESC, v.nr_inmatriculare ASC
+            ');
+            $stmt->execute([':driver_id' => $driverId]);
+            $rows = $stmt->fetchAll();
+        } catch (Throwable $exception) {
+            error_log('[ModuleController][driver-vehicles] ' . $exception->getMessage());
+            return [];
+        }
+
+        $ids = array_map(static fn (array $row): int => (int) $row['id'], $rows);
+        $partners = [];
+        if ($ids !== []) {
+            try {
+                $placeholders = implode(',', array_fill(0, count($ids), '?'));
+                $stmt = $this->db->prepare("
+                    SELECT vc.tractor_id, vc.semiremorca_id,
+                           t.nr_inmatriculare AS t_nr, t.marca AS t_marca, t.model AS t_model, t.tip_vehicul AS t_tip,
+                           s.nr_inmatriculare AS s_nr, s.marca AS s_marca, s.model AS s_model, s.tip_vehicul AS s_tip
+                    FROM vehicule_cuplaje vc
+                    INNER JOIN vehicule t ON t.id = vc.tractor_id
+                    INNER JOIN vehicule s ON s.id = vc.semiremorca_id
+                    WHERE vc.activ = 1 AND (vc.tractor_id IN ($placeholders) OR vc.semiremorca_id IN ($placeholders))
+                    ORDER BY vc.id DESC
+                ");
+                $stmt->execute(array_merge($ids, $ids));
+                foreach ($stmt->fetchAll() as $row) {
+                    $tractorId = (int) $row['tractor_id'];
+                    $trailerId = (int) $row['semiremorca_id'];
+                    if (!isset($partners[$tractorId])) {
+                        $partners[$tractorId] = ['id' => $trailerId, 'plate' => (string) $row['s_nr'], 'make' => trim((string) $row['s_marca'] . ' ' . (string) $row['s_model']), 'type' => (string) $row['s_tip']];
+                    }
+                    if (!isset($partners[$trailerId])) {
+                        $partners[$trailerId] = ['id' => $tractorId, 'plate' => (string) $row['t_nr'], 'make' => trim((string) $row['t_marca'] . ' ' . (string) $row['t_model']), 'type' => (string) $row['t_tip']];
+                    }
+                }
+            } catch (Throwable $exception) {
+                error_log('[ModuleController][driver-vehicle-couplings] ' . $exception->getMessage());
+            }
+        }
+
+        $vehicles = [];
+        foreach ($rows as $index => $row) {
+            $id = (int) $row['id'];
+            $type = normalize_vehicle_type((string) ($row['tip_vehicul'] ?? ''));
+            $vehicles[] = [
+                'id' => $id,
+                'plate' => (string) ($row['nr_inmatriculare'] ?? ''),
+                'make' => trim((string) ($row['marca'] ?? '') . ' ' . (string) ($row['model'] ?? '')),
+                'type' => $type,
+                'type_label' => vehicle_type_label((string) ($row['tip_vehicul'] ?? '')),
+                'year' => $row['an_fabricatie'] ?? null,
+                'formula' => trim((string) ($row['formula_axelor'] ?? '')),
+                'status' => (string) ($row['status'] ?? ''),
+                // is_primary e sursa; fără niciun rând marcat, primul (ordinea editării) ține locul principalului.
+                'is_primary' => (int) ($row['is_primary'] ?? 0) === 1,
+                'partner' => $partners[$id] ?? null,
+                // Exploratorul paginii Auto are doar camion / cap tractor / semiremorcă (fără autoturisme).
+                'scheme_supported' => in_array($type, ['camion', 'cap_tractor', 'semiremorca'], true),
+            ];
+        }
+
+        return $vehicles;
+    }
+
+    /** Alocările de echipament ale șoferului, exact cum le citește modulul Echipamente șoferi. */
+    private function driverEquipmentContext(int $driverId): array
+    {
+        if (!can('echipamente_soferi', 'view')) {
+            return ['allowed' => false, 'items' => []];
+        }
+
+        try {
+            $model = new DriverEquipmentModel($this->db);
+            $rows = $model->getAllocations(['detinator_tip' => DriverEquipmentModel::OWNER_DRIVER, 'driver_id' => $driverId]);
+        } catch (Throwable $exception) {
+            error_log('[ModuleController][driver-equipment] ' . $exception->getMessage());
+            return ['allowed' => true, 'error' => true, 'items' => []];
+        }
+
+        $items = [];
+        $kpis = ['total' => 0, 'in_posesie' => 0, 'de_inlocuit' => 0, 'returnate' => 0];
+        foreach ($rows as $row) {
+            $status = (string) ($row['status'] ?? '');
+            $active = !empty($row['activa']);
+            $replacement = in_array($status, DriverEquipmentModel::REPLACEMENT_STATUSES, true);
+            $qty = (int) ($row['cantitate'] ?? 1);
+            if ($active) {
+                $kpis['total'] += $qty;
+                if ($replacement) {
+                    $kpis['de_inlocuit'] += $qty;
+                } else {
+                    $kpis['in_posesie'] += $qty;
+                }
+            } elseif ($status === 'returnat') {
+                $kpis['returnate'] += $qty;
+            }
+            $category = trim((string) ($row['categorie'] ?? '')) !== '' ? trim((string) $row['categorie']) : 'Fără categorie';
+            $visual = $model->categoryVisual($category);
+            $condition = is_array($row['stare_termen'] ?? null) ? $row['stare_termen'] : ['label' => '', 'tone' => 'muted', 'note' => ''];
+            $items[] = [
+                'id' => (int) $row['id'],
+                'denumire' => (string) ($row['denumire'] ?? ''),
+                'categorie' => $category,
+                'cat' => $visual['slug'],
+                'anchor' => $visual['anchor'],
+                'icon' => $visual['icon'],
+                'grupa' => DriverEquipmentModel::GROUPS[(string) ($row['grupa'] ?? '')] ?? '',
+                'status' => $status,
+                'status_label' => DriverEquipmentModel::STATUSES[$status] ?? $status,
+                'condition_label' => (string) ($condition['label'] ?? ''),
+                'condition_tone' => (string) ($condition['tone'] ?? 'muted'),
+                'condition_note' => (string) ($condition['note'] ?? ''),
+                'active' => $active,
+                'replacement' => $replacement,
+                'cantitate' => $qty,
+                'marime' => trim((string) ($row['marime'] ?? '')),
+                'identificator' => trim((string) ($row['identificator'] ?? '')),
+                'data_predarii' => (string) ($row['data_predarii'] ?? ''),
+                'data_returnarii' => (string) ($row['data_returnarii'] ?? ''),
+                'termen' => (string) ($row['termen'] ?? ''),
+            ];
+        }
+        // Întâi ce e la șofer, apoi cele returnate / pierdute.
+        usort($items, static fn (array $a, array $b): int => ((int) $b['active'] <=> (int) $a['active']) ?: strcoll($a['categorie'], $b['categorie']) ?: strcoll($a['denumire'], $b['denumire']));
+
+        return ['allowed' => true, 'items' => $items, 'kpis' => $kpis];
+    }
+
+    /** Activitatea șoferului din Dispecer curse (fără valori financiare). */
+    private function driverActivityContext(int $driverId): array
+    {
+        $canTrips = can('dispecer_curse', 'view');
+        $canHistory = can('istoric_activitati_sofer', 'view');
+        if (!$canTrips && !$canHistory) {
+            return ['allowed' => false];
+        }
+
+        try {
+            $monthStart = (new DateTimeImmutable('first day of this month'))->format('Y-m-d');
+            $stmt = $this->db->prepare('
+                SELECT COUNT(*) AS total,
+                       SUM(CASE WHEN data_cursa >= ? THEN 1 ELSE 0 END) AS luna,
+                       SUM(CASE WHEN ora_sfarsit IS NULL THEN 1 ELSE 0 END) AS deschise,
+                       MAX(data_cursa) AS ultima
+                FROM curse_dispecer
+                WHERE driver_id = ? AND deleted_at IS NULL
+            ');
+            $stmt->execute([$monthStart, $driverId]);
+            $stats = $stmt->fetch() ?: [];
+
+            $stmt = $this->db->prepare('
+                SELECT c.id, c.data_cursa, c.ora_inceput, c.ora_sfarsit, c.tip_transport, c.km_cursa,
+                       v.nr_inmatriculare
+                FROM curse_dispecer c
+                LEFT JOIN vehicule v ON v.id = c.vehicle_id
+                WHERE c.driver_id = ? AND c.deleted_at IS NULL
+                ORDER BY c.data_cursa DESC, c.id DESC
+                LIMIT 15
+            ');
+            $stmt->execute([$driverId]);
+            $recent = $stmt->fetchAll();
+        } catch (Throwable $exception) {
+            error_log('[ModuleController][driver-activity] ' . $exception->getMessage());
+            return ['allowed' => true, 'error' => true];
+        }
+
+        return [
+            'allowed' => true,
+            'can_trips' => $canTrips,
+            'can_edit_trips' => $canTrips && can('dispecer_curse', 'edit'),
+            'can_history' => $canHistory,
+            'stats' => [
+                'total' => (int) ($stats['total'] ?? 0),
+                'luna' => (int) ($stats['luna'] ?? 0),
+                'deschise' => (int) ($stats['deschise'] ?? 0),
+                'ultima' => (string) ($stats['ultima'] ?? ''),
+            ],
+            'recent' => $recent,
+        ];
+    }
+
+    /**
+     * JSON: schema (exploratorul paginii Auto) pentru un vehicul alocat șoferului, la comutarea
+     * vehiculului din fișa șoferului. Doar vehiculele din soferi_vehicule ale acelui șofer.
+     */
+    private function driverVehicleSchemeAction(string $moduleKey): void
+    {
+        if ($moduleKey !== 'soferi') {
+            $this->tireMountJson(['ok' => false, 'error' => 'Modul invalid.'], 404);
+        }
+
+        $driverId = (int) ($_GET['id'] ?? 0);
+        $vehicleId = (int) ($_GET['vehicle_id'] ?? 0);
+        $assigned = null;
+        foreach ($driverId > 0 ? $this->driverAssignedVehicles($driverId) : [] as $vehicle) {
+            if ((int) $vehicle['id'] === $vehicleId) {
+                $assigned = $vehicle;
+                break;
+            }
+        }
+        if ($assigned === null) {
+            $this->tireMountJson(['ok' => false, 'error' => 'Vehiculul nu este alocat acestui șofer.'], 404);
+        }
+        if (!$assigned['scheme_supported']) {
+            $this->tireMountJson(['ok' => true, 'unit' => null]);
+        }
+
+        $data = $this->fleetExplorerData($vehicleId);
+        $this->tireMountJson(['ok' => true, 'unit' => $data['unit'] ?? null]);
     }
 
     private function previewDocumentAction(string $moduleKey, array $module): void

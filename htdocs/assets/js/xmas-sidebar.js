@@ -96,6 +96,7 @@
 
     // animate only while the sidebar is actually on screen
     var running = false, raf = 0, shownAt = 0, lastDraw = 0;
+    var held = false, heldAt = 0, holdTimer = 0;      // paused while the vehicle scheme is in use (below)
     function frame(now) {
       raf = requestAnimationFrame(frame);
       if (now - lastDraw < 1000 / 30 - 4) return;      // ~30fps is plenty for a twinkle, also on 120/144Hz screens
@@ -104,7 +105,8 @@
     }
     function setVisible(v) {
       if (v && !running) {
-        running = true; shownAt = performance.now(); raf = requestAnimationFrame(frame);
+        running = true; shownAt = performance.now();
+        if (held) heldAt = shownAt; else raf = requestAnimationFrame(frame);   // a scheme hold resumes it
       } else if (!v && running) {
         running = false; cancelAnimationFrame(raf);
         draw(0, -1);                                   // reset to dark so they light up again next time
@@ -115,6 +117,23 @@
       new IntersectionObserver(function (e) { onScreen = e[0].isIntersecting; setVisible(onScreen && !document.hidden); }).observe(cv);
     }
     document.addEventListener("visibilitychange", function () { setVisible(onScreen && !document.hidden); });
+    // while the user works in the vehicle scheme the twinkle freezes as it is (no reset to dark) and
+    // continues 1 s after the last click / zoom / hover there, so the scheme gets every frame
+    var hold = function () {
+      if (!held && running) { held = true; heldAt = performance.now(); cancelAnimationFrame(raf); }
+      clearTimeout(holdTimer);
+      holdTimer = setTimeout(function () {
+        if (!held) return;
+        held = false;
+        if (running) { shownAt += performance.now() - heldAt; raf = requestAnimationFrame(frame); }
+      }, 1000);
+    };
+    ["pointerdown", "pointermove", "wheel", "keydown"].forEach(function (type) {
+      document.addEventListener(type, function (e) {
+        var t = e.target;
+        if (t && t.closest && t.closest(".fx-explorer")) hold();
+      }, { capture: true, passive: true });
+    });
     // resizing clears the canvas: when paused, redraw the dark string at once instead of leaving it blank
     var lastH = -1;
     if ("ResizeObserver" in window) new ResizeObserver(function () {

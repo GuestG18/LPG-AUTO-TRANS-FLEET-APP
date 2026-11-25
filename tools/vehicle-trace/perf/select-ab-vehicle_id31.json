@@ -1,0 +1,74 @@
+[
+ {
+  "round": 0,
+  "label": "before",
+  "median": 237.4,
+  "avg": 247.8,
+  "worst": 724.5,
+  "syncMedian": 17.6
+ },
+ {
+  "round": 0,
+  "label": "after",
+  "median": 80.5,
+  "avg": 81.4,
+  "worst": 159.5,
+  "syncMedian": 16
+ },
+ {
+  "round": 0,
+  "label": "after, no xmas scripts",
+  "median": 36.1,
+  "avg": 36.8,
+  "worst": 51.3,
+  "syncMedian": 16.5
+ },
+ {
+  "round": 1,
+  "label": "before",
+  "median": 183.7,
+  "avg": 263.7,
+  "worst": 702.8,
+  "syncMedian": 14.8
+ },
+ {
+  "round": 1,
+  "label": "after",
+  "median": 86.1,
+  "avg": 84.1,
+  "worst": 148.2,
+  "syncMedian": 15.8
+ },
+ {
+  "round": 1,
+  "label": "after, no xmas scripts",
+  "median": 40.6,
+  "avg": 41.6,
+  "worst": 69.8,
+  "syncMedian": 14.8
+ },
+ {
+  "round": 2,
+  "label": "before",
+  "median": 175.8,
+  "avg": 164.6,
+  "worst": 283.1,
+  "syncMedian": 15.7
+ },
+ {
+  "round": 2,
+  "label": "after",
+  "median": 84.4,
+  "avg": 87.3,
+  "worst": 135.3,
+  "syncMedian": 14
+ },
+ {
+  "round": 2,
+  "label": "after, no xmas scripts",
+  "median": 55.5,
+  "avg": 51.2,
+  "worst": 92.2,
+  "syncMedian": 15.2
+ }
+]

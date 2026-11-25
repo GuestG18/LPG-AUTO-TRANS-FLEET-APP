@@ -248,6 +248,31 @@ try {
     $errorPage = true;
 }
 check('CAN raport: pagina de eroare SAS -> exceptie, nu raport gol', $errorPage);
+// --- Odometrul CAN din API (travelsheet cu odometerCanStart/End, din 2026-11-25) -> acelasi format
+$apiSheet = [
+    'licensePlate' => 'B 165 NET', 'makeName' => 'DAF', 'modelName' => 'XF', 'totalDistance' => 311.445,
+    'CANFuelUsed' => 90, 'CANFuelUsedPer100Km' => 28.897557,
+    'segments' => [
+        ['indexId' => 1, 'dateStart' => '2026-11-24T07:00:00', 'dateEnd' => '2026-11-24T07:00:00', 'distance' => null, 'kmIndex' => 1361000.0, 'odometerCanStart' => null, 'odometerCanEnd' => null],
+        ['indexId' => 2, 'dateStart' => '2026-11-24T07:09:40', 'dateEnd' => '2026-11-24T12:02:35', 'locationDescriptionStart' => null, 'addressStart' => 'DN2;DJ207F', 'cityStart' => '-', 'countyStart' => 'Bacau (RO)',
+            'locationDescriptionEnd' => 'OMV Brazi', 'addressEnd' => 'DC', 'cityEnd' => '-', 'countyEnd' => 'Prahova (RO)', 'averageSpeed' => 64, 'distance' => 311.445,
+            'kmIndex' => 1361254.4264526367, 'workSeconds' => 17575, 'idleEngineSeconds' => 3747, 'parkTimeSeconds' => 71341, 'odometerCanStart' => 1359596.8, 'odometerCanEnd' => 1359901.6],
+        ['indexId' => 3, 'dateStart' => '2026-11-24T13:00:00', 'dateEnd' => '2026-11-24T13:05:00', 'distance' => 0.1, 'kmIndex' => 0, 'odometerCanStart' => 0, 'odometerCanEnd' => null],
+    ],
+];
+$fromApi = SasCanKmService::fromApiTravelSheet($apiSheet);
+$apiRow = $fromApi['segments'][0];
+check('CAN API: tronsonul fake de durata 0 e ignorat, ca in raportul web', count($fromApi['segments']) === 2 && $apiRow['segment'] === 2, $fromApi['segments']);
+check('CAN API: index CAN, distanta CAN, locatii si minute in formatul raportului web',
+    $apiRow['can_index_start_km'] === 1359596.8 && $apiRow['can_index_end_km'] === 1359901.6 && $apiRow['can_km'] === 304.8
+    && $apiRow['start'] === '2026-11-24 07:09:40' && $apiRow['start_location'] === 'DN2;DJ207F/-/Bacau (RO)' && $apiRow['end_location'] === 'OMV Brazi/-/Prahova (RO)'
+    && $apiRow['gps_km'] === 311.4 && $apiRow['gps_index_end_km'] === 1361254.4 && $apiRow['engine_minutes'] === 293 && $apiRow['idle_minutes'] === 62, $apiRow);
+check('CAN API: 0 / null = fara CAN, totaluri ca in raportul web', $fromApi['segments'][1]['can_index_end_km'] === null && $fromApi['segments'][1]['gps_index_end_km'] === null
+    && $fromApi['totals']['can_km'] === 304.8 && $fromApi['totals']['gps_km'] === 311.4 && $fromApi['totals']['fuel_l_per_hour'] === 18.44
+    && $fromApi['plate'] === 'B 165 NET' && $fromApi['model'] === 'DAF/XF' && $fromApi['has_can'] === true, $fromApi['totals']);
+check('CAN API: raspuns fara campurile CAN -> rezerva pe raportul web', !SasCanKmService::apiHasCanOdometer(['segments' => [['dateStart' => 'x']]])
+    && SasCanKmService::apiHasCanOdometer(['segments' => []]) && SasCanKmService::apiHasCanOdometer($apiSheet));
+
 $canParsed = SasFleetOdometerSource::parseCanReport(9118, $parsedCan);
 check('CAN citiri: doar tronsoanele cu Index CAN, id stabil, tip can_odometer', count($canParsed['readings']) === 1
     && $canParsed['readings'][0]['source_reading_id'] === 'can:9118@2026-10-30 12:10:14' && $canParsed['readings'][0]['measurement_type'] === 'can_odometer'

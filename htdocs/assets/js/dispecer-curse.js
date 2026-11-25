@@ -1574,9 +1574,33 @@
                     return;
                 }
 
+                var previousDateParts = parseDateForDuration(getActiveDateTimePicker().dateField instanceof HTMLInputElement ? getActiveDateTimePicker().dateField.value : '');
+                var dateChanged = previousDateParts === null
+                    || previousDateParts.year !== selectedDateParts.year
+                    || previousDateParts.month !== selectedDateParts.month
+                    || previousDateParts.day !== selectedDateParts.day;
+
                 getActiveDateTimePicker().state.selectedDateParts = selectedDateParts;
                 getActiveDateTimePicker().state.viewedYear = selectedDateParts.year;
                 getActiveDateTimePicker().state.viewedMonth = selectedDateParts.month;
+
+                // Zi noua aleasa din calendar: ora veche nu mai e valabila. Se goleste si
+                // cursorul ramane in camp dupa "dd/mm/yyyy " ca operatorul sa tasteze ora (ex. 1200).
+                if (dateChanged && !getActiveDateTimePicker().dateOnly && getActiveDateTimePicker().timeField instanceof HTMLInputElement) {
+                    var typedPicker = getActiveDateTimePicker();
+                    typedPicker.state.selectedHour = null;
+                    typedPicker.state.selectedMinute = null;
+                    applyStartDateTimeFieldValues(selectedDateParts, '');
+                    closeStartDateTimePopover();
+                    if (typedPicker.displayField instanceof HTMLInputElement) {
+                        typedPicker.displayField.value = formatDateForDisplay(selectedDateParts) + ' ';
+                        typedPicker.displayField.focus();
+                        var caretPosition = typedPicker.displayField.value.length;
+                        typedPicker.displayField.setSelectionRange(caretPosition, caretPosition);
+                    }
+                    return;
+                }
+
                 applyStartDateTimeFieldValues(
                     selectedDateParts,
                     getActiveDateTimePicker().timeField instanceof HTMLInputElement ? (normalizeTimeInputValue(getActiveDateTimePicker().timeField.value) || '') : ''

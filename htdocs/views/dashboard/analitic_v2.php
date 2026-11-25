@@ -42,13 +42,27 @@ $multiSelect = static function (
                 <?php if ($options === []): ?>
                     <p class="da2-ms-empty">Nu există opțiuni disponibile.</p>
                 <?php endif; ?>
+                <?php $lastGroup = null; $lastSubgroup = null; ?>
                 <?php foreach ($options as $option): ?>
-                    <?php $value = (string) $option['value']; ?>
-                    <label class="da2-ms-option" data-ms-option data-text="<?= e(mb_strtolower((string) $option['label'])) ?>">
+                    <?php
+                    $value = (string) $option['value'];
+                    $group = (string) ($option['group'] ?? '');
+                    $subgroup = (string) ($option['subgroup'] ?? '');
+                    $fullLabel = implode(' · ', array_filter([$group, $subgroup !== '' ? $subgroup . ': ' . $option['label'] : (string) $option['label']]));
+                    ?>
+                    <?php if ($group !== '' && $group !== $lastGroup): $lastSubgroup = null; ?>
+                        <div class="da2-ms-group" data-ms-group><?= e($group) ?></div>
+                    <?php endif; ?>
+                    <?php if ($subgroup !== '' && ($subgroup !== $lastSubgroup || $group !== $lastGroup)): ?>
+                        <div class="da2-ms-subgroup" data-ms-group="sub"><?= e($subgroup) ?></div>
+                    <?php endif; ?>
+                    <?php $lastGroup = $group; $lastSubgroup = $subgroup; ?>
+                    <label class="da2-ms-option<?= $group !== '' ? ' is-grouped' : '' ?>" data-ms-option data-text="<?= e(mb_strtolower($fullLabel)) ?>">
                         <input
                             type="checkbox"
                             name="<?= e($name) ?>[]"
                             value="<?= e($value) ?>"
+                            <?= $group !== '' ? 'data-full="' . e($fullLabel) . '"' : '' ?>
                             <?= isset($selectedMap[$value]) ? 'checked' : '' ?>
                         >
                         <span><?= e((string) $option['label']) ?></span>
@@ -120,6 +134,22 @@ foreach ((array) ($filterOptions['capacity_categories'] ?? []) as $row) {
         ];
     }
 }
+
+$routeOptions = [];
+foreach ((array) ($filterOptions['routes'] ?? []) as $row) {
+    $value = trim((string) ($row['traseu'] ?? ''));
+    if ($value !== '') {
+        $routeOptions[] = ['value' => $value, 'label' => $value === '-' ? 'Fără traseu' : $value];
+    }
+}
+
+// Locuri pe tip transport: Loc incarcare / Zona distributie / Loc descarcare … grupate pe tip.
+$routePartOptions = array_map(static fn (array $row): array => [
+    'value' => (string) $row['value'],
+    'label' => (string) $row['label'],
+    'group' => (string) $row['group'],
+    'subgroup' => (string) $row['subgroup'],
+], (array) ($filterOptions['route_parts'] ?? []));
 
 $statusOptions = [];
 foreach ((array) ($filterOptions['statuses'] ?? []) as $row) {
@@ -229,6 +259,8 @@ $pageConfig = [
             <?php $multiSelect('transport_types', 'Tip transport', 'bi-diagram-3', $transportOptions, (array) ($filters['transport_types'] ?? [])); ?>
             <?php $multiSelect('transport_capacities', 'Capacitate reală', 'bi-box-seam', $capacityOptions, (array) ($filters['transport_capacities'] ?? [])); ?>
             <?php $multiSelect('capacity_categories', 'Categorie capacitate', 'bi-tags', $capacityCategoryOptions, (array) ($filters['capacity_categories'] ?? [])); ?>
+            <?php $multiSelect('routes', 'Traseu', 'bi-signpost-split', $routeOptions, (array) ($filters['routes'] ?? [])); ?>
+            <?php $multiSelect('route_parts', 'Locuri pe tip transport', 'bi-geo-alt', $routePartOptions, (array) ($filters['route_parts'] ?? [])); ?>
             <?php $multiSelect('statuses', 'Status facturare', 'bi-receipt', $statusOptions, (array) ($filters['statuses'] ?? [])); ?>
         </div>
 
@@ -319,6 +351,7 @@ $pageConfig = [
         <button type="button" class="da2-tab" data-tab="vehicule_usoare" role="tab"><i class="bi bi-car-front" aria-hidden="true"></i>Vehicule ușoare</button>
         <button type="button" class="da2-tab" data-tab="soferi" role="tab"><i class="bi bi-person-badge" aria-hidden="true"></i>Șoferi</button>
         <button type="button" class="da2-tab" data-tab="beneficiari" role="tab"><i class="bi bi-building" aria-hidden="true"></i>Beneficiari</button>
+        <button type="button" class="da2-tab" data-tab="trasee" role="tab"><i class="bi bi-signpost-split" aria-hidden="true"></i>Trasee<span class="da2-tab-badge" id="da2-route-changes-count" hidden>0</span></button>
         <button type="button" class="da2-tab" data-tab="alerte" role="tab"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i>Alerte<span class="da2-tab-badge" id="da2-alerts-count" hidden>0</span></button>
     </nav>
 
@@ -679,6 +712,29 @@ $pageConfig = [
                 </div>
             </header>
             <div class="da2-table-wrap"><table class="da2-table" data-table="beneficiaries"></table></div>
+        </article>
+    </section>
+
+    <section class="da2-panel" data-panel="trasee">
+        <article class="da2-card da2-card-wide">
+            <header class="da2-card-head">
+                <div>
+                    <h2>Locuri și zone pe beneficiar</h2>
+                    <p class="da2-card-sub">
+                        Pentru fiecare beneficiar, tip de transport și câmp (loc încărcare, zonă distribuție, loc descărcare …) cu cel puțin două valori în selecție.
+                        <strong>Schimbare</strong> = o valoare a început după ce alta nu a mai fost folosită; <strong>În paralel</strong> = folosite în aceeași perioadă.
+                        Click pe o valoare o pune în filtrul „Locuri pe tip transport”.
+                    </p>
+                </div>
+                <div class="da2-card-tools">
+                    <label class="da2-switch"><input type="checkbox" id="da2-route-changes-only"><span>Doar schimbări</span></label>
+                    <div class="da2-ms-search da2-ms-search-inline">
+                        <i class="bi bi-search" aria-hidden="true"></i>
+                        <input type="search" id="da2-route-changes-search" placeholder="Caută beneficiar, loc, zonă…" autocomplete="off">
+                    </div>
+                </div>
+            </header>
+            <div id="da2-route-changes"></div>
         </article>
     </section>
 

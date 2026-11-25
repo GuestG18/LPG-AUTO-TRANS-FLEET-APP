@@ -1,0 +1,50 @@
+[
+ {
+  "round": 0,
+  "label": "xmas, no hold",
+  "n": 12,
+  "median": 98.7,
+  "avg": 91.2,
+  "worst": 117.5
+ },
+ {
+  "round": 0,
+  "label": "xmas + scheme hold",
+  "n": 12,
+  "median": 69.7,
+  "avg": 81.6,
+  "worst": 193.5
+ },
+ {
+  "round": 0,
+  "label": "no xmas scripts",
+  "n": 12,
+  "median": 78.7,
+  "avg": 84.9,
+  "worst": 202.3
+ },
+ {
+  "round": 1,
+  "label": "xmas, no hold",
+  "n": 12,
+  "median": 105.9,
+  "avg": 113.3,
+  "worst": 204.5
+ },
+ {
+  "round": 1,
+  "label": "xmas + scheme hold",
+  "n": 12,
+  "median": 70.1,
+  "avg": 76.7,
+  "worst": 157.1
+ },
+ {
+  "round": 1,
+  "label": "no xmas scripts",
+  "n": 12,
+  "median": 76.4,
+  "avg": 91.5,
+  "worst": 270.6
+ }
+]

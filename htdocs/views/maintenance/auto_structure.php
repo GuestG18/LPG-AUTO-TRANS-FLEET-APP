@@ -28,12 +28,13 @@ $scopeFields = static function () use ($isVehicle, $vehicle, $structure): string
         ? '<input type="hidden" name="vehicle_id" value="' . e((string) $vehicle['id']) . '">'
         : '<input type="hidden" name="structura" value="' . e((string) ($structure['id'] ?? 0)) . '">';
 };
-$axleText = static function (?array $kinds): string {
-    if ($kinds === null) {
-        return 'Toate';
-    }
-    return implode(', ', array_map(static fn (string $kind): string => VehicleAxleTypeService::KINDS[$kind] ?? $kind, $kinds));
-};
+$axleKindsMap = (array) ($page['axle_kinds_map'] ?? []);
+$copyTargets = (array) ($page['copy_targets'] ?? []);
+// Axele concrete ale unei componente (null = toate).
+$axleWheelsMap = (array) ($page['axle_wheels_map'] ?? []);
+// Rotile pe care sta o componenta: axa -> pozitii.
+$rowWheels = static fn (array $row): array => VehicleStructureService::placementMap($row, $axleWheelsMap, $axleKindsMap);
+$axleText = static fn (array $row): string => VehicleStructureService::describePlacement($row, $axleWheelsMap, $axleKindsMap);
 // Tabelul pe tipuri de axa: doar sistemele legate de axe; o componenta apare o singura data.
 $axleMatrix = [];
 $axleMatrixSeen = [];
@@ -200,14 +201,15 @@ $assetVersion = static fn (string $path): string => url($path . '?v=' . (string)
         <?php endif; ?>
 
         <?php if ($axleMatrix !== [] && $axleColumns !== []): ?>
-            <details class="as-card as-matrix" id="piese-pe-tip-axa" open>
+            <details class="as-card as-matrix" id="piese-pe-axa" open>
                 <summary>
-                    <strong>Piese pe tip de axă</strong>
-                    <span>Bifează ce piese are fiecare tip de axă. Schema le arată pe axele de acel tip.</span>
+                    <strong>Piese pe axă</strong>
+                    <span>Bifează ce piese are fiecare axă. Cu <i class="bi bi-grid-1x2" aria-hidden="true"></i> alegi roțile una câte una (ex. doar exteriorul unei axe cu roți duble).</span>
+                    <button type="button" class="as-btn is-small as-wheels-all" data-as-wheels-all aria-pressed="false"><i class="bi bi-grid-1x2" aria-hidden="true"></i> Arată roțile</button>
                 </summary>
-                <form method="post" action="<?= e($manageUrl) ?>">
+                <form method="post" action="<?= e($manageUrl) ?>" id="as-axle-matrix">
                     <?= csrf_field() ?>
-                    <input type="hidden" name="op" value="axle_kinds_save">
+                    <input type="hidden" name="op" value="axle_matrix_save">
                     <?= $scopeFields() ?>
                     <div class="as-matrix-scroll">
                         <table class="as-matrix-table">
@@ -216,8 +218,8 @@ $assetVersion = static fn (string $path): string => url($path . '?v=' . (string)
                                     <th scope="col">Componentă</th>
                                     <?php foreach ($axleColumns as $column): ?>
                                         <th scope="col" class="is-kind">
-                                            <?= e($column['label']) ?>
-                                            <small><?= $column['axles'] !== [] ? e(implode(', ', array_map(static fn (int $no): string => 'A' . $no, $column['axles']))) : 'fără axă' ?></small>
+                                            Axa <?= e((string) $column['no']) ?>
+                                            <small><?= e($column['label']) ?><?= count((array) ($axleWheelsMap[$column['no']] ?? [])) === 4 ? ' · roți duble' : '' ?></small>
                                         </th>
                                     <?php endforeach; ?>
                                 </tr>
@@ -226,16 +228,41 @@ $assetVersion = static fn (string $path): string => url($path . '?v=' . (string)
                                 <tbody data-as-matrix-group>
                                     <tr class="is-group"><th scope="colgroup" colspan="<?= e((string) (count($axleColumns) + 1)) ?>"><?= e($group['label']) ?></th></tr>
                                     <?php foreach ($group['rows'] as $row): ?>
-                                        <tr data-as-row data-name="<?= e(mb_strtolower($row['name'], 'UTF-8')) ?>">
+                                        <?php
+                                        $placed = $rowWheels($row);
+                                        $partial = false;
+                                        foreach ($placed as $placedAxle => $placedWheels) {
+                                            $partial = $partial || count($placedWheels) < count($axleWheelsMap[$placedAxle] ?? []);
+                                        }
+                                        ?>
+                                        <tr data-as-row data-name="<?= e(mb_strtolower($row['name'], 'UTF-8')) ?>"<?= $partial ? ' class="is-wheels"' : '' ?>>
                                             <th scope="row">
-                                                <?= e($row['name']) ?>
+                                                <span class="as-matrix-name">
+                                                    <?= e($row['name']) ?>
+                                                    <button type="button" class="as-wheels-toggle" data-as-wheels-toggle aria-pressed="<?= $partial ? 'true' : 'false' ?>" title="Alege roțile" aria-label="<?= e('Alege roțile pentru ' . $row['name']) ?>"><i class="bi bi-grid-1x2" aria-hidden="true"></i></button>
+                                                </span>
                                                 <input type="hidden" name="matrix_keys[]" value="<?= e($row['key']) ?>">
                                             </th>
                                             <?php foreach ($axleColumns as $column): ?>
-                                                <td class="is-kind">
-                                                    <input type="checkbox" name="matrix[<?= e($row['key']) ?>][]" value="<?= e($column['kind']) ?>"
-                                                           aria-label="<?= e($row['name'] . ' pe axa ' . $column['label']) ?>"
-                                                           <?= $row['kinds'] === null || in_array($column['kind'], $row['kinds'], true) ? 'checked' : '' ?><?= $canManage ? '' : ' disabled' ?>>
+                                                <?php
+                                                $wheelsHere = (array) ($axleWheelsMap[$column['no']] ?? []);
+                                                $on = (array) ($placed[$column['no']] ?? []);
+                                                $state = $on === [] ? '' : (count($on) === count($wheelsHere) ? 'checked' : 'partial');
+                                                ?>
+                                                <td class="is-kind" data-as-cell>
+                                                    <input type="checkbox" data-as-axle-all
+                                                           aria-label="<?= e($row['name'] . ' pe toată axa ' . $column['no']) ?>"
+                                                           <?= $state === 'checked' ? 'checked' : '' ?><?= $state === 'partial' ? ' data-partial="1"' : '' ?><?= $canManage ? '' : ' disabled' ?>>
+                                                    <span class="as-wheels<?= count($wheelsHere) === 4 ? ' is-dual' : '' ?>">
+                                                        <?php foreach ($wheelsHere as $wheel): ?>
+                                                            <label class="as-wheel" title="<?= e(VehicleStructureService::WHEEL_LABELS[$wheel]) ?>">
+                                                                <input type="checkbox" name="matrix[<?= e($row['key']) ?>][<?= e((string) $column['no']) ?>][]" value="<?= e($wheel) ?>"
+                                                                       data-as-wheel aria-label="<?= e($row['name'] . ', axa ' . $column['no'] . ', ' . mb_strtolower(VehicleStructureService::WHEEL_LABELS[$wheel], 'UTF-8')) ?>"
+                                                                       <?= in_array($wheel, $on, true) ? 'checked' : '' ?><?= $canManage ? '' : ' disabled' ?>>
+                                                                <span><?= e(VehicleStructureService::WHEEL_SHORT[$wheel]) ?></span>
+                                                            </label>
+                                                        <?php endforeach; ?>
+                                                    </span>
                                                 </td>
                                             <?php endforeach; ?>
                                         </tr>
@@ -247,10 +274,52 @@ $assetVersion = static fn (string $path): string => url($path . '?v=' . (string)
                     <?php if ($canManage): ?>
                         <div class="as-form-actions as-matrix-actions">
                             <?php if ($isVehicle): ?><span class="as-hint">Se aplică doar acestui vehicul.</span><?php else: ?><span class="as-hint">Se aplică vehiculelor care urmează această configurație și nu au valori proprii.</span><?php endif; ?>
-                            <button type="submit" class="as-btn is-primary">Salvează</button>
+                            <span class="as-matrix-buttons">
+                                <?php if ($isVehicle && $copyTargets !== []): ?>
+                                    <button type="button" class="as-btn" data-as-toggle="axle-copy"><i class="bi bi-copy" aria-hidden="true"></i> Aplică pe alte vehicule</button>
+                                <?php endif; ?>
+                                <button type="submit" class="as-btn is-primary">Salvează</button>
+                            </span>
                         </div>
                     <?php endif; ?>
                 </form>
+                <?php if ($canManage && $isVehicle && $copyTargets !== []): ?>
+                    <form class="as-axle-copy" method="post" action="<?= e($manageUrl) ?>" data-as-panel="axle-copy" data-as-axle-copy hidden>
+                        <?= csrf_field() ?>
+                        <input type="hidden" name="op" value="axle_copy">
+                        <input type="hidden" name="vehicle_id" value="<?= e((string) $vehicle['id']) ?>">
+                        <div class="as-axle-copy-step">
+                            <strong>1. Axele de copiat de pe <?= e($vehicle['plate']) ?></strong>
+                            <div class="as-axle-copy-axles">
+                                <?php foreach ($axleColumns as $column): ?>
+                                    <label class="as-check"><input type="checkbox" name="copy_axles[]" value="<?= e((string) $column['no']) ?>" checked data-as-copy-axle> Axa <?= e((string) $column['no']) ?> <small><?= e($column['label']) ?></small></label>
+                                <?php endforeach; ?>
+                            </div>
+                        </div>
+                        <div class="as-axle-copy-step">
+                            <div class="as-axle-copy-head">
+                                <strong>2. Pe vehiculele (<?= e(VehicleStructureService::VEHICLE_TYPES[$vehicle['type']] ?? '') ?>)</strong>
+                                <input type="search" class="as-axle-copy-search" placeholder="Caută număr…" data-as-copy-search aria-label="Caută vehicul">
+                                <button type="button" class="as-btn is-small" data-as-copy-all>Bifează toate</button>
+                            </div>
+                            <div class="as-axle-copy-targets">
+                                <?php foreach ($copyTargets as $target): ?>
+                                    <label class="as-check" data-as-copy-target data-axles="<?= e(implode(',', $target['axle_nos'])) ?>" data-name="<?= e(mb_strtolower($target['label'], 'UTF-8')) ?>">
+                                        <input type="checkbox" name="copy_targets[]" value="<?= e((string) $target['id']) ?>">
+                                        <span><?= e($target['label']) ?> <small><?= e((string) $target['axles']) ?> axe</small></span>
+                                    </label>
+                                <?php endforeach; ?>
+                            </div>
+                        </div>
+                        <div class="as-form-actions as-matrix-actions">
+                            <span class="as-hint">Copiază configurația salvată, roată cu roată: pe fiecare axă aleasă, vehiculul țintă primește exact piesele de aici (de pe o axă simplă pe una cu roți duble, pe aceeași parte). Celelalte axe ale lui rămân neatinse.</span>
+                            <span class="as-matrix-buttons">
+                                <button type="button" class="as-btn" data-as-toggle="axle-copy">Renunță</button>
+                                <button type="submit" class="as-btn is-primary">Aplică</button>
+                            </span>
+                        </div>
+                    </form>
+                <?php endif; ?>
             </details>
         <?php endif; ?>
 
@@ -320,7 +389,7 @@ $assetVersion = static fn (string $path): string => url($path . '?v=' . (string)
                                 ?>
                                 <div class="as-row" role="row" data-as-row data-name="<?= e(mb_strtolower($row['name'], 'UTF-8')) ?>">
                                     <span role="cell" class="as-name"><strong><?= e($row['name']) ?></strong><?php if ($row['code'] !== ''): ?><small><?= e($row['code']) ?></small><?php endif; ?></span>
-                                    <span role="cell" data-label="Axe"><?= $section['axle_scoped'] ? e($axleText($row['kinds'])) : '—' ?></span>
+                                    <span role="cell" data-label="Axe"><?= $section['axle_scoped'] ? e($axleText($row)) : '—' ?></span>
                                     <span role="cell" data-label="Interval"><?= e($money($row['interval'], $row['unit'])) ?></span>
                                     <span role="cell" data-label="Atenționare"><?= e($money($row['warning'], $row['unit'])) ?></span>
                                     <span role="cell" data-label="Critic"><?= e($money($row['critical'], $row['unit'])) ?></span>
@@ -336,6 +405,10 @@ $assetVersion = static fn (string $path): string => url($path . '?v=' . (string)
                                     </span>
                                 </div>
                                 <?php if ($canManage): ?>
+                                    <?php // Formularul de editare sta intr-un <template> (inert, in afara documentului) si se monteaza la
+                                          // primul „Editează” (auto-structure.js): zecile de formulare ascunse nu mai sunt parcurse la fiecare
+                                          // click de handler-ele globale (Bootstrap scaneaza tot documentul). ?>
+                                    <template data-as-panel-template="edit-<?= e($editId) ?>">
                                     <form class="as-edit" method="post" action="<?= e($manageUrl) ?>" data-as-panel="edit-<?= e($editId) ?>" hidden>
                                         <?= csrf_field() ?>
                                         <input type="hidden" name="op" value="component_save">
@@ -366,6 +439,7 @@ $assetVersion = static fn (string $path): string => url($path . '?v=' . (string)
                                             <button type="submit" class="as-btn is-primary">Salvează</button>
                                         </div>
                                     </form>
+                                    </template>
                                 <?php endif; ?>
                             <?php endforeach; ?>
                         </div>

@@ -1,5 +1,5 @@
 /* Rentabilitate Operationala — macheta aprobata (~1672 px). Prefix .rop; aceeasi familie vizuala ca Istoric Financiar (.ifv). */
-.rop, .rop-menu, .rop-toast, .rop-floating {
+.rop, .rop-menu, .rop-toast, .rop-floating, .rop-lm {
     --rop-ink: #101828;
     --rop-ink-2: #344054;
     --rop-muted: #667085;
@@ -81,51 +81,51 @@
 /* ---------- tabel principal ---------- */
 .rop-card { background: #fff; border: 1px solid var(--rop-line-2); border-radius: var(--rop-radius); box-shadow: var(--rop-shadow); }
 .rop-table { width: 100%; border-collapse: separate; border-spacing: 0; table-layout: fixed; }
-.rop-table th { font-size: 15px; font-weight: 700; color: var(--rop-ink); padding: 11px 8px; border-bottom: 1px solid var(--rop-line); text-align: left; vertical-align: middle; line-height: 1.15; white-space: nowrap; background: #fbfcfe; cursor: default; user-select: none; }
-.rop-table th small { display: block; font-size: 12px; font-weight: 500; color: var(--rop-ink-2); margin-top: 3px; }
+.rop-table th { font-size: 13px; font-weight: 700; color: var(--rop-ink); padding: 9px 8px; border-bottom: 1px solid var(--rop-line); text-align: left; vertical-align: middle; line-height: 1.15; white-space: nowrap; background: #fbfcfe; cursor: default; user-select: none; }
+.rop-table th small { display: block; font-size: 10.5px; font-weight: 500; color: var(--rop-ink-2); margin-top: 3px; }
 .rop-table th[data-sort] { cursor: pointer; }
 .rop-table th[data-sort]:hover { color: var(--rop-primary); }
 .rop-table th .bi-arrow-down-short, .rop-table th .bi-arrow-up-short { font-size: 15px; color: var(--rop-primary); }
 .rop-table th:first-child { border-top-left-radius: var(--rop-radius); padding-left: 20px; }
 .rop-table th:last-child { border-top-right-radius: var(--rop-radius); text-align: right; padding-right: 20px; }
 .rop-table .is-num { text-align: center; }
-.rop-table td { font-size: 15.5px; color: var(--rop-ink); padding: 8px; border-bottom: 1px solid var(--rop-line-2); vertical-align: middle; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rop-table td { font-size: 13px; color: var(--rop-ink); padding: 5px 8px; border-bottom: 1px solid var(--rop-line-2); vertical-align: middle; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rop-table td:first-child { padding-left: 20px; }
 .rop-table td:last-child { text-align: right; padding-right: 20px; overflow: visible; }
 .rop-row { cursor: pointer; transition: background .15s; }
 .rop-row:hover td { background: #fafbff; }
 .rop-row.is-open td { background: #f2f5fe; border-bottom-color: #dfe5fb; }
-.rop-check { width: 19px; height: 19px; border: 1.5px solid #c9ced8; border-radius: 4px; cursor: pointer; vertical-align: middle; accent-color: var(--rop-primary); }
-.rop-exp { width: 34px; height: 30px; border: 1px solid var(--rop-line); border-radius: 7px; background: #fff; display: grid; place-items: center; font-size: 15px; color: var(--rop-ink); cursor: pointer; transition: background .2s, border-color .2s; }
+.rop-check { width: 16px; height: 16px; border: 1.5px solid #c9ced8; border-radius: 4px; cursor: pointer; vertical-align: middle; accent-color: var(--rop-primary); }
+.rop-exp { width: 28px; height: 26px; border: 1px solid var(--rop-line); border-radius: 7px; background: #fff; display: grid; place-items: center; font-size: 13px; color: var(--rop-ink); cursor: pointer; transition: background .2s, border-color .2s; }
 .rop-exp i { transition: transform .28s cubic-bezier(.2, .8, .2, 1); }
 .rop-row.is-open .rop-exp i { transform: rotate(90deg); }
-.rop-veh { display: flex; align-items: center; gap: 14px; min-width: 0; }
-.rop-dot { flex: 0 0 13px; height: 13px; border-radius: 50%; background: #22c55e; }
+.rop-veh { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.rop-dot { flex: 0 0 10px; height: 10px; border-radius: 50%; background: #22c55e; }
 .rop-dot.is-fara_activitate { background: #c3c8d2; }
 .rop-dot.is-inactiv { background: #ef4444; }
-.rop-veh b { font-size: 17.5px; font-weight: 800; letter-spacing: -.1px; overflow: hidden; text-overflow: ellipsis; }
-.rop-veh small { display: block; font-size: 12px; color: var(--rop-muted); font-weight: 500; }
+.rop-veh b { font-size: 14.5px; font-weight: 800; letter-spacing: -.1px; overflow: hidden; text-overflow: ellipsis; }
+.rop-veh small { display: block; font-size: 11px; color: var(--rop-muted); font-weight: 500; }
 .rop-veh-text { display: flex; flex-direction: column; min-width: 0; line-height: 1.15; }
-.rop-person { display: flex; align-items: center; gap: 14px; min-width: 0; }
-.rop-person i { font-size: 20px; color: var(--rop-ink-2); flex: 0 0 auto; }
+.rop-person { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.rop-person i { font-size: 16px; color: var(--rop-ink-2); flex: 0 0 auto; }
 .rop-person span { overflow: hidden; text-overflow: ellipsis; }
-.rop-pill { display: inline-flex; align-items: center; height: 26px; padding: 0 16px; border-radius: 13px; font-size: 14px; font-weight: 500; white-space: nowrap; }
+.rop-pill { display: inline-flex; align-items: center; height: 22px; padding: 0 11px; border-radius: 11px; font-size: 12px; font-weight: 500; white-space: nowrap; }
 .rop-pill.t-distributie { background: #fcd34d; color: #3b2a00; }
 .rop-pill.t-primar, .rop-pill.t-primar_tona { background: #2f6ce5; color: #fff; }
 .rop-pill.t-primar_distributie { background: #6d5ae6; color: #fff; }
 .rop-pill.t-compresor { background: #0f9488; color: #fff; }
 .rop-pill.t-mixt { background: #e8ebf3; color: var(--rop-ink-2); }
 .rop-pill.t-semi { background: #f1f3f8; color: var(--rop-muted); }
-.rop-bold { font-weight: 800; font-size: 17px; }
-.rop-res { display: inline-flex; align-items: center; justify-content: center; min-width: 74px; height: 29px; padding: 0 12px; border-radius: 15px; font-weight: 700; font-size: 16px; font-variant-numeric: tabular-nums; }
+.rop-bold { font-weight: 800; font-size: 14px; }
+.rop-res { display: inline-flex; align-items: center; justify-content: center; min-width: 60px; height: 23px; padding: 0 10px; border-radius: 12px; font-weight: 700; font-size: 13px; font-variant-numeric: tabular-nums; }
 .rop-res.is-neg { background: var(--rop-red-soft); color: var(--rop-red-ink); }
 .rop-res.is-pos { background: var(--rop-green-soft); color: var(--rop-green-ink); }
-.rop-cov { font-weight: 700; font-size: 16.5px; }
+.rop-cov { font-weight: 700; font-size: 13.5px; }
 .rop-cov.is-neg { color: var(--rop-red-ink); }
 .rop-cov.is-pos { color: var(--rop-green-ink); }
 .rop-na { color: #98a2b3; }
-.rop-warn { color: #c2410c; font-size: 13px; margin-left: 4px; vertical-align: 1px; }
-.rop-act { width: 38px; height: 32px; border: 1px solid var(--rop-line); border-radius: 8px; background: #fff; font-size: 17px; display: inline-grid; place-items: center; cursor: pointer; color: var(--rop-ink); }
+.rop-warn { color: #c2410c; font-size: 11.5px; margin-left: 4px; vertical-align: 1px; }
+.rop-act { width: 32px; height: 27px; border: 1px solid var(--rop-line); border-radius: 8px; background: #fff; font-size: 15px; display: inline-grid; place-items: center; cursor: pointer; color: var(--rop-ink); }
 .rop-act:hover { border-color: var(--rop-primary-line); color: var(--rop-primary); }
 .rop-state td { text-align: center; color: var(--rop-muted); padding: 34px 10px; white-space: normal; font-size: 14.5px; }
 .rop-state i { display: block; font-size: 30px; color: #c7ccd6; margin-bottom: 6px; }
@@ -330,3 +330,95 @@
 @media (prefers-reduced-motion: reduce) {
     .rop *, .rop *::before, .rop *::after { transition: none !important; animation: none !important; }
 }
+
+/* ---- Modul Locatii: Origine / Destinatie / Depozit (LocationDimensionService) */
+.rop-mode-btn { width: 118px; gap: 9px; }
+.rop-dims { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin: -6px 0 16px; }
+.rop-dims[hidden] { display: none; }
+.rop-dims-seg { display: inline-flex; border: 1px solid var(--rop-line); border-radius: 8px; overflow: hidden; background: #fff; }
+.rop-dims-seg button { display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 16px; border: 0; border-right: 1px solid var(--rop-line); background: #fff; color: var(--rop-ink); font-size: 14px; cursor: pointer; transition: background .2s, color .2s; }
+.rop-dims-seg button:last-child { border-right: 0; }
+.rop-dims-seg button:hover { background: #f6f8ff; }
+.rop-dims-seg button.is-active { background: var(--rop-primary-soft); color: var(--rop-primary-2); font-weight: 600; }
+.rop-dims-hint { flex: 1 1 280px; font-size: 13px; color: var(--rop-muted); }
+.rop-dims .rop-btn-outline { margin-left: 0; }
+.rop-loc-h { font-size: 14.5px; font-weight: 700; margin: 16px 0 6px; color: var(--rop-ink); text-align: left; }
+.rop-ws .rop-list td, .rop-ws .rop-list th { text-align: left; }
+.rop-ws .rop-list .is-num { text-align: right; }
+.rop-list tr.is-click { cursor: pointer; }
+.rop-list tr.is-click:hover td { background: #f7f8fd; }
+.rop-muted { color: var(--rop-muted); }
+
+/* Gestionarea locurilor fizice (fereastra peste pagina) */
+.rop-lm { position: fixed; inset: 0; z-index: 1080; display: none; align-items: flex-start; justify-content: center; padding: 4vh 16px; background: rgba(16, 24, 40, .38); color: var(--rop-ink); font-size: 14px; text-align: left; }
+.rop-lm.is-open { display: flex; animation: rop-morph .2s ease; }
+.rop-lm *, .rop-lm *::before, .rop-lm *::after { box-sizing: border-box; }
+body.rop-lm-lock { overflow: hidden; }
+.rop-lm-box { width: min(1080px, 100%); max-height: 92vh; display: flex; flex-direction: column; background: #fff; border-radius: 14px; box-shadow: 0 20px 50px rgba(16, 24, 40, .25); overflow: hidden; }
+.rop-lm-head { display: flex; gap: 16px; align-items: flex-start; justify-content: space-between; padding: 18px 22px 10px; border-bottom: 1px solid var(--rop-line-2); }
+.rop-lm-head h3 { margin: 0 0 4px; font-size: 19px; font-weight: 700; }
+.rop-lm-head p { margin: 0; font-size: 13px; color: var(--rop-muted); max-width: 820px; }
+.rop-lm-x { border: 0; background: transparent; width: 34px; height: 34px; border-radius: 8px; color: var(--rop-ink-2); cursor: pointer; }
+.rop-lm-x:hover { background: #f2f4f7; }
+.rop-lm-tools { padding: 10px 22px; }
+.rop-lm-tools .rop-search { max-width: 380px; }
+.rop-lm-body { overflow: auto; padding: 0 22px 22px; }
+.rop-lm-sug { background: #fffbeb; border: 1px solid #fde68a; border-radius: 10px; padding: 10px 14px; margin-bottom: 14px; font-size: 13px; }
+.rop-lm-sug ul { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 6px; }
+.rop-lm-sug li { display: flex; align-items: center; gap: 10px; }
+.rop-lm-sug li i { color: #b45309; }
+.rop-lm-sug li span { flex: 1; }
+.rop-lm-sug .rop-link-btn { cursor: pointer; }
+.rop-lm-place { border: 1px solid var(--rop-line); border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; transition: box-shadow .3s; }
+.rop-lm-place.is-focus { box-shadow: 0 0 0 3px rgba(47, 79, 216, .25); }
+.rop-lm-ph { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.rop-lm-ph b { font-size: 15px; }
+.rop-lm-name { height: 32px; min-width: 240px; padding: 0 10px; border: 1px solid var(--rop-line); border-radius: 7px; font-size: 14.5px; font-weight: 600; color: var(--rop-ink); }
+.rop-lm-name:focus, .rop-lm select:focus { outline: 0; border-color: var(--rop-primary-line); box-shadow: 0 0 0 3px rgba(47, 79, 216, .12); }
+.rop-lm select { height: 30px; padding: 0 8px; border: 1px solid var(--rop-line); border-radius: 7px; background: #fff; font-size: 13px; color: var(--rop-ink); max-width: 240px; }
+.rop-lm-trips { margin-left: auto; font-size: 13px; color: var(--rop-muted); }
+.rop-lm-roles { margin: 6px 0 8px; display: flex; flex-wrap: wrap; gap: 6px; }
+.rop-lm .rop-list td { padding: 5px 10px; }
+
+/* ---- Filtre cu selectie multipla (Beneficiar / Vehicule / Șoferi / Loc încărcare / Zonă distribuție / Depozit) */
+.rop-mf { display: flex; flex-wrap: wrap; gap: 10px; margin: -6px 0 16px; }
+.rop-mf-item { position: relative; }
+.rop-mf-btn { display: inline-flex; align-items: center; gap: 8px; height: 36px; max-width: 240px; padding: 0 12px; border: 1px solid var(--rop-line); border-radius: 8px; background: #fff; color: var(--rop-ink); font-size: 14px; cursor: pointer; transition: border-color .15s, background .15s; }
+.rop-mf-btn > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rop-mf-btn > i:first-child { font-size: 15px; color: var(--rop-ink-2); }
+.rop-mf-btn .rop-caret { font-size: 11px; color: var(--rop-muted); transition: transform .2s; }
+.rop-mf-btn:hover { border-color: var(--rop-primary-line); }
+.rop-mf-btn.is-set { border-color: var(--rop-primary-line); background: var(--rop-primary-soft); color: var(--rop-primary-2); font-weight: 600; }
+.rop-mf-btn.is-set > i:first-child { color: var(--rop-primary); }
+.rop-mf-item.is-open .rop-caret { transform: rotate(180deg); }
+.rop-mf-pop { position: absolute; z-index: 1050; top: calc(100% + 6px); left: 0; width: 320px; background: #fff; border: 1px solid var(--rop-line); border-radius: 10px; box-shadow: 0 12px 32px rgba(16, 24, 40, .16); padding: 10px; text-align: left; }
+.rop-mf-search { max-width: none; width: 100%; height: 34px; }
+.rop-mf-search input { font-size: 14px; }
+.rop-mf-meta { display: flex; align-items: center; gap: 8px; margin: 8px 2px 6px; font-size: 12.5px; color: var(--rop-muted); }
+.rop-mf-meta span { flex: 1; }
+.rop-mf-meta button { border: 0; background: transparent; color: var(--rop-primary-2); font-size: 12.5px; padding: 2px 4px; border-radius: 5px; cursor: pointer; }
+.rop-mf-meta button:hover { background: var(--rop-primary-soft); }
+.rop-mf-list { max-height: 280px; overflow: auto; border-top: 1px solid var(--rop-line-2); border-bottom: 1px solid var(--rop-line-2); padding: 4px 0; }
+.rop-mf-opt { display: flex; align-items: center; gap: 10px; padding: 6px 6px; margin: 0; border-radius: 6px; font-size: 14px; cursor: pointer; }
+.rop-mf-opt:hover { background: #f6f8ff; }
+.rop-mf-opt span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rop-mf-empty { padding: 14px 6px; font-size: 13px; color: var(--rop-muted); }
+.rop-mf-hint { margin: 6px 2px 0; font-size: 12px; color: var(--rop-muted); }
+.rop-mf-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+.rop-mf-foot .rop-btn-outline { margin-left: 0; }
+
+/* Bara selectiei din tabel */
+.rop-selbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 10px 16px; background: var(--rop-primary-soft); border-bottom: 1px solid var(--rop-primary-line); font-size: 14px; color: var(--rop-primary-2); text-align: left; }
+.rop-selbar[hidden] { display: none; }
+.rop-selbar > i { font-size: 17px; }
+.rop-selbar .rop-btn-outline { margin-left: 0; }
+.rop-selbar .rop-btn-outline:first-of-type { margin-left: auto; }
+.rop-selbar button[disabled] { opacity: .5; cursor: not-allowed; }
+
+/* Pe vehicule (detaliul unei locatii): coloanele de incarcare */
+.rop-list-load td.rop-lipsa { white-space: nowrap; }
+.rop-list-load td.rop-lipsa b.is-neg { color: var(--rop-red-ink); }
+.rop-list-load small.rop-fill, .rop-list-load small.rop-over { display: block; font-size: 11px; font-weight: 500; color: var(--rop-muted); line-height: 1.2; }
+.rop-list-load small.rop-fill.is-low { color: #b45309; }
+.rop-list-load small.rop-over { color: #7c3aed; }
+.rop-list tfoot td { border-top: 2px solid var(--rop-line); border-bottom: 0; background: #fafbfd; font-weight: 600; }

@@ -7,7 +7,7 @@
 }
 .rop-kpi {
     --rk-c: #2f4fd8; --rk-soft: #eef2ff; --rk-line-c: #c7d0fb;
-    position: relative; height: 200px; min-width: 0; overflow: hidden; contain: layout paint;
+    position: relative; height: 156px; min-width: 0; overflow: hidden; contain: layout paint;
     border: 1px solid var(--rk-line); border-radius: 14px; background: #fff;
     box-shadow: 0 1px 2px rgba(16, 24, 40, .04), 0 2px 8px rgba(16, 24, 40, .05);
     transition: border-color .2s ease, box-shadow .2s ease;
@@ -37,12 +37,12 @@
 .rop-kc-metric:hover:not(:disabled) { background: #f8f9fc; }
 .rop-kc-metric:disabled { cursor: default; }
 .rop-kc-metric:focus-visible, .rop-kc-explore:focus-visible { outline: 2px solid var(--rk-line-c); outline-offset: 1px; }
-.rop-kpi-value { font-size: 25px; font-weight: 800; color: var(--rk-ink); letter-spacing: -.3px; line-height: 1.2; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.rop-kpi-value { font-size: 27px; font-weight: 800; color: var(--rk-ink); letter-spacing: -.3px; line-height: 1.2; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .rop-kpi-value.is-neg { color: #d42a2a; }
 .rop-kpi-value.is-pos { color: #157a3d; }
 .rop-kpi-sub { font-size: 11.5px; color: var(--rk-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 
-.rop-kc-scope { display: flex; align-items: center; gap: 6px; margin-top: auto; min-height: 22px; font-size: 12px; color: var(--rk-ink-2); min-width: 0; }
+.rop-kc-scope { display: flex; align-items: center; gap: 6px; margin-top: 4px; min-height: 22px; font-size: 12px; color: var(--rk-ink-2); min-width: 0; }
 .rop-kc-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; font-weight: 500; }
 .rop-kc-scope.is-scoped .rop-kc-path { color: var(--rk-c); font-weight: 600; }
 .rop-kc-dot { width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: var(--rk-c); box-shadow: 0 0 0 3px color-mix(in srgb, var(--rk-c) 18%, transparent); }
@@ -65,7 +65,7 @@
 .rop-chip button:hover { background: #dde3ff; }
 .rop-active-reset { margin-left: auto; border: 0; background: none; color: #2440b8; font-size: 13px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 5px; }
 
-@media (max-width: 1400px) { .rop-kpi-value { font-size: 22px; } }
+@media (max-width: 1400px) { .rop-kpi-value { font-size: 24px; } }
 @media (max-width: 1250px) { .rop-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 760px) { .rop-kpis { grid-template-columns: minmax(0, 1fr); } }
 @media (prefers-reduced-motion: reduce) {
@@ -74,3 +74,7 @@
 
 /* In Tablou de bord: aceleasi carduri si aceeasi navigare, grila se adapteaza latimii cardului de dashboard */
 .dash-rop-card .rop-kpis { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); margin: 0; }
+
+/* Nivelul Locatii din card: „Toate locațiile” sare nivelul; comutatorul are 3 optiuni (Loc încărcare / Zonă / Depozit) */
+.rop-kc-skip .mc-row-name { font-style: italic; color: var(--rop-ink-2, #344054); }
+.rop-kpi .mc-seg button[data-loc-dim] { white-space: nowrap; }

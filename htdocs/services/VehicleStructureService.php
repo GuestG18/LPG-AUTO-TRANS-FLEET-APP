@@ -180,12 +180,23 @@ final class VehicleStructureService
 
         $this->ensureSchemeTables();
 
-        $column = $this->db->query(
-            "SELECT COUNT(*) FROM information_schema.COLUMNS
-             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'mentenanta_auto_configurari' AND COLUMN_NAME = 'axle_kinds'"
-        )->fetchColumn();
-        if ((int) $column === 0) {
-            $this->db->exec('ALTER TABLE mentenanta_auto_configurari ADD COLUMN axle_kinds VARCHAR(60) NULL AFTER category_id');
+        $this->ensureColumn('mentenanta_auto_configurari', 'axle_kinds', 'VARCHAR(60) NULL AFTER category_id');
+        // Piese pe axa / pe roata („1,2-LO,2-RO”), din 2026-11-24: au prioritate fata de tipurile de axa.
+        $this->ensureColumn('mentenanta_auto_configurari', 'axle_nos', 'VARCHAR(255) NULL AFTER axle_kinds');
+        $this->ensureColumn('mentenanta_auto_structuri_componente', 'axle_nos', 'VARCHAR(255) NULL AFTER axle_kinds');
+    }
+
+    private function ensureColumn(string $table, string $column, string $definition): void
+    {
+        $stmt = $this->db->prepare(
+            'SELECT CHARACTER_MAXIMUM_LENGTH FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :t AND COLUMN_NAME = :c'
+        );
+        $stmt->execute([':t' => $table, ':c' => $column]);
+        $length = $stmt->fetchColumn();
+        if ($length === false) {
+            $this->db->exec('ALTER TABLE ' . $table . ' ADD COLUMN ' . $column . ' ' . $definition);
+        } elseif (preg_match('/^VARCHAR\((\d+)\) NULL/', $definition, $match) === 1 && (int) $length < (int) $match[1]) {
+            $this->db->exec('ALTER TABLE ' . $table . ' MODIFY COLUMN ' . $column . ' VARCHAR(' . $match[1] . ') NULL');
         }
     }
 
@@ -580,6 +591,7 @@ final class VehicleStructureService
             'axles' => (int) $row['axle_count'],
             'layout' => $layout,
             'axle_kinds' => $this->layoutKinds((string) $row['vehicle_type'], $layout),
+            'axle_wheels' => self::wheelLayout($layout),
             'is_default' => $row['implicita_cheie'] !== null,
         ];
     }
@@ -608,6 +620,7 @@ final class VehicleStructureService
         foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $component) {
             $structure['components'][(string) $component['component_key']] = [
                 'kinds' => $this->decodeKinds($component['axle_kinds']),
+                'axles' => $this->decodeAxles($component['axle_nos'] ?? null),
                 'values' => $this->values($component),
             ];
         }
@@ -656,6 +669,195 @@ final class VehicleStructureService
     {
         $value = trim((string) $value);
         return $value === '' ? null : explode(',', $value);
+    }
+
+    /** Pozitiile rotilor: axa simpla stanga/dreapta, axa cu roti duble exterior/interior pe fiecare parte. */
+    public const WHEELS_SINGLE = ['L', 'R'];
+    public const WHEELS_DUAL = ['LO', 'LI', 'RI', 'RO'];
+    public const WHEEL_LABELS = [
+        'L' => 'Stânga', 'R' => 'Dreapta',
+        'LO' => 'Stânga exterior', 'LI' => 'Stânga interior', 'RI' => 'Dreapta interior', 'RO' => 'Dreapta exterior',
+    ];
+    public const WHEEL_SHORT = ['L' => 'S', 'R' => 'D', 'LO' => 'SE', 'LI' => 'SI', 'RI' => 'DI', 'RO' => 'DE'];
+
+    /**
+     * Locul componentei: lista de jetoane „2” (toata axa 2) sau „2-LO” (doar roata stanga exterior
+     * a axei 2); null = dupa tipuri de axa (vechi) / toate axele.
+     *
+     * @return list<string>|null
+     */
+    private function decodeAxles(mixed $value): ?array
+    {
+        $value = trim((string) $value);
+        if ($value === '') {
+            return null;
+        }
+        $tokens = [];
+        foreach (explode(',', $value) as $token) {
+            $token = strtoupper(trim($token));
+            if (preg_match('/^([1-9]\d?)(?:-(L|R|LO|LI|RI|RO))?$/', $token, $match) === 1) {
+                $tokens[] = isset($match[2]) ? $match[1] . '-' . $match[2] : $match[1];
+            }
+        }
+
+        return self::sortTokens(array_values(array_unique($tokens)));
+    }
+
+    private static function sortTokens(array $tokens): array
+    {
+        $order = array_flip(array_merge(self::WHEELS_SINGLE, self::WHEELS_DUAL));
+        usort($tokens, static function (string $a, string $b) use ($order): int {
+            [$axleA, $wheelA] = array_pad(explode('-', $a), 2, '');
+            [$axleB, $wheelB] = array_pad(explode('-', $b), 2, '');
+            return [(int) $axleA, $wheelA === '' ? -1 : $order[$wheelA]] <=> [(int) $axleB, $wheelB === '' ? -1 : $order[$wheelB]];
+        });
+
+        return $tokens;
+    }
+
+    private static function encodeAxles(?array $tokens): ?string
+    {
+        return $tokens === null ? null : implode(',', $tokens);
+    }
+
+    /**
+     * Rotile fiecarei axe, din dispunerea axelor (no, dual).
+     *
+     * @return array<int,list<string>>
+     */
+    public static function wheelLayout(array $layout): array
+    {
+        $result = [];
+        foreach ($layout as $axle) {
+            $result[(int) $axle['no']] = !empty($axle['dual']) ? self::WHEELS_DUAL : self::WHEELS_SINGLE;
+        }
+        ksort($result);
+
+        return $result;
+    }
+
+    /**
+     * Pe ce roti sta o componenta: axa -> pozitiile ei (toate pozitiile = toata axa).
+     *
+     * @param array<int,list<string>> $wheels wheelLayout
+     * @param array<int,string> $axleKinds axa -> tip (pentru configurarile vechi pe tipuri)
+     * @return array<int,list<string>>
+     */
+    public static function placementMap(array $component, array $wheels, array $axleKinds = []): array
+    {
+        $map = [];
+        if (($component['axles'] ?? null) !== null) {
+            foreach ($component['axles'] as $token) {
+                [$axle, $wheel] = array_pad(explode('-', (string) $token), 2, '');
+                $axle = (int) $axle;
+                if (!isset($wheels[$axle])) {
+                    continue;
+                }
+                if ($wheel === '') {
+                    $map[$axle] = $wheels[$axle];
+                } else {
+                    foreach (self::mapWheel($wheel, $wheels[$axle]) as $position) {
+                        $map[$axle][] = $position;
+                    }
+                }
+            }
+        } elseif (($component['kinds'] ?? null) !== null) {
+            foreach ($axleKinds as $axle => $kind) {
+                if (isset($wheels[(int) $axle]) && in_array($kind, $component['kinds'], true)) {
+                    $map[(int) $axle] = $wheels[(int) $axle];
+                }
+            }
+        } else {
+            $map = $wheels;
+        }
+        foreach ($map as $axle => $positions) {
+            $map[$axle] = array_values(array_intersect($wheels[$axle], $positions));
+            if ($map[$axle] === []) {
+                unset($map[$axle]);
+            }
+        }
+        ksort($map);
+
+        return $map;
+    }
+
+    /** O pozitie de roata pe o axa cu alta dispunere (simpla <-> dubla): aceeasi parte. */
+    private static function mapWheel(string $wheel, array $available): array
+    {
+        if (in_array($wheel, $available, true)) {
+            return [$wheel];
+        }
+        $side = $wheel[0];
+
+        return array_values(array_filter($available, static fn (string $position): bool => $position[0] === $side));
+    }
+
+    /**
+     * Inapoi la jetoane: axa intreaga = „2”, altfel rotile ei. Toate axele intregi = null.
+     *
+     * @param array<int,list<string>> $map
+     * @param array<int,list<string>> $wheels
+     * @return list<string>|null
+     */
+    public static function compressPlacement(array $map, array $wheels): ?array
+    {
+        $tokens = [];
+        $everything = true;
+        foreach ($wheels as $axle => $positions) {
+            $chosen = array_values(array_intersect($positions, $map[$axle] ?? []));
+            if (count($chosen) === count($positions)) {
+                $tokens[] = (string) $axle;
+                continue;
+            }
+            $everything = false;
+            foreach ($chosen as $position) {
+                $tokens[] = $axle . '-' . $position;
+            }
+        }
+
+        return $everything ? null : $tokens;
+    }
+
+    /**
+     * Axele concrete pe care sta o componenta (macar o roata).
+     *
+     * @param array<int,string> $axleKinds
+     * @return list<int>|null null = toate axele
+     */
+    public static function componentAxles(array $component, array $axleKinds): ?array
+    {
+        if (($component['axles'] ?? null) !== null) {
+            $axles = array_values(array_unique(array_map(static fn (string $token): int => (int) $token, array_map('strval', $component['axles']))));
+            return array_values(array_intersect($axles, array_map('intval', array_keys($axleKinds))));
+        }
+        if (($component['kinds'] ?? null) !== null) {
+            return array_keys(array_filter($axleKinds, static fn (string $kind): bool => in_array($kind, $component['kinds'], true)));
+        }
+
+        return null;
+    }
+
+    /** Text scurt pentru locul unei componente: „Toate”, „A1, A3” sau „A1, A2 (SE, DE)”. */
+    public static function describePlacement(array $component, array $wheels, array $axleKinds): string
+    {
+        $map = self::placementMap($component, $wheels, $axleKinds);
+        if (self::compressPlacement($map, $wheels) === null) {
+            return 'Toate';
+        }
+        if ($map === []) {
+            return '—';
+        }
+        $parts = [];
+        foreach ($map as $axle => $positions) {
+            if ($positions === []) {
+                continue;
+            }
+            $parts[] = count($positions) === count($wheels[$axle])
+                ? 'A' . $axle
+                : 'A' . $axle . ' (' . implode(', ', array_map(static fn (string $p): string => self::WHEEL_SHORT[$p], $positions)) . ')';
+        }
+
+        return $parts === [] ? '—' : implode(', ', $parts);
     }
 
     private function differences(int $vehicleId): array
@@ -710,7 +912,7 @@ final class VehicleStructureService
         }
         foreach ($differences['componenta'] as $key => $action) {
             if ($action === 'adaugat' && !isset($components[$key])) {
-                $components[$key] = ['kinds' => null, 'values' => $this->values([]), 'origin' => 'added'];
+                $components[$key] = ['kinds' => null, 'axles' => null, 'values' => $this->values([]), 'origin' => 'added'];
             }
         }
         foreach ($this->vehicleRows($vehicleId) as $key => $row) {
@@ -719,6 +921,7 @@ final class VehicleStructureService
             }
             $components[$key] = [
                 'kinds' => $this->decodeKinds($row['axle_kinds'] ?? null),
+                'axles' => $this->decodeAxles($row['axle_nos'] ?? null),
                 'values' => $this->values($row),
                 'origin' => isset($structure['components'][$key]) ? 'custom' : 'added',
             ];
@@ -752,6 +955,7 @@ final class VehicleStructureService
             'components' => $components,
             'differences' => $differences,
             'axle_kinds' => VehicleAxleTypeService::resolveKinds($this->db, $vehicleId, $profile['type'], $profile['layout']),
+            'axle_wheels' => self::wheelLayout($profile['layout']),
         ];
     }
 
@@ -783,7 +987,7 @@ final class VehicleStructureService
     public function schemeFilter(int $vehicleId): ?array
     {
         $effective = $this->effective($vehicleId);
-        return $effective === null ? null : $this->filterFrom($effective['systems'], $effective['components'], $effective['axle_kinds']);
+        return $effective === null ? null : $this->filterFrom($effective['systems'], $effective['components'], $effective['axle_kinds'], $effective['axle_wheels']);
     }
 
     /** @return array<int,string> axa -> tip, pentru un vehicul real */
@@ -793,29 +997,66 @@ final class VehicleStructureService
         return $profile === null ? [] : VehicleAxleTypeService::resolveKinds($this->db, $vehicleId, $profile['type'], $profile['layout']);
     }
 
-    /** Tipurile de axa (coloanele tabelului de piese); pe un vehicul doar cele pe care le are. */
-    public function axleColumns(string $vehicleType, array $axleKinds, bool $onlyPresent): array
+    /**
+     * Coloanele tabelului „Piese pe axă”: fiecare axa, cu tipul ei.
+     *
+     * @param array<int,string> $axleKinds axa -> tip
+     * @return list<array{no:int,kind:string,label:string}>
+     */
+    public function axleColumns(array $axleKinds): array
     {
+        ksort($axleKinds);
         $columns = [];
-        foreach (VehicleAxleTypeService::kindsFor($vehicleType) as $kind) {
-            $axles = array_keys($axleKinds, $kind, true);
-            if ($axles !== [] || !$onlyPresent) {
-                $columns[] = ['kind' => $kind, 'label' => VehicleAxleTypeService::KINDS[$kind], 'axles' => $axles];
-            }
+        foreach ($axleKinds as $no => $kind) {
+            $columns[] = ['no' => (int) $no, 'kind' => (string) $kind, 'label' => VehicleAxleTypeService::KINDS[$kind] ?? (string) $kind];
         }
 
         return $columns;
     }
 
-    /** Tipurile de axa ale fiecarei componente se traduc in axele concrete ale vehiculului. */
-    private function filterFrom(array $systems, array $components, array $axleKinds): array
+    /**
+     * Pe ce axe sta fiecare componenta, tradus in axele concrete ale vehiculului. `wheels` are doar
+     * axele pe care componenta nu sta pe toate rotile: cheie -> axa -> pozitiile ei.
+     */
+    private function filterFrom(array $systems, array $components, array $axleKinds, array $axleWheels): array
     {
-        return ['systems' => $systems, 'components' => array_map(
-            static fn (array $component): ?array => $component['kinds'] === null
-                ? null
-                : array_keys(array_filter($axleKinds, static fn (string $kind): bool => in_array($kind, $component['kinds'], true))),
+        $wheels = [];
+        foreach ($components as $key => $component) {
+            if (($component['axles'] ?? null) === null) {
+                continue;
+            }
+            foreach (self::placementMap($component, $axleWheels, $axleKinds) as $axle => $positions) {
+                if (count($positions) < count($axleWheels[$axle])) {
+                    $wheels[$key][$axle] = $positions;
+                }
+            }
+        }
+
+        return ['systems' => $systems, 'wheels' => $wheels, 'components' => array_map(
+            static fn (array $component): ?array => self::componentAxles($component, $axleKinds),
             $components
         )];
+    }
+
+    /**
+     * Vehiculele pe care se pot copia piesele de pe axe: acelasi tip, active, cu axe configurate.
+     *
+     * @return list<array{id:int,axles:int}>
+     */
+    public function axleCopyTargets(int $vehicleId): array
+    {
+        $source = $this->profile($vehicleId);
+        if ($source === null) {
+            return [];
+        }
+        $result = [];
+        foreach ($this->profiles() as $profile) {
+            if ($profile['id'] !== $vehicleId && $profile['type'] === $source['type']) {
+                $result[] = ['id' => $profile['id'], 'axles' => $profile['axles'], 'axle_nos' => array_column($profile['layout'], 'no')];
+            }
+        }
+
+        return $result;
     }
 
     /**
@@ -912,6 +1153,7 @@ final class VehicleStructureService
                     'name' => (string) $catalog[$key]['name'],
                     'code' => (string) $catalog[$key]['code'],
                     'kinds' => $component['kinds'],
+                    'axles' => $component['axles'] ?? null,
                     'origin' => $component['origin'],
                     'monitoring' => $type,
                     'unit' => (self::MONITORING_TYPES[$type] ?? self::MONITORING_TYPES['Kilometri'])['unit'],
@@ -985,7 +1227,7 @@ final class VehicleStructureService
             'axle_attrs' => (object) [],
             'axle_kinds' => (object) $structure['axle_kinds'],
         ];
-        $filter = $this->filterFrom($structure['systems'], $structure['components'], $structure['axle_kinds']);
+        $filter = $this->filterFrom($structure['systems'], $structure['components'], $structure['axle_kinds'], $structure['axle_wheels']);
         $positions = $this->slotPositions((int) $structure['id']);
         $member['slots'] = array_map(
             static fn (array $slot): array => $slot + ['state' => null, 'pos' => $positions[$slot['id']] ?? null],
@@ -1014,7 +1256,8 @@ final class VehicleStructureService
                 'delete' => $this->opDelete($post),
                 'set_default' => $this->opSetDefault($post),
                 'assign' => $this->opAssign($post),
-                'system_add', 'system_remove', 'component_add', 'component_remove', 'component_save', 'component_reset', 'restore', 'axle_kinds_save' => $this->opItem($op, $post),
+                'system_add', 'system_remove', 'component_add', 'component_remove', 'component_save', 'component_reset', 'restore', 'axle_kinds_save', 'axle_matrix_save' => $this->opItem($op, $post),
+                'axle_copy' => $this->opAxleCopy($post),
                 'positions_save' => $this->opPositions($post),
                 'part_pin' => $this->opPartPin($post),
                 'part_unpin' => $this->opPartUnpin($post),
@@ -1397,18 +1640,20 @@ final class VehicleStructureService
                 continue;
             }
             $this->insertComponent($id, $key);
-            $this->updateComponent($id, $key, $component['values'], $source['type'] === $type ? $component['kinds'] : null);
+            $sameType = $source['type'] === $type;
+            $this->updateComponent($id, $key, $component['values'], $sameType ? $component['kinds'] : null, $sameType ? ($component['axles'] ?? null) : null);
         }
     }
 
-    private function updateComponent(int $structureId, string $key, array $values, ?array $kinds): void
+    private function updateComponent(int $structureId, string $key, array $values, ?array $kinds, ?array $axles = null): void
     {
         $this->db->prepare(
             'UPDATE mentenanta_auto_structuri_componente
-             SET axle_kinds = :kinds, monitoring_type = :mt, interval_value = :iv, warning_value = :wv, critical_value = :cv, lifetime_value = :lv, updated_at = :u
+             SET axle_kinds = :kinds, axle_nos = :axles, monitoring_type = :mt, interval_value = :iv, warning_value = :wv, critical_value = :cv, lifetime_value = :lv, updated_at = :u
              WHERE structura_id = :s AND component_key = :k'
         )->execute([
             ':kinds' => $kinds === null ? null : implode(',', $kinds),
+            ':axles' => self::encodeAxles($axles),
             ':mt' => $values['type'] !== '' ? $values['type'] : null,
             ':iv' => $values['interval'] !== '' ? $values['interval'] : null,
             ':wv' => $values['warning'] !== '' ? $values['warning'] : null,
@@ -1554,15 +1799,16 @@ final class VehicleStructureService
                     if ($current === null) {
                         throw new InvalidArgumentException('Componenta nu este în această configurație.');
                     }
-                    $this->updateComponent($structure['id'], $key, $values, $current['kinds']);
+                    $this->updateComponent($structure['id'], $key, $values, $current['kinds'], $current['axles'] ?? null);
                 } else {
                     $this->saveVehicleValues($vehicleId, $type, $key, $values, [], $structure);
                 }
                 return $scope + $anchor + ['message' => 'Valorile componentei au fost salvate.'];
 
             case 'axle_kinds_save':
-                $changed = $this->saveAxleKindMatrix($post, $profile, $structure, $vehicleId, $type);
-                return $scope + ['anchor' => 'piese-pe-tip-axa', 'message' => $changed === 0 ? 'Nu a fost nimic de modificat.' : 'Piesele pe tipuri de axă au fost salvate (' . $changed . ' componente).'];
+            case 'axle_matrix_save':
+                $changed = $this->saveAxleMatrix($post, $profile, $structure, $vehicleId, $type);
+                return $scope + ['anchor' => 'piese-pe-axa', 'message' => $changed === 0 ? 'Nu a fost nimic de modificat.' : 'Piesele pe axe au fost salvate (' . $changed . ' componente).'];
 
             case 'component_reset':
                 if (!isset($structure['components'][$key])) {
@@ -1582,19 +1828,20 @@ final class VehicleStructureService
     }
 
     /**
-     * Tabelul „Piese pe tip de axa”. Pe un vehicul se vad doar tipurile de axa pe care le are; ce e
-     * setat pentru celelalte tipuri ramane neatins.
+     * Tabelul „Piese pe axă”: fiecare componenta bifata pe rotile fiecarei axe (matrix[cheie][axa][] =
+     * pozitie). Toate rotile unei axe = axa intreaga; toate axele intregi = null.
      */
-    private function saveAxleKindMatrix(array $post, ?array $profile, array $structure, int $vehicleId, string $type): int
+    private function saveAxleMatrix(array $post, ?array $profile, array $structure, int $vehicleId, string $type): int
     {
-        $allowed = VehicleAxleTypeService::kindsFor($type);
         if ($profile !== null) {
             $effective = $this->effective($vehicleId);
             $components = $effective['components'];
-            $columns = array_values(array_intersect($allowed, array_values($effective['axle_kinds'])));
+            $axleKinds = $effective['axle_kinds'];
+            $wheels = $effective['axle_wheels'];
         } else {
             $components = $structure['components'];
-            $columns = $allowed;
+            $axleKinds = $structure['axle_kinds'];
+            $wheels = $structure['axle_wheels'];
         }
 
         $changed = 0;
@@ -1605,27 +1852,176 @@ final class VehicleStructureService
             if ($component === null || !isset($this->catalog()[$key])) {
                 continue;
             }
-            $chosen = array_intersect($columns, array_map('strval', (array) ($matrix[$key] ?? [])));
-            if ($chosen === []) {
-                throw new InvalidArgumentException((string) $this->catalog()[$key]['name'] . ': bifează cel puțin un tip de axă sau elimină componenta.');
+            $map = [];
+            foreach ((array) ($matrix[$key] ?? []) as $axle => $positions) {
+                $axle = (int) $axle;
+                if (!isset($wheels[$axle])) {
+                    continue;
+                }
+                $chosen = array_values(array_intersect($wheels[$axle], array_map('strval', (array) $positions)));
+                if ($chosen !== []) {
+                    $map[$axle] = $chosen;
+                }
             }
-            $kept = array_diff($component['kinds'] ?? $allowed, $columns);
-            $final = array_values(array_intersect($allowed, array_merge($chosen, $kept)));
-            $final = count($final) === count($allowed) ? null : $final;
-            if ($final === $component['kinds']) {
-                continue;
+            if ($map === []) {
+                throw new InvalidArgumentException((string) $this->catalog()[$key]['name'] . ': bifează cel puțin o roată sau elimină componenta.');
             }
-            if ($profile === null) {
-                $this->updateComponent($structure['id'], $key, $component['values'], $final);
-            } else {
-                $values = $component['values'];
-                $values['type'] = isset(self::MONITORING_TYPES[$values['type']]) ? $values['type'] : 'Kilometri';
-                $this->saveVehicleValues($vehicleId, $type, $key, $values, ['kinds' => $final], $structure);
+            if ($this->writeAxles($profile, $structure, $vehicleId, $type, $key, $component, self::compressPlacement($map, $wheels), $wheels, $axleKinds)) {
+                $changed++;
             }
-            $changed++;
         }
 
         return $changed;
+    }
+
+    /** Scrie locul unei componente (pe configuratia generala sau pe vehicul); false = nimic de schimbat. */
+    private function writeAxles(?array $profile, array $structure, int $vehicleId, string $type, string $key, array $component, ?array $final, array $wheels, array $axleKinds, bool $force = false): bool
+    {
+        $current = self::compressPlacement(self::placementMap($component, $wheels, $axleKinds), $wheels);
+        if (!$force && $final === $current && ($component['kinds'] ?? null) === null && ($component['axles'] ?? null) === $final) {
+            return false;
+        }
+        if ($profile === null) {
+            $this->updateComponent($structure['id'], $key, $component['values'], null, $final);
+        } else {
+            $values = $component['values'];
+            $values['type'] = isset(self::MONITORING_TYPES[$values['type']]) ? $values['type'] : 'Kilometri';
+            $this->saveVehicleValues($vehicleId, $type, $key, $values, ['kinds' => null, 'axles' => $final], $structure);
+        }
+
+        return true;
+    }
+
+    /**
+     * Copiaza piesele de pe axele alese ale unui vehicul pe aceleasi axe ale altor vehicule de acelasi
+     * tip, roata cu roata. Pe fiecare axa copiata tinta primeste exact rotile sursei (o axa simpla pe
+     * una dubla trece pe aceeasi parte); celelalte axe ale tintei raman neatinse.
+     */
+    private function opAxleCopy(array $post): array
+    {
+        $vehicleId = (int) ($post['vehicle_id'] ?? 0);
+        $source = $this->profile($vehicleId);
+        $sourceEffective = $source !== null ? $this->effective($vehicleId) : null;
+        if ($sourceEffective === null) {
+            throw new InvalidArgumentException('Vehiculul sursă nu are o configurație.');
+        }
+        $sourceWheels = $sourceEffective['axle_wheels'];
+        $chosen = array_values(array_intersect(
+            array_keys($sourceWheels),
+            array_map('intval', (array) ($post['copy_axles'] ?? []))
+        ));
+        sort($chosen);
+        if ($chosen === []) {
+            throw new InvalidArgumentException('Bifează cel puțin o axă de copiat.');
+        }
+        $targets = array_values(array_unique(array_filter(array_map('intval', (array) ($post['copy_targets'] ?? [])))));
+        if ($targets === []) {
+            throw new InvalidArgumentException('Alege cel puțin un vehicul pe care să copiezi.');
+        }
+
+        $role = VehicleComponentRegistry::roleForVehicleType($source['type']);
+        $onAxles = function (string $key, array $systems) use ($role): bool {
+            $categories = array_filter($this->categoriesOf($key, $role), static fn (string $category): bool => isset($systems[$category]));
+            return array_filter($categories, static fn (string $category): bool => self::isAxleScoped($category)) !== [];
+        };
+        // Rotile sursei pe axele alese (doar componentele sistemelor legate de axe).
+        $sourceOn = [];
+        foreach ($sourceEffective['components'] as $key => $component) {
+            if ($onAxles($key, $sourceEffective['systems'])) {
+                $map = self::placementMap($component, $sourceWheels, $sourceEffective['axle_kinds']);
+                $sourceOn[$key] = array_intersect_key($map, array_flip($chosen));
+            }
+        }
+
+        $done = 0;
+        foreach ($targets as $targetId) {
+            $target = $this->profile($targetId);
+            $effective = $target !== null && $targetId !== $vehicleId && $target['type'] === $source['type'] ? $this->effective($targetId) : null;
+            if ($effective === null) {
+                continue;
+            }
+            $targetWheels = $effective['axle_wheels'];
+            $copied = array_values(array_intersect($chosen, array_keys($targetWheels)));
+            if ($copied === []) {
+                continue;
+            }
+            $structure = $effective['structure'];
+            $rows = $this->vehicleRows($targetId);
+            $keys = array_keys($sourceOn);
+            foreach (array_keys($effective['components']) as $key) {
+                if ($onAxles($key, $effective['systems']) && !isset($sourceOn[$key])) {
+                    $keys[] = $key;
+                }
+            }
+            foreach ($keys as $key) {
+                $component = $effective['components'][$key] ?? null;
+                $present = $component !== null && $onAxles($key, $effective['systems']);
+                $map = $present ? self::placementMap($component, $targetWheels, $effective['axle_kinds']) : [];
+                foreach ($copied as $axle) {
+                    unset($map[$axle]);
+                    $positions = $sourceOn[$key][$axle] ?? [];
+                    if ($positions === []) {
+                        continue;
+                    }
+                    if (count($positions) === count($sourceWheels[$axle])) {
+                        $map[$axle] = $targetWheels[$axle];
+                        continue;
+                    }
+                    $mapped = [];
+                    foreach ($positions as $position) {
+                        $mapped = array_merge($mapped, self::mapWheel($position, $targetWheels[$axle]));
+                    }
+                    $map[$axle] = array_values(array_intersect($targetWheels[$axle], $mapped));
+                }
+                ksort($map);
+                if ($map === []) {
+                    if ($present) {
+                        $this->removeDifference($targetId, 'componenta', $key, isset($structure['components'][$key]) || isset($rows[$key]));
+                    }
+                    continue;
+                }
+                $placement = self::compressPlacement($map, $targetWheels);
+                $force = false;
+                if (!$present) {
+                    $this->showSystemFor($targetId, $key, $role, $effective, $sourceEffective['systems']);
+                    $this->addDifference($targetId, 'componenta', $key, isset($structure['components'][$key]));
+                    if (isset($rows[$key])) {
+                        $component = ['kinds' => $this->decodeKinds($rows[$key]['axle_kinds'] ?? null), 'axles' => $this->decodeAxles($rows[$key]['axle_nos'] ?? null), 'values' => $this->values($rows[$key])];
+                    } elseif (isset($structure['components'][$key])) {
+                        $component = $structure['components'][$key];
+                    } else {
+                        // Componenta noua pe tinta: ia valorile sursei.
+                        $component = ['kinds' => null, 'axles' => null, 'values' => $sourceEffective['components'][$key]['values']];
+                        $force = true;
+                    }
+                }
+                $this->writeAxles($target, $structure, $targetId, $target['type'], $key, $component, $placement, $targetWheels, $effective['axle_kinds'], $force);
+            }
+            $done++;
+        }
+        if ($done === 0) {
+            throw new InvalidArgumentException('Niciun vehicul ales nu are axele copiate.');
+        }
+        $labels = implode(', ', array_map(static fn (int $no): string => 'A' . $no, $chosen));
+
+        return ['vehicle_id' => $vehicleId, 'anchor' => 'piese-pe-axa', 'message' => 'Piesele de pe ' . $labels . ' au fost copiate pe ' . $done . ($done === 1 ? ' vehicul.' : ' vehicule.')];
+    }
+
+    /** Inainte de a adauga o componenta pe tinta, readuce sistemul ei daca tinta l-a scos. */
+    private function showSystemFor(int $vehicleId, string $key, string $role, array $effective, array $sourceSystems): void
+    {
+        $categories = $this->categoriesOf($key, $role);
+        foreach ($categories as $category) {
+            if (isset($effective['systems'][$category])) {
+                return;
+            }
+        }
+        foreach ($categories as $category) {
+            if (isset($sourceSystems[$category])) {
+                $this->addDifference($vehicleId, 'sistem', $category, isset($effective['structure']['systems'][$category]));
+                return;
+            }
+        }
     }
 
     /** Adaugare pe vehicul: anuleaza o eliminare sau noteaza ca element in plus fata de general. */
@@ -1710,8 +2106,10 @@ final class VehicleStructureService
         $row = $this->vehicleRows($vehicleId)[$key] ?? null;
         $general = $structure['components'][$key] ?? null;
         $currentKinds = $row !== null ? $this->decodeKinds($row['axle_kinds'] ?? null) : ($general['kinds'] ?? null);
+        $currentAxles = $row !== null ? $this->decodeAxles($row['axle_nos'] ?? null) : ($general['axles'] ?? null);
         $finalKinds = array_key_exists('kinds', $newKinds) ? $newKinds['kinds'] : $currentKinds;
-        if ($row === null && $general !== null && $general['kinds'] === $finalKinds && $this->sameValues($general['values'], $values)) {
+        $finalAxles = array_key_exists('axles', $newKinds) ? $newKinds['axles'] : $currentAxles;
+        if ($row === null && $general !== null && $general['kinds'] === $finalKinds && ($general['axles'] ?? null) === $finalAxles && $this->sameValues($general['values'], $values)) {
             return;
         }
 
@@ -1722,12 +2120,12 @@ final class VehicleStructureService
         $now = date('Y-m-d H:i:s');
         $this->db->prepare(
             'INSERT INTO mentenanta_auto_configurari
-                (vehicle_id, vehicle_type, primary_category, subcategory, category_id, axle_kinds, component_key, component_name, component_code,
+                (vehicle_id, vehicle_type, primary_category, subcategory, category_id, axle_kinds, axle_nos, component_key, component_name, component_code,
                  monitoring_type, monitoring_methods, interval_value, warning_value, critical_value, lifetime_value, unit, created_at, updated_at)
              VALUES
-                (:vehicle, :type, :primary_cat, :sub, :cat, :axles, :comp_key, :comp_name, :code, :mt, :methods, :iv, :wv, :cv, :lv, :unit, :created, :updated)
+                (:vehicle, :type, :primary_cat, :sub, :cat, :axles, :axle_nos, :comp_key, :comp_name, :code, :mt, :methods, :iv, :wv, :cv, :lv, :unit, :created, :updated)
              ON DUPLICATE KEY UPDATE
-                axle_kinds = VALUES(axle_kinds), monitoring_type = VALUES(monitoring_type), monitoring_methods = VALUES(monitoring_methods),
+                axle_kinds = VALUES(axle_kinds), axle_nos = VALUES(axle_nos), monitoring_type = VALUES(monitoring_type), monitoring_methods = VALUES(monitoring_methods),
                 interval_value = VALUES(interval_value), warning_value = VALUES(warning_value), critical_value = VALUES(critical_value),
                 lifetime_value = VALUES(lifetime_value), unit = VALUES(unit), updated_at = VALUES(updated_at)'
         )->execute([
@@ -1737,6 +2135,7 @@ final class VehicleStructureService
             ':sub' => $subcategory,
             ':cat' => $categoryId,
             ':axles' => $finalKinds === null ? null : implode(',', $finalKinds),
+            ':axle_nos' => self::encodeAxles($finalAxles),
             ':comp_key' => $key,
             ':comp_name' => (string) $catalog['name'],
             ':code' => (string) $catalog['code'],

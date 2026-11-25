@@ -1,0 +1,1 @@
+Ansamblu B 105 NET + B 935 NET {"load":{"wallMs":1516,"domContentLoaded":1211,"scripting":299.1,"styleLayout":372.8,"paint":46.9,"raster":353.7,"imageDecode":132.7,"parse":201.8,"layoutCount":24,"longestLayout":71.4},"sel":{"n":6,"median":55.3,"avg":61.1,"worst":142},"zoom":{"avg":18.8,"worst":100,"dropped":80},"mem":[3,2.3],"nodes":279}

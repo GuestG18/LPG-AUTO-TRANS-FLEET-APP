@@ -1,0 +1,118 @@
+[
+ {
+  "variant": "phase4",
+  "errors": [],
+  "components": "50/50/50",
+  "picks": [
+   "motor:vehicul>",
+   "motor:vehicul>",
+   "motor:vehicul>"
+  ],
+  "dbg": [
+   [
+    "motor:vehicul",
+    null,
+    false
+   ],
+   [
+    "motor:vehicul",
+    null,
+    false
+   ],
+   [
+    "motor:vehicul",
+    null,
+    false
+   ]
+  ],
+  "componentEls": 150,
+  "stageComponentEls": 100,
+  "dom": 4883,
+  "listMs": [
+   532,
+   471,
+   500
+  ],
+  "listPaintMs": [
+   545,
+   484,
+   525
+  ],
+  "styleRecalcs": 965,
+  "layouts": 792,
+  "styleMs": 1108,
+  "layoutMs": 330,
+  "scriptMs": 936,
+  "taskMs": 7749,
+  "paints": 935,
+  "invalidations": 13234,
+  "gpuMs": 21458,
+  "frames": {
+   "frames": 159,
+   "p50": 16.7,
+   "p95": 83.3,
+   "p99": 150,
+   "max": 166.7,
+   "dropped": 69
+  },
+  "heapMB": 3.4
+ },
+ {
+  "variant": "current",
+  "errors": [],
+  "components": "50/50/50",
+  "picks": [
+   "motor:vehicul>",
+   "motor:vehicul>",
+   "motor:vehicul>"
+  ],
+  "dbg": [
+   [
+    "motor:vehicul",
+    false,
+    false
+   ],
+   [
+    "motor:vehicul",
+    false,
+    false
+   ],
+   [
+    "motor:vehicul",
+    false,
+    false
+   ]
+  ],
+  "componentEls": 79,
+  "stageComponentEls": 0,
+  "dom": 4811,
+  "listMs": [
+   46,
+   16,
+   21
+  ],
+  "listPaintMs": [
+   89,
+   32,
+   55
+  ],
+  "styleRecalcs": 1012,
+  "layouts": 824,
+  "styleMs": 1091,
+  "layoutMs": 344,
+  "scriptMs": 1104,
+  "taskMs": 8166,
+  "paints": 894,
+  "invalidations": 10956,
+  "gpuMs": 19573,
+  "frames": {
+   "frames": 166,
+   "p50": 16.7,
+   "p95": 50,
+   "p99": 166.7,
+   "max": 183.3,
+   "dropped": 63
+  },
+  "heapMB": 3.4
+ }
+]

@@ -1,0 +1,25 @@
+const { open, BASE } = require('./lib');
+(async () => {
+    const o = await open({ viewport: { width: 1600, height: 1000 } });
+    const page = await o.ctx.newPage();
+    page.on('pageerror', (e) => console.log('ERR', e.message));
+    await page.goto(BASE + '?page=mentenanta&action=auto&vehicle_id=31', { waitUntil: 'load' });
+    await page.waitForSelector('.fx-explorer .fx-svg');
+    await page.evaluate(() => document.querySelector('.fx-stage').scrollIntoView({ block: 'center' }));
+    await page.waitForTimeout(1000);
+    const st = () => page.evaluate(() => ({ xp: !document.querySelector('[data-fx-xp]').hidden, zoom: document.querySelector('.fx-explorer').classList.contains('is-zoomed'), y: Math.round(document.querySelector('.fx-stage').getBoundingClientRect().top), scroll: Math.round(scrollY) }));
+    const h = await page.$('.fx-hot[data-fx-slot="franare:A1-L"]');
+    let b = await h.boundingBox();
+    await page.mouse.click(b.x + b.width / 2, b.y + b.height / 2);
+    await page.waitForTimeout(1000);
+    console.log('after select', await st());
+    const c = await page.$('[data-fx-xp-close]');
+    b = await c.boundingBox();
+    console.log('close box', b, await page.evaluate((p) => { const e = document.elementFromPoint(p.x, p.y); return e && e.outerHTML.slice(0, 80); }, { x: b.x + b.width / 2, y: b.y + b.height / 2 }));
+    await page.mouse.click(b.x + b.width / 2, b.y + b.height / 2);
+    await page.waitForTimeout(300);
+    console.log('300ms after close', await st());
+    await page.waitForTimeout(700);
+    console.log('1s after close', await st());
+    await o.close();
+})();

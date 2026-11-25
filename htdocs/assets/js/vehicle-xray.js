@@ -72,11 +72,22 @@
         return node;
     };
     // Schimbarea panoului cu tranzitie (View Transitions API cand exista; altfel direct).
-    var morph = function (root, update) {
+    // Schimbarea panoului de sub schema (anvelope <-> componenta) cu View Transition. Se captureaza doar
+    // zona care se schimba (panoul / zona anvelopelor, acelasi nume: una o inlocuieste pe cealalta), iar
+    // radacina paginii e scoasa din tranzitie: altfel toata pagina, cu schema, era inlocuita de o imagine
+    // inghetata 0,34 s (marirea pornita de selectie nu se vedea, iar cadrele se pierdeau).
+    var morph = function (root, update, parts) {
         if (reducedMotion || typeof document.startViewTransition !== 'function') { update(); return; }
-        root.style.viewTransitionName = 'fx-detail';
+        var named = (parts && parts.length ? parts : [root]).filter(Boolean);
+        var html = document.documentElement;
+        var previousRoot = html.style.viewTransitionName;
+        named.forEach(function (node) { node.style.viewTransitionName = 'fx-detail'; });
+        html.style.viewTransitionName = 'none';
         var transition = document.startViewTransition(update);
-        transition.finished.finally(function () { root.style.viewTransitionName = ''; });
+        transition.finished.finally(function () {
+            named.forEach(function (node) { node.style.viewTransitionName = ''; });
+            html.style.viewTransitionName = previousRoot;
+        });
     };
     var formatMma = function (kg) {
         if (!kg) { return ''; }
@@ -204,7 +215,7 @@
         var axleForm = this.root.querySelector('[data-fx-axle-form]');
         if (axleForm) { axleForm.hidden = true; }
         this.tip.hidden = true;
-        this.clearCallouts();
+        this.resetDrill();
         if (!keep) {
             this.closeInspector();
             if (selection && selection.type === 'tire' && !options.external && this.hooks.onLeaveTires) { this.hooks.onLeaveTires(); }
@@ -355,13 +366,16 @@
     Explorer.prototype.template = function () {
         return this.headHtml()
             + '<div class="fx-body" data-fx-body><div class="fx-left">'
-            + '<div class="fx-stage" data-fx-stage><div class="fx-svg-host" data-fx-svg></div><svg class="fx-callout-lines" data-fx-lines viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"></svg>'
-            + '<div class="fx-hots" data-fx-hots></div><div class="fx-callouts" data-fx-callouts></div>'
+            + '<div class="fx-stage" data-fx-stage><div class="fx-svg-host" data-fx-svg></div>'
+            + '<div class="fx-hots" data-fx-hots></div>'
             + '<button type="button" class="fx-narrow-back" data-fx-narrow-back><i class="bi bi-layout-sidebar-reverse" aria-hidden="true"></i>Înapoi la componentă</button>'
             + '<button type="button" class="fx-zoom-back" data-fx-zoom-back hidden><i class="bi bi-arrow-left" aria-hidden="true"></i>Vehiculul întreg</button>'
             + '<div class="fx-tip" data-fx-tip role="tooltip" hidden></div></div></div>'
             + '<div class="fx-divider" data-fx-divider role="separator" aria-orientation="vertical" aria-label="Redimensionează schema și inspectorul" aria-valuemin="30" aria-valuemax="75" aria-valuenow="55" tabindex="0" hidden><span class="fx-divider-handle" aria-hidden="true"><i class="bi bi-chevron-left"></i><i class="bi bi-chevron-right"></i></span></div>'
-            + '<div class="fx-right"><aside class="fx-legend" data-fx-legend aria-label="Legendă componente">' + this.legendHtml() + '</aside><section class="fx-inspector" data-fx-inspector aria-label="Inspector componentă" hidden></section></div></div>'
+            + '<div class="fx-right"><aside class="fx-legend" data-fx-legend aria-label="Legendă componente">' + this.legendHtml() + '</aside>'
+            // Exploratorul de componente al sistemului ales (gol pana la prima deschidere, vezi openExplorer).
+            + '<section class="fx-xp" data-fx-xp aria-label="Componentele sistemului" hidden></section>'
+            + '<section class="fx-inspector" data-fx-inspector aria-label="Inspector componentă" hidden></section></div></div>'
             + '<div class="fx-footer" data-fx-footer aria-live="polite"></div>';
     };
 
@@ -376,10 +390,29 @@
         this.applyFilter();
         this.body = this.root.querySelector('[data-fx-body]');
         this.inspector = this.root.querySelector('[data-fx-inspector]');
+        this.xp = this.root.querySelector('[data-fx-xp]');
         this.divider = this.root.querySelector('[data-fx-divider]');
         this.initInspector();
         if (window.ResizeObserver) {
-            new window.ResizeObserver(function () { self.applyView(); self.sizeMarkers(); self.drawCalloutLines(); }).observe(this.stage);
+            // Singura sursa a dimensiunii scenei dupa prima desenare; in timpul unei mariri doar se
+            // memoreaza (cadrul final scrie viewBox-ul cu noua dimensiune).
+            this.resizeObserver = new window.ResizeObserver(function (entries) {
+                var rect = entries[entries.length - 1].contentRect;
+                var prev = self.size;
+                // Rotunjit ca clientWidth / clientHeight (aceeasi vedere ca inainte, pixel cu pixel).
+                self.size = { w: Math.round(rect.width), h: Math.round(rect.height) };
+                if (prev && prev.w === self.size.w && prev.h === self.size.h) { return; }
+                if (self.animating) { return; }
+                self.applyView(); self.sizeMarkers();
+            });
+            this.resizeObserver.observe(this.stage);
+        }
+        // Schema iesita din ecran (derulata / intr-un panou ascuns): pulsul marcajului selectat se opreste.
+        if (window.IntersectionObserver) {
+            this.visibilityObserver = new window.IntersectionObserver(function (entries) {
+                self.root.classList.toggle('is-offscreen', !entries[entries.length - 1].isIntersecting);
+            });
+            this.visibilityObserver.observe(this.stage);
         }
 
         this.root.dataset.fxMode = this.viewMode;
@@ -420,8 +453,19 @@
                 if (part && self.selection && self.selection.type === 'slot') { self.selectSubcomponent(part); }
                 return;
             }
-            var callout = event.target.closest('[data-fx-sub]');
-            if (callout) { self.selectSubcomponent(callout.dataset.fxSub); return; }
+            // Exploratorul de componente: inchidere, grup extins / restrans, „Arata toate”, rand = componenta.
+            if (event.target.closest('[data-fx-xp-close]')) { self.overview(); return; }
+            var group = event.target.closest('[data-fx-xp-group]');
+            if (group && self.xpState) {
+                var name = group.dataset.fxXpGroup;
+                self.xpState.expanded[name] = group.getAttribute('aria-expanded') !== 'true';
+                self.renderExplorerList();
+                return;
+            }
+            var all = event.target.closest('[data-fx-xp-all]');
+            if (all && self.xpState) { self.xpState.expanded[all.dataset.fxXpAll + '|all'] = true; self.renderExplorerList(); return; }
+            var row = event.target.closest('[data-fx-sub]');
+            if (row) { self.selectSubcomponent(row.dataset.fxSub); return; }
             var chip = event.target.closest('[data-fx-slot-chip]');
             if (chip) { self.selectSlot(chip.dataset.fxSlotChip, Number(chip.dataset.fxChipMember)); return; }
             if (event.target.closest('[data-fx-axle-view]')) { self.showAxlePanel(); return; }
@@ -430,6 +474,13 @@
             if (label || tire) { self.pickTire((label || tire).dataset.fxPos); return; }
             var axle = event.target.closest('.fx-axle');
             if (axle) { self.selectAxle(Number(axle.dataset.fxMember), Number(axle.dataset.fxAxle)); }
+        });
+        // Cautarea in exploratorul de componente: lista se reface cel mult o data pe cadru.
+        this.root.addEventListener('input', function (event) {
+            if (!event.target.matches || !event.target.matches('[data-fx-xp-search]') || !self.xpState) { return; }
+            self.xpState.filter = event.target.value.trim().toLowerCase();
+            if (self.xpFrame) { return; }
+            self.xpFrame = window.requestAnimationFrame(function () { self.xpFrame = 0; self.renderExplorerList(); });
         });
         this.root.addEventListener('keydown', function (event) {
             if (self.editing && event.target.classList && event.target.classList.contains('fx-hot')) {
@@ -451,24 +502,53 @@
             }
         });
         // Numele componentei / anvelopei la trecere si la focus.
+        // Pozitia se calculeaza din coordonatele deja cunoscute (procentele markerului / dreptunghiul
+        // anvelopei in vederea afisata) si din dimensiunea memorata a scenei: fara getBoundingClientRect,
+        // deci fara aranjare fortata la fiecare trecere cu mouse-ul.
+        var tipTarget = null;
+        var hideTip = function () { tipTarget = null; self.tip.hidden = true; };
         var showTip = function (target) {
             var hot = target.closest && target.closest('.fx-hot');
-            var tire = target.closest && target.closest('.fx-tire');
-            if (!hot && !tire) { self.tip.hidden = true; return; }
-            var text = hot ? hot.dataset.fxTip : tire.getAttribute('aria-label');
-            var stageBox = self.stage.getBoundingClientRect();
-            var box = (hot || tire).getBoundingClientRect();
-            self.tip.textContent = text;
+            var tire = !hot && target.closest && target.closest('.fx-tire');
+            var node = hot || tire;
+            if (!node) { hideTip(); return; }
+            if (node === tipTarget && !self.tip.hidden) { return; }
+            var size = self.size || { w: 0, h: 0 };
+            var x;
+            var y;
+            if (hot) {
+                x = parseFloat(hot.style.left) / 100 * size.w;
+                y = parseFloat(hot.style.top) / 100 * size.h - (parseFloat(self.markerSize) || 24) * 0.6;
+            } else {
+                var hit = tire.querySelector('.fx-hit') || tire.querySelector('rect');
+                var view = self.shown || self.view;
+                if (!hit || !view) { hideTip(); return; }
+                var rx = Number(hit.getAttribute('x'));
+                var ry = Number(hit.getAttribute('y'));
+                var rw = Number(hit.getAttribute('width'));
+                x = (rx + rw / 2 - view.x) / view.w * size.w;
+                y = (ry - view.y) / view.h * size.h;
+            }
+            if (!isFinite(x) || !isFinite(y)) { hideTip(); return; }
+            tipTarget = node;
+            self.tip.textContent = hot ? hot.dataset.fxTip : tire.getAttribute('aria-label');
             self.tip.hidden = false;
-            self.tip.style.left = (box.left + box.width / 2 - stageBox.left) + 'px';
-            self.tip.style.top = (box.top - stageBox.top - 8) + 'px';
+            self.tip.style.left = x.toFixed(1) + 'px';
+            self.tip.style.top = (y - 8).toFixed(1) + 'px';
         };
         this.stage.addEventListener('mouseover', function (event) { showTip(event.target); });
         this.stage.addEventListener('focusin', function (event) { showTip(event.target); });
-        this.stage.addEventListener('mouseleave', function () { self.tip.hidden = true; });
-        this.stage.addEventListener('focusout', function () { self.tip.hidden = true; });
+        this.stage.addEventListener('mouseleave', hideTip);
+        this.stage.addEventListener('focusout', hideTip);
         this.bindEditing();
-        this.detail.addEventListener('click', function (event) {
+        // Ascultatorii de pe elementul gazda (care supravietuieste instantei) se pastreaza pentru destroy():
+        // altfel fiecare montare noua pe aceeasi gazda ii dubla.
+        this.detailHandlers = {};
+        var onDetail = function (type, handler) {
+            self.detailHandlers[type] = handler;
+            self.detail.addEventListener(type, handler);
+        };
+        onDetail('click', function (event) {
             if (event.target.closest('[data-fx-back]')) { self.overview(); return; }
             var axleEdit = event.target.closest('[data-fx-axle-edit]');
             if (axleEdit) {
@@ -487,18 +567,18 @@
         });
         // Formularele panoului (montare / inlocuire, demontare, inspectie) se trimit fara reincarcare;
         // stopPropagation: garda globala anti-dublu-submit din app.js nu le atinge.
-        this.detail.addEventListener('submit', function (event) {
+        onDetail('submit', function (event) {
             var form = event.target.closest('[data-fx-form]');
             if (!form) { return; }
             event.preventDefault();
             event.stopPropagation();
             self.submitForm(form);
         });
-        this.detail.addEventListener('change', function (event) {
+        onDetail('change', function (event) {
             var form = event.target.closest('[data-fx-form="mount"]');
             if (form) { stockHint(form); }
         });
-        this.detail.addEventListener('input', function (event) {
+        onDetail('input', function (event) {
             var form = event.target.closest('[data-fx-form="mount"]');
             if (form && event.target.name === 'quantity') { stockHint(form); }
         });
@@ -514,7 +594,14 @@
         this.art = art;
         this.view = { x: art.view.x, y: art.view.y, w: art.view.w, h: art.view.h };
         this.fullView = { x: art.view.x, y: art.view.y, w: art.view.w, h: art.view.h };
-        this.stage.querySelector('[data-fx-svg]').replaceChildren(art.svg);
+        // Doua straturi in acelasi sistem de coordonate: desenul static (art.base, doar la vehiculele
+        // vectorizate) sub geometria interactiva (art.svg). Camera maririi le muta impreuna.
+        this.svgHost = this.stage.querySelector('[data-fx-svg]');
+        this.svgHost.style.transform = '';
+        this.svgHost.classList.remove('is-camera');
+        this.svgHost.replaceChildren.apply(this.svgHost, art.base ? [art.base, art.svg] : [art.svg]);
+        this.rendered = null;
+        if (!this.size || !this.size.w) { this.measure(); }
         this.stage.style.setProperty('--fx-aspect', art.view.w + ' / ' + art.view.h);
         this.stage.classList.toggle('is-isolated', isolated);
 
@@ -633,10 +720,13 @@
         var member = art.layout.members[0];
         var x0 = art.X(member.offset - 0.6);
         var x1 = art.X(member.offset + member.geo.length + 0.6);
-        try {
-            var box = art.svg.getBBox();
-            if (box && box.width > 0) { x0 = Math.min(x0, box.x); x1 = Math.max(x1, box.x + box.width); }
-        } catch (error) { /* desen inca neafisat: ramane caseta calculata din geometrie */ }
+        [art.svg, art.base].forEach(function (layer) {
+            if (!layer) { return; }
+            try {
+                var box = layer.getBBox();
+                if (box && box.width > 0) { x0 = Math.min(x0, box.x); x1 = Math.max(x1, box.x + box.width); }
+            } catch (error) { /* desen inca neafisat: ramane caseta calculata din geometrie */ }
+        });
         x0 = Math.max(art.view.x, x0 - 24);
         x1 = Math.min(art.view.x + art.view.w, x1 + 24);
         var view = { x: x0, y: art.view.y, w: x1 - x0, h: art.view.h };
@@ -647,10 +737,18 @@
 
     // Vederea afisata: vederea dorita (this.view) extinsa la raportul real al scenei, ca desenul
     // sa nu se deformeze cand scena isi schimba latimea (inspectorul deschis, separatorul tras).
+    // Dimensiunea scenei: citita o singura data la desenare, apoi doar din ResizeObserver (niciodata
+    // in cadrele animatiei, unde o citire dupa scrierile din placeOverlay ar forta o aranjare).
+    Explorer.prototype.measure = function () {
+        this.size = { w: this.stage.clientWidth, h: this.stage.clientHeight };
+        return this.size;
+    };
+
     Explorer.prototype.fitted = function () {
         var view = this.view;
-        var width = this.stage.clientWidth;
-        var height = this.stage.clientHeight;
+        var size = this.size && this.size.w ? this.size : this.measure();
+        var width = size.w;
+        var height = size.h;
         if (!width || !height) { return view; }
         var aspect = width / height;
         var current = view.w / view.h;
@@ -663,47 +761,163 @@
         return { x: view.x, y: view.y - (tall - view.h) / 2, w: view.w, h: tall };
     };
 
+    // Vederea stabila: viewBox-ul (acelasi pe stratul desenului si pe cel interactiv) se scrie doar aici,
+    // nu la fiecare cadru al unei mariri; transformarea camerei se sterge.
     Explorer.prototype.applyView = function () {
         if (!this.art) { return; }
         var shown = this.fitted();
         this.shown = shown;
-        this.art.svg.setAttribute('viewBox', [shown.x, shown.y, shown.w, shown.h].map(function (v) { return v.toFixed(1); }).join(' '));
+        var box = [shown.x, shown.y, shown.w, shown.h].map(function (v) { return v.toFixed(1); }).join(' ');
+        this.art.svg.setAttribute('viewBox', box);
+        if (this.art.base) { this.art.base.setAttribute('viewBox', box); }
+        this.rendered = shown;
+        if (this.svgHost && this.svgHost.classList.contains('is-camera')) {
+            this.svgHost.style.transform = '';
+            this.svgHost.classList.remove('is-camera');
+        }
         this.placeOverlay();
     };
 
+    // Un cadru al maririi: desenul ramane rasterizat la vederea stabila (this.rendered) si e mutat /
+    // scalat de compozitor exact pe vederea cadrului (aceeasi proiectie ca viewBox-ul), iar markerii
+    // HTML se aseaza pe aceeasi vedere, deci totul ramane aliniat. Fara viewBox nou, fara rasterizare.
+    Explorer.prototype.cameraFrame = function () {
+        var shown = this.fitted();
+        this.shown = shown;
+        var base = this.rendered;
+        var size = this.size;
+        if (!base || !size || !size.w || !this.svgHost) { this.applyView(); return; }
+        var k = base.w / shown.w;
+        var tx = (base.x - shown.x) * size.w / shown.w;
+        var ty = (base.y - shown.y) * size.h / shown.h;
+        if (!this.svgHost.classList.contains('is-camera')) { this.svgHost.classList.add('is-camera'); }
+        this.svgHost.style.transform = 'translate(' + tx.toFixed(2) + 'px,' + ty.toFixed(2) + 'px) scale(' + k.toFixed(5) + ')';
+        this.placeOverlay(true);
+    };
+
     // Pozitia procentuala a suprapunerilor pentru vederea afisata (completa sau marita).
-    Explorer.prototype.placeOverlay = function () {
+    // visibleOnly (cadrele camerei): markerii ascunsi (alt sistem / doar la filtru) nu se muta la fiecare cadru,
+    // ~800 invalidari de stil inutile pe o marire a ansamblului; applyView ii aseaza pe toti la oprirea camerei.
+    // (Decalajul prin `translate` + strat temporar al markerilor a fost masurat in faza IV-B: mai putine
+    // repictari ale paginii, dar cadre mai lungi; nepastrat.)
+    Explorer.prototype.placeOverlay = function (visibleOnly) {
         var view = this.shown || this.view;
         this.anchors.forEach(function (anchor) {
+            if (visibleOnly && anchor.node.classList.contains('is-hidden')) { return; }
             anchor.node.style.left = ((anchor.x - view.x) / view.w * 100).toFixed(3) + '%';
             anchor.node.style.top = ((anchor.y - view.y) / view.h * 100).toFixed(3) + '%';
         });
     };
 
     Explorer.prototype.sizeMarkers = function () {
-        var width = this.stage.clientWidth || 1200;
+        var width = (this.size && this.size.w) || 1200;
         var zoom = this.fullView ? this.fullView.w / this.view.w : 1;
-        this.stage.style.setProperty('--fx-m', Math.max(18, Math.min(36, width * 0.021 * Math.min(zoom, 1.6))).toFixed(1) + 'px');
+        var marker = Math.max(18, Math.min(36, width * 0.021 * Math.min(zoom, 1.6)));
+        if (marker.toFixed(1) === this.markerSize) { return; }
+        this.markerSize = marker.toFixed(1);
+        this.stage.style.setProperty('--fx-m', this.markerSize + 'px');
     };
 
-    // Vederea (viewBox) animata: marirea pe un ansamblu si revenirea la vehiculul intreg.
+    // Marirea animata pe un ansamblu si revenirea la vehiculul intreg: camera (transform) la fiecare
+    // cadru, viewBox-ul o singura data la final. O tranzitie noua o opreste pe cea in curs.
     Explorer.prototype.setView = function (target, done) {
         var self = this;
         var from = { x: this.view.x, y: this.view.y, w: this.view.w, h: this.view.h };
-        var apply = function (view) {
-            self.view = view;
+        // Marire: desenul la rezolutie dubla (data-hd) se incarca acum, in paralel cu animatia, dar doar pentru
+        // vehiculele la care vederea tinta chiar are nevoie de el (vezi upgradeArt).
+        if (this.fullView && this.fullView.w / target.w > 1.4) { this.upgradeArt(target); }
+        var token = this.viewAnim = (this.viewAnim || 0) + 1;
+        this.animating = true;
+        var finish = function () {
+            self.animating = false;
+            self.view = target;
             self.applyView();
+            self.sizeMarkers();
+            self.flushArt();
+            if (done) { done(); }
+            var queued = self.settleQueue || [];
+            self.settleQueue = [];
+            queued.forEach(function (fn) { fn(); });
         };
-        if (reducedMotion) { apply(target); this.sizeMarkers(); if (done) { done(); } return; }
+        if (reducedMotion) { finish(); return; }
         var start = null;
         var step = function (time) {
+            if (token !== self.viewAnim) { return; }
             if (start === null) { start = time; }
             var t = Math.min(1, (time - start) / 420);
+            if (t >= 1) { finish(); return; }
             var e = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
-            apply({ x: from.x + (target.x - from.x) * e, y: from.y + (target.y - from.y) * e, w: from.w + (target.w - from.w) * e, h: from.h + (target.h - from.h) * e });
-            if (t < 1) { window.requestAnimationFrame(step); } else { self.sizeMarkers(); if (done) { done(); } }
+            self.view = { x: from.x + (target.x - from.x) * e, y: from.y + (target.y - from.y) * e, w: from.w + (target.w - from.w) * e, h: from.h + (target.h - from.h) * e };
+            self.cameraFrame();
+            window.requestAnimationFrame(step);
         };
         window.requestAnimationFrame(step);
+    };
+
+    // Opreste definitiv instanta: animatiile, observatorii si ascultatorii pusi pe elementul gazda
+    // (care ramane in pagina si poate primi o instanta noua). Radacina [data-fx-explorer] e a gazdei.
+    Explorer.prototype.destroy = function () {
+        if (this.destroyed) { return; }
+        this.destroyed = true;
+        this.viewAnim = (this.viewAnim || 0) + 1;
+        window.clearTimeout(this.fitTimer);
+        if (this.resizeObserver) { this.resizeObserver.disconnect(); }
+        if (this.visibilityObserver) { this.visibilityObserver.disconnect(); }
+        var detail = this.detail;
+        var handlers = this.detailHandlers || {};
+        Object.keys(handlers).forEach(function (type) { detail.removeEventListener(type, handlers[type]); });
+        this.detailHandlers = {};
+        if (detail._fxExplorer === this) { detail._fxExplorer = null; }
+    };
+
+    // Desenul vectorizat la rezolutie dubla (data-hd), o singura data: se decodeaza in afara firului
+    // principal si abia apoi inlocuieste varianta de ansamblu, fara clipire.
+    // Inlocuirea se face doar cu camera oprita: noua imagine (pana la ~4000 px) se decodeaza si se
+    // incarca pe GPU la prima rasterizare, 150-300 ms pe un fir de rasterizare; in timpul animatiei ar bloca
+    // cadrele maririi (masurat pe ansamblul cap + semiremorca), la final trece neobservat.
+    // Nivel de detaliu adaptiv: @2 doar daca vederea tinta ar arata peste HD_THRESHOLD pixeli de ecran pe un
+    // pixel al bitmapului @1 (latimea desenului in unitati viewBox x latimea scenei / latimea vederii x DPR).
+    // Pe un ecran obisnuit ansamblul cap + semiremorca ajunge la ~0,95 la marirea maxima: @1 e deja la fel de
+    // clar ca ecranul, iar decodarea imaginilor de ~4000 px (repetata pe fiecare scara noua) era munca inutila.
+    // Pragul de 1,15 lasa o marja, ca o marire „aproape suficienta” sa nu schimbe imaginea.
+    var HD_THRESHOLD = 1.15;
+    Explorer.prototype.needsHd = function (node, view) {
+        var px = Number(node.getAttribute('data-px'));
+        var units = parseFloat(node.getAttribute('width'));
+        var stageW = (this.size && this.size.w) || this.stage.clientWidth;
+        if (!view || !(px > 0) || !(units > 0) || !(stageW > 0)) { return true; }
+        // vehiculul din afara vederii (ex. semiremorca la marirea pe capul tractor) nu are nevoie de @2
+        var x = parseFloat(node.getAttribute('x'));
+        if (isFinite(x) && (x > view.x + view.w || x + units < view.x)) { return false; }
+        return units * stageW / view.w * (window.devicePixelRatio || 1) / px > HD_THRESHOLD;
+    };
+
+    Explorer.prototype.upgradeArt = function (target) {
+        var self = this;
+        this.pendingArt = this.pendingArt || [];
+        this.stage.querySelectorAll('.fx-trace-base[data-hd]').forEach(function (node) {
+            if (target && !self.needsHd(node, target)) { return; }
+            var url = node.getAttribute('data-hd');
+            node.removeAttribute('data-hd');
+            var probe = new window.Image();
+            probe.decoding = 'async';
+            probe.src = url;
+            var ready = function () { self.pendingArt.push([node, url]); if (!self.animating) { self.flushArt(); } };
+            if (probe.decode) { probe.decode().then(ready, ready); } else { probe.onload = ready; }
+        });
+    };
+
+    // Cu camera oprita. O cerere depasita (marire anulata / revenire la ansamblu inainte de decodare) nu mai
+    // inlocuieste imaginea: vederea curenta se verifica din nou, iar bitmapul ramane disponibil pentru alta marire.
+    Explorer.prototype.flushArt = function () {
+        var self = this;
+        var pending = this.pendingArt || [];
+        this.pendingArt = [];
+        pending.forEach(function (item) {
+            var node = item[0];
+            if (!node.isConnected) { return; }
+            if (self.needsHd(node, self.view)) { node.setAttribute('href', item[1]); } else { node.setAttribute('data-hd', item[1]); }
+        });
     };
 
     // Ansamblul unui loc: caseta piesei desenate sau o zona in jurul punctului (capete de axa).
@@ -727,71 +941,161 @@
         return { x: cx - w / 2, y: cy - h / 2, w: w, h: h, cx: cx, cy: cy };
     };
 
-    Explorer.prototype.clearCallouts = function () {
+    // Iesirea din detalierea unui sistem: marirea si exploratorul lui de componente se inchid.
+    Explorer.prototype.resetDrill = function () {
         this.drill = null;
-        this.stage.querySelector('[data-fx-callouts]').innerHTML = '';
-        this.stage.querySelector('[data-fx-lines]').innerHTML = '';
         this.root.classList.remove('is-zoomed');
         this.stage.querySelector('[data-fx-zoom-back]').hidden = true;
+        this.closeExplorer();
     };
 
-    // Detalierea ansamblului: marire pe piesa si subcomponentele ei din catalogul Reparatii Auto.
+    // Detalierea unui sistem: marire pe piesa lui (nivelul 2). Componentele nu mai apar ca etichete cu linii
+    // in jurul piesei (nu scala la zeci / sute de componente): sunt in exploratorul de componente din dreapta.
     Explorer.prototype.drillDown = function (hot) {
-        var self = this;
         var slot = hot._slot;
         var category = categoryByKey[slot.category];
-        var components = (category && category.components) || [];
-        // Doar componentele din configuratia vehiculului, pe locul ales.
-        if (slot.components) {
-            components = components.filter(function (component) { return slot.components.indexOf(component.key) !== -1; });
-        }
         var box = this.assemblyBox(hot);
-        this.clearCallouts();
+        this.resetDrill();
         this.drill = { box: box, color: category ? category.color : '#1d6ff2' };
         this.root.classList.add('is-zoomed');
         this.stage.querySelector('[data-fx-zoom-back]').hidden = false;
-        this.setView({ x: box.x, y: box.y, w: box.w, h: box.h }, function () {
-            if (self.slotId !== slot.id) { return; }
-            var holder = self.stage.querySelector('[data-fx-callouts]');
-            if (!components.length) {
-                holder.innerHTML = '<div class="fx-callout fx-callout-note" style="left:50%;top:12%">' + (slot.components ? 'Nicio componentă configurată pentru „' : 'Catalogul Reparații Auto nu are subcomponente pentru „') + escapeHtml(category.label) + '”.</div>';
-                return;
-            }
-            var left = components.slice(0, Math.ceil(components.length / 2));
-            var right = components.slice(Math.ceil(components.length / 2));
-            var html = '';
-            [[left, 13], [right, 87]].forEach(function (column) {
-                column[0].forEach(function (component, index) {
-                    var y = column[0].length === 1 ? 50 : 9 + index * (74 / (column[0].length - 1));
-                    html += '<button type="button" class="fx-callout' + (column[1] < 50 ? ' is-left' : ' is-right') + '" data-fx-sub="' + escapeHtml(component.key) + '" style="left:' + column[1] + '%;top:' + y.toFixed(2) + '%;--fx-accent:' + category.color + '"><span class="fx-callout-dot"></span>' + escapeHtml(component.name) + '</button>';
-                });
-            });
-            holder.innerHTML = html;
-            if (self.subKey) {
-                var selected = holder.querySelector('[data-fx-sub="' + self.subKey + '"]');
-                if (selected) { selected.classList.add('is-selected'); }
-            }
-            self.drawCalloutLines();
+        this.setView({ x: box.x, y: box.y, w: box.w, h: box.h });
+    };
+
+    /* ---------------------------------------------------------------- exploratorul de componente */
+
+    // Componentele sistemului unui loc, din catalogul Reparatii Auto: doar cele din configuratia vehiculului
+    // pe locul ales, cand configuratia le restrange (slot.components).
+    var slotComponents = function (slot) {
+        var category = categoryByKey[slot.category];
+        var components = (category && category.components) || [];
+        if (slot.components) {
+            components = components.filter(function (component) { return slot.components.indexOf(component.key) !== -1; });
+        }
+        return components;
+    };
+    var EXPLORER_GROUP_LIMIT = 60; // randuri randate la deschiderea unui grup; restul la „Arata toate”
+
+    // Nivelul 2: exploratorul sistemului ales (sistem, vehicul, numar real de componente, cautare, grupuri pe
+    // categoria din catalog, randuri cu starea fiecarei componente). Pe schema ramane un singur marker;
+    // nu se deseneaza nimic per componenta (nu exista geometrie reala pentru fiecare).
+    Explorer.prototype.openExplorer = function (slot, member) {
+        if (!this.xp || this.isCompact()) { return; }
+        var category = categoryByKey[slot.category] || { label: slot.category, color: '#64748b', icon: 'bi-grid' };
+        var components = slotComponents(slot);
+        var groups = [];
+        var byGroup = {};
+        components.forEach(function (component) {
+            var name = component.group || category.label;
+            if (!byGroup[name]) { byGroup[name] = []; groups.push(name); }
+            byGroup[name].push(component);
+        });
+        var condition = (member.condition || {})[slot.category];
+        this.xpState = { slotId: slot.id, memberId: member.vehicle_id, components: components, groups: groups, byGroup: byGroup, wear: {}, filter: '', expanded: {} };
+        var multi = this.unit.members.length > 1;
+        this.xp.innerHTML = '<div class="fx-xp-head" style="--fx-accent:' + category.color + '">'
+            + '<span class="fx-xp-icon' + (SQUARE_MARKERS.indexOf(slot.category) !== -1 ? ' is-square' : '') + '"><i class="bi ' + escapeHtml(category.icon) + '" aria-hidden="true"></i></span>'
+            + '<div class="fx-xp-title"><div class="fx-xp-name">' + escapeHtml(category.label) + '</div>'
+            + '<div class="fx-xp-sub">' + escapeHtml((multi ? member.plate + ' · ' : '') + slot.label.replace(/^[^·]*·\s*/, '')) + '</div></div>'
+            + '<button type="button" class="fx-xp-close" data-fx-xp-close aria-label="Închide sistemul și revino la vehiculul întreg" title="Vehiculul întreg"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>'
+            + '<div class="fx-xp-meta"><span><strong>' + components.length + '</strong> ' + (components.length === 1 ? 'componentă' : 'componente') + '</span>'
+            // starea sistemului = agregat (cea mai mare uzura calculata), nu valoarea fiecarei componente
+            + '<span class="fx-xp-sys" title="Starea sistemului: cea mai mare uzură calculată dintre componentele lui configurate">' + this.wearBadge(condition ? condition.wear : null, 'sistem') + '</span></div>'
+            + (components.length > 8 ? '<label class="fx-xp-search"><i class="bi bi-search" aria-hidden="true"></i><input type="search" data-fx-xp-search placeholder="Caută în ' + components.length + ' componente" aria-label="Caută componenta"></label>' : '')
+            + '<div class="fx-xp-list" data-fx-xp-list role="list"></div>';
+        this.xp.hidden = false;
+        this.xp.parentNode.classList.add('has-xp');
+        this.renderExplorerList();
+    };
+
+    Explorer.prototype.closeExplorer = function () {
+        if (!this.xp || this.xp.hidden) { return; }
+        this.xpState = null;
+        this.xp.hidden = true;
+        this.xp.innerHTML = '';
+        this.xp.parentNode.classList.remove('has-xp');
+    };
+
+    // Randul componentei din inspector ramane evidentiat (sincronizare in ambele sensuri).
+    Explorer.prototype.markExplorerRow = function (componentKey) {
+        if (!this.xp) { return; }
+        Array.prototype.forEach.call(this.xp.querySelectorAll('[data-fx-sub]'), function (node) {
+            var on = node.dataset.fxSub === componentKey;
+            node.classList.toggle('is-selected', on);
+            if (on) { node.setAttribute('aria-current', 'true'); } else { node.removeAttribute('aria-current'); }
         });
     };
 
-    // Liniile pornesc din marginea fiecarei etichete (masurata) spre centrul ansamblului; se refac
-    // la orice schimbare de dimensiune, ca sa ramana legate de piesa.
-    Explorer.prototype.drawCalloutLines = function () {
-        var lines = this.stage.querySelector('[data-fx-lines]');
-        if (!this.drill) { lines.innerHTML = ''; return; }
-        var view = this.shown || this.view;
-        var cxp = (this.drill.box.cx - view.x) / view.w * 100;
-        var cyp = (this.drill.box.cy - view.y) / view.h * 100;
-        var color = this.drill.color;
-        var stageRect = this.stage.getBoundingClientRect();
-        if (!stageRect.width || !stageRect.height) { return; }
-        lines.innerHTML = Array.prototype.map.call(this.stage.querySelectorAll('[data-fx-sub]'), function (button) {
-            var rect = button.getBoundingClientRect();
-            var x = ((button.classList.contains('is-left') ? rect.right : rect.left) - stageRect.left) / stageRect.width * 100;
-            var y = (rect.top + rect.height / 2 - stageRect.top) / stageRect.height * 100;
-            return '<line class="' + (button.classList.contains('is-selected') ? 'is-selected' : '') + '" x1="' + x.toFixed(2) + '" y1="' + y.toFixed(2) + '" x2="' + cxp.toFixed(2) + '" y2="' + cyp.toFixed(2) + '" style="--fx-accent:' + color + '"></line>';
-        }).join('');
+    Explorer.prototype.isCompact = function () {
+        return !!(this.detail && this.detail.closest && this.detail.closest('.is-compact'));
+    };
+
+    // Lista (re)construita doar la deschidere, la cautare si la extinderea unui grup: un singur innerHTML pe
+    // lista, niciun calcul per cadru. Cautarea arata grupurile cu potriviri deschise; fara cautare, un sistem
+    // cu un singur grup e o lista simpla, cu mai multe grupuri primul e deschis.
+    Explorer.prototype.renderExplorerList = function () {
+        var state = this.xpState;
+        if (!state) { return; }
+        var self = this;
+        var list = this.xp.querySelector('[data-fx-xp-list]');
+        var filter = state.filter;
+        var slot = this.selection && this.selection.slot;
+        var rowHtml = function (component) {
+            var note = slot && slot.wheel_notes && slot.wheel_notes[component.key] ? '<small class="fx-xp-note">' + escapeHtml(slot.wheel_notes[component.key]) + '</small>' : '';
+            return '<button type="button" class="fx-xp-row' + (component.key === self.subKey ? ' is-selected' : '') + '" role="listitem" data-fx-sub="' + escapeHtml(component.key) + '">'
+                + self.wearDot(state.wear[component.key]) + '<span class="fx-xp-label">' + escapeHtml(component.name) + note + '</span>'
+                + (state.wear[component.key] !== null && state.wear[component.key] !== undefined ? '<span class="fx-xp-pct">' + state.wear[component.key] + '%</span>' : '') + '</button>';
+        };
+        if (!state.components.length) {
+            list.innerHTML = '<div class="fx-xp-empty">' + (slot && slot.components ? 'Nicio componentă configurată pentru acest loc.' : 'Catalogul Reparații Auto nu are componente pentru acest sistem.') + '</div>';
+            return;
+        }
+        var match = function (component) { return !filter || component.name.toLowerCase().indexOf(filter) !== -1; };
+        var single = state.groups.length === 1;
+        var html = '';
+        var shown = 0;
+        state.groups.forEach(function (name, index) {
+            var items = state.byGroup[name].filter(match);
+            if (!items.length) { return; }
+            shown += items.length;
+            var open = filter ? true : (state.expanded[name] !== undefined ? state.expanded[name] : (single || index === 0));
+            var limit = state.expanded[name + '|all'] ? items.length : EXPLORER_GROUP_LIMIT;
+            var rows = open ? items.slice(0, limit).map(rowHtml).join('') + (items.length > limit ? '<button type="button" class="fx-xp-more" data-fx-xp-all="' + escapeHtml(name) + '">Arată toate (' + items.length + ')</button>' : '') : '';
+            html += single ? rows
+                : '<div class="fx-xp-group' + (open ? ' is-open' : '') + '"><button type="button" class="fx-xp-group-head" data-fx-xp-group="' + escapeHtml(name) + '" aria-expanded="' + (open ? 'true' : 'false') + '">'
+                    + '<i class="bi bi-chevron-right" aria-hidden="true"></i><span>' + escapeHtml(name) + '</span><span class="fx-xp-count">' + items.length + '</span></button>'
+                    + (open ? '<div class="fx-xp-rows">' + rows + '</div>' : '') + '</div>';
+        });
+        list.innerHTML = shown ? html : '<div class="fx-xp-empty">Nicio componentă nu se potrivește căutării.</div>';
+    };
+
+    // Uzura fiecarei componente (din raspunsul panoului: aceeasi valoare ca in panou / Reparatii Auto).
+    Explorer.prototype.setExplorerWear = function (slotId, memberId, wear) {
+        var state = this.xpState;
+        if (!state || state.slotId !== slotId || state.memberId !== memberId || !wear) { return; }
+        state.wear = wear;
+        this.renderExplorerList();
+    };
+
+    // Starea: punct colorat dupa rampa starii (gri = fara date) + procentul, unde exista.
+    var conditionCss = function (wear) {
+        if (wear === null || wear === undefined || !isFinite(wear)) { return ''; }
+        var w = Math.max(0, Math.min(100, Number(wear)));
+        var stops = [[0, [34, 197, 94]], [50, [234, 179, 8]], [80, [249, 115, 22]], [100, [239, 68, 68]]];
+        for (var i = 1; i < stops.length; i++) {
+            if (w <= stops[i][0]) {
+                var t = (w - stops[i - 1][0]) / (stops[i][0] - stops[i - 1][0]);
+                return 'rgb(' + [0, 1, 2].map(function (k) { return Math.round(stops[i - 1][1][k] + (stops[i][1][k] - stops[i - 1][1][k]) * t); }).join(',') + ')';
+            }
+        }
+        return 'rgb(239,68,68)';
+    };
+    Explorer.prototype.wearDot = function (wear) {
+        var color = conditionCss(wear);
+        return '<span class="fx-xp-dot' + (color ? '' : ' is-none') + '"' + (color ? ' style="background:' + color + '"' : '') + ' title="' + (color ? wear + '% din intervalul configurat' : 'Fără date: neconfigurată sau fără montare înregistrată') + '"></span>';
+    };
+    Explorer.prototype.wearBadge = function (wear, what) {
+        return this.wearDot(wear) + (wear === null || wear === undefined ? 'Fără date' : (what === 'sistem' ? 'Sistem: ' : '') + wear + '%');
     };
 
     /* ---------------------------------------------------------------- filtre si selectii */
@@ -818,6 +1122,13 @@
         var moreBtn = this.root.querySelector('[data-fx-more]');
         if (moreBtn) { moreBtn.classList.toggle('is-active', !!(category && !(categoryByKey[category] || {}).toolbar)); }
         this.root.querySelectorAll('.fx-part').forEach(function (node) {
+            if (category !== '' && node.dataset.fxCat === category) {
+                // Piesele desenului vectorizat se descarca abia cand sistemul lor devine activ.
+                node.querySelectorAll('image[data-href]').forEach(function (img) {
+                    img.setAttribute('href', img.getAttribute('data-href'));
+                    img.removeAttribute('data-href');
+                });
+            }
             node.classList.toggle('is-active', category !== '' && node.dataset.fxCat === category);
             node.classList.toggle('is-dim', category !== '' && node.dataset.fxCat !== category);
         });
@@ -832,7 +1143,7 @@
         this.slotId = null;
         if (this.selection && this.selection.type === 'slot') { this.selection = null; }
         this.root.classList.remove('has-selection');
-        this.clearCallouts();
+        this.resetDrill();
         if (wasZoomed) { this.setView(this.fullView); }
         this.applyFilter();
         if (category === 'anvelope' || category === '') { this.showTires(); }
@@ -920,7 +1231,7 @@
             self.panel.hidden = false;
             self.tireArea.hidden = true;
             self.panel.innerHTML = html;
-        });
+        }, [this.panel, this.tireArea]);
     };
 
     // Editorul atributelor unei axe (ridicabila, portanta, suspensie, frane), sub bara de context.
@@ -992,9 +1303,36 @@
         if (this.hooks.onLeaveTires) { this.hooks.onLeaveTires(); }
         this.renderFooter();
         this.drillDown(hot);
+        this.openExplorer(slot, member);
         this.loadPanel(slot, member, focusKey || '');
-        // Pagina gazda poate arata ceva in plus pentru punctul ales (pagina Auto: sistemul lui).
-        if (this.hooks.afterSlot) { this.hooks.afterSlot(slot, slotId); }
+        // Pagina gazda poate arata ceva in plus pentru punctul ales (pagina Auto: sistemul lui, andocat sub
+        // schema, cu derulare). Abia dupa ce camera s-a oprit: altfel derularea paginii si aranjarea sectiunii
+        // (getBoundingClientRect) cad peste cadrele maririi (masurat pe ansamblul cap + semiremorca).
+        if (this.hooks.afterSlot) {
+            var self = this;
+            this.whenSettled(function () {
+                if (self.slotId === slotId) { self.hooks.afterSlot(slot, slotId); }
+            });
+        }
+    };
+
+    // Starea (consumarea intervalului configurat, %) unui sistem pe un vehicul: datele membrului (pentru
+    // redesenari) si culoarea pieselor lui. wear null = fara date, piesele raman gri.
+    Explorer.prototype.setCondition = function (memberId, category, wear) {
+        var member = this.unit.members.filter(function (item) { return item.vehicle_id === memberId; })[0];
+        if (!member) { return; }
+        var map = member.condition = member.condition && typeof member.condition === 'object' ? member.condition : {};
+        if (wear === null || wear === undefined) { delete map[category]; } else { map[category] = { wear: Number(wear) }; }
+        if (!Art.paintCondition) { return; }
+        this.stage.querySelectorAll('.fx-trace-part[data-fx-cat="' + category + '"][data-fx-member="' + memberId + '"] .fx-trace-sil').forEach(function (path) {
+            Art.paintCondition(path, wear === null || wear === undefined ? null : Number(wear));
+        });
+    };
+
+    // Ruleaza fn cand nicio animatie a camerei nu mai e in curs (imediat, daca nu e niciuna).
+    Explorer.prototype.whenSettled = function (fn) {
+        if (!this.animating) { fn(); return; }
+        (this.settleQueue = this.settleQueue || []).push(fn);
     };
 
     // Subcomponenta aleasa in detalierea ansamblului: panoul se reincarca, cu randul ei evidentiat.
@@ -1015,11 +1353,15 @@
                 self.panel.hidden = false;
                 self.tireArea.hidden = true;
                 self.panel.innerHTML = '<div class="fx-panel-loading"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span> Se încarcă ' + escapeHtml(category.label.toLowerCase()) + '...</div>';
-            });
+            }, [this.panel, this.tireArea]);
         }
         request.then(function (data) {
             if (self.request !== request) { return; }
             if (!data.ok) { throw new Error(data.error || 'Eroare la încărcare.'); }
+            // Starea sistemului, recalculata de server la fiecare panou (ex. dupa o montare / inspectie):
+            // se actualizeaza doar piesele acestui sistem pe acest vehicul.
+            if (Object.prototype.hasOwnProperty.call(data, 'condition')) { self.setCondition(member.vehicle_id, slot.category, data.condition); }
+            if (data.wear) { self.setExplorerWear(slot.id, member.vehicle_id, data.wear); }
             morph(self.detail, function () {
                 self.panel.hidden = false;
                 self.tireArea.hidden = true;
@@ -1032,7 +1374,7 @@
                     self.panel.insertBefore(note, self.panel.firstChild);
                     self.flash = null;
                 }
-            });
+            }, [self.panel, self.tireArea]);
             var focused = self.panel.querySelector('[data-fx-focus]');
             if (focused) { focused.scrollIntoView({ block: 'nearest', behavior: reducedMotion ? 'auto' : 'smooth' }); }
         }).catch(function (error) {
@@ -1058,7 +1400,7 @@
         }
         if (positionId !== null) {
             this.closeInspector();
-            if (this.root.classList.contains('is-zoomed')) { this.clearCallouts(); this.setView(this.fullView); }
+            if (this.root.classList.contains('is-zoomed')) { this.resetDrill(); this.setView(this.fullView); }
             this.showTires();
         }
         this.root.querySelectorAll('.fx-tire, .fx-tire-label').forEach(function (node) {
@@ -1132,7 +1474,7 @@
                     if (result) { hot.classList.add('fx-state-' + STATE_CLASS[result]); }
                 }
                 self.flash = data.message;
-                var focused = self.stage.querySelector('[data-fx-sub].is-selected');
+                var focused = self.root.querySelector('[data-fx-sub].is-selected');
                 self.loadPanel(hot._slot, hot._member, focused ? focused.dataset.fxSub : '');
             }
         }).catch(function (error) {
@@ -1305,8 +1647,7 @@
         var slot = this.selection.slot;
         var member = this.unit.members.filter(function (item) { return item.vehicle_id === self.selection.memberId; })[0];
         this.subKey = componentKey;
-        this.stage.querySelectorAll('[data-fx-sub]').forEach(function (node) { node.classList.toggle('is-selected', node.dataset.fxSub === componentKey); });
-        this.drawCalloutLines();
+        this.markExplorerRow(componentKey);
         var wasOpen = this.body.classList.contains('is-inspecting');
         if (!wasOpen) {
             this.setSplit(readSplit(), false);
@@ -1390,8 +1731,7 @@
         this.divider.hidden = true;
         this.inspector.hidden = true;
         this.inspector.innerHTML = '';
-        this.stage.querySelectorAll('[data-fx-sub].is-selected').forEach(function (node) { node.classList.remove('is-selected'); });
-        this.drawCalloutLines();
+        this.markExplorerRow(null);
     };
 
     // Raportul componentei: inspectorul tiparit (toate tab-urile), prin dialogul de tiparire / PDF al browserului.
@@ -1424,7 +1764,7 @@
             self.panel.hidden = true;
             self.panel.innerHTML = '';
             self.tireArea.hidden = false;
-        });
+        }, [this.panel, this.tireArea]);
     };
 
     Explorer.prototype.overview = function () {
@@ -1698,6 +2038,8 @@
     window.FleetXray = {
         mount: function (detail, unit, hooks) {
             if (!detail.querySelector('[data-fx-explorer]')) { return null; }
+            // O singura instanta pe gazda: cea veche se opreste (observatori, animatii, ascultatori).
+            if (detail._fxExplorer) { detail._fxExplorer.destroy(); }
             detail._fxExplorer = new Explorer(detail, unit, hooks);
             return detail._fxExplorer;
         },
