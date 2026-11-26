@@ -341,6 +341,7 @@ require_once __DIR__ . '/models/InactiveResourceApprovalModel.php';
 require_once __DIR__ . '/models/ApprovalEmailActionModel.php';
 require_once __DIR__ . '/models/VehicleEquipmentInventoryModel.php';
 require_once __DIR__ . '/models/DriverEquipmentModel.php';
+require_once __DIR__ . '/models/DriverClothingSizeModel.php';
 require_once __DIR__ . '/models/VehicleAuthorizationModel.php';
 require_once __DIR__ . '/models/DispecerCurseModel.php';
 require_once __DIR__ . '/models/OperatorActivityModel.php';

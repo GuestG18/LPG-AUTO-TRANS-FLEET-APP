@@ -213,6 +213,10 @@ class ModuleController
             case 'driver_vehicle_scheme':
                 $this->driverVehicleSchemeAction($moduleKey);
                 return;
+            case 'driver_sizes':
+            case 'driver_sizes_save':
+                $this->driverSizesAction($moduleKey, $action === 'driver_sizes_save');
+                return;
             case 'preview':
                 $this->previewDocumentAction($moduleKey, $module);
                 return;
@@ -5696,6 +5700,60 @@ class ModuleController
 
         $data = $this->fleetExplorerData($vehicleId);
         $this->tireMountJson(['ok' => true, 'unit' => $data['unit'] ?? null]);
+    }
+
+    /**
+     * Tab „Mărimi vestimentare” din Detalii șofer: conținutul se încarcă la prima deschidere (GET)
+     * și se re-randează după salvare (POST, drept soferi.marimi_edit, jurnalizat în audit_log).
+     * Răspuns JSON {ok, html} cu partiala views/module/_driver_sizes.php.
+     */
+    private function driverSizesAction(string $moduleKey, bool $save): void
+    {
+        if ($moduleKey !== 'soferi') {
+            $this->tireMountJson(['ok' => false, 'error' => 'Modul invalid.'], 404);
+        }
+        $driverId = (int) ($_GET['id'] ?? $_POST['id'] ?? 0);
+        $model = new DriverClothingSizeModel($this->db);
+        $message = null;
+
+        if ($save) {
+            if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST' || !verify_csrf_token($_POST['_token'] ?? null)) {
+                $this->tireMountJson(['ok' => false, 'error' => 'Sesiunea a expirat. Reîncarcă pagina.'], 419);
+            }
+            if (!can('soferi', 'marimi_edit')) {
+                $this->tireMountJson(['ok' => false, 'error' => 'Nu ai dreptul să modifici mărimile.'], 403);
+            }
+            $input = is_array($_POST['marimi'] ?? null) ? $_POST['marimi'] : [];
+            try {
+                $result = $model->saveDriverSizes($driverId, $input, (int) (current_user()['id'] ?? 0) ?: null);
+            } catch (InvalidArgumentException $exception) {
+                $this->tireMountJson(['ok' => false, 'error' => $exception->getMessage()], 422);
+            } catch (Throwable $exception) {
+                error_log('[ModuleController][driver-sizes] ' . $exception->getMessage());
+                $this->tireMountJson(['ok' => false, 'error' => 'Mărimile nu au putut fi salvate.'], 500);
+            }
+            if ($result['changed']) {
+                $changes = [];
+                foreach ($result['after'] as $name => $size) {
+                    $changes[] = $name . ': ' . (($result['before'][$name] ?? '') !== '' ? $result['before'][$name] : 'nesetat') . ' → ' . ($size !== '' ? $size : 'nesetat');
+                }
+                audit_log_write($this->db, 'soferi', $driverId, 'marimi_vestimentare', 'Mărimi vestimentare: ' . implode('; ', $changes), $result['before'], $result['after'], (int) (current_user()['id'] ?? 0) ?: null);
+            }
+            $message = $result['changed'] ? 'Mărimile au fost salvate.' : 'Nicio modificare.';
+        }
+
+        try {
+            $sections = $model->getDriverSections($driverId);
+        } catch (Throwable $exception) {
+            error_log('[ModuleController][driver-sizes] ' . $exception->getMessage());
+            $this->tireMountJson(['ok' => false, 'error' => 'Mărimile nu au putut fi citite.'], 500);
+        }
+        $canEditSizes = can('soferi', 'marimi_edit');
+        $canEquipCatalog = can('echipamente_soferi', 'view');
+        ob_start();
+        require BASE_PATH . '/views/module/_driver_sizes.php';
+        $html = (string) ob_get_clean();
+        $this->tireMountJson(['ok' => true, 'html' => $html, 'message' => $message]);
     }
 
     private function previewDocumentAction(string $moduleKey, array $module): void

@@ -183,7 +183,7 @@
 .dd-nav-arrow { flex: 0 0 36px; width: 36px; height: 36px; border-radius: 50%; border: 1px solid var(--dd-line); background: #fff; color: var(--dd-blue); display: flex; align-items: center; justify-content: center; box-shadow: 0 1px 3px rgba(16, 27, 51, .08); cursor: pointer; transition: background-color .15s, color .15s; }
 .dd-nav-arrow:hover:not(:disabled) { background: var(--dd-blue); color: #fff; }
 .dd-nav-arrow:disabled { opacity: .45; cursor: default; }
-.dd-tabs { flex: 1 1 auto; display: grid; grid-template-columns: repeat(6, minmax(150px, 1fr)); gap: 12px; overflow-x: auto; scrollbar-width: none; scroll-snap-type: x proximity; padding: 4px 2px 6px; min-width: 0; }
+.dd-tabs { flex: 1 1 auto; display: grid; grid-template-columns: repeat(7, minmax(150px, 1fr)); gap: 12px; overflow-x: auto; scrollbar-width: none; scroll-snap-type: x proximity; padding: 4px 2px 6px; min-width: 0; }
 .dd-tabs::-webkit-scrollbar { display: none; }
 .dd-tab { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; height: 62px; padding: 6px 10px; border: 1px solid var(--dd-line); border-radius: 10px; background: #fff; color: var(--dd-ink); font-size: 1.02rem; font-weight: 500; box-shadow: 0 1px 3px rgba(16, 27, 51, .06); scroll-snap-align: start; cursor: pointer; transition: background .2s, color .2s, border-color .2s, box-shadow .2s, transform .15s; white-space: nowrap; }
 .dd-tab i { font-size: 1.3rem; line-height: 1; color: var(--dd-ink-2); transition: color .2s; }
@@ -334,6 +334,52 @@
 .dd-act-body .dd-act-row:last-child { border-bottom: 0; }
 .dd-act-body .dd-act-row:hover { background: #f8fbff; }
 .dd-icon-link { color: var(--dd-blue); }
+
+/* ---- Mărimi vestimentare (views/module/_driver_sizes.php) ------------------------ */
+.dd-shirt-ic { width: 1.3rem; height: 1.3rem; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linejoin: round; }
+.dd-tab .dd-shirt-ic { color: var(--dd-ink-2); transition: color .2s; }
+.dd-tab.is-active .dd-shirt-ic { color: #fff; }
+.dd-sz-head { margin-bottom: 17px; gap: 19px; }
+.dd-sz-icon { flex: 0 0 48px; width: 48px; height: 48px; margin-left: 4px; display: flex; align-items: center; justify-content: center; border-radius: 9px; background: #eef2f8; color: #4b6188; }
+.dd-sz-icon .dd-shirt-ic { width: 30px; height: 30px; stroke-width: 1.3; }
+.dd-sz-head .dd-panel-tools { align-self: flex-start; margin-top: 3px; }
+.dd-sz-btn { min-height: 44px; min-width: 130px; padding: 8px 20px; border-radius: 9px; font-weight: 700; }
+.dd-sz-btn.dd-btn-outline-primary { border-color: #c4d3ec; background: #fbfcff; }
+.dd-sz-msg { font-size: .9rem; font-weight: 600; color: var(--dd-green); }
+.dd-sz-msg.is-error { color: var(--dd-red); }
+.dd-sz-box { display: grid; grid-template-columns: 26% minmax(0, 1fr); align-items: stretch; border: 1px solid #dfe5ee; border-radius: 6px; background: #fff; min-height: 478px; }
+.dd-sz-figure { display: flex; align-items: flex-start; justify-content: center; min-width: 0; }
+.dd-sz-svg { display: block; width: 100%; max-width: 410px; height: auto; }
+.dd-sz-guides line { stroke: #a3b0c6; stroke-width: 1.5; stroke-dasharray: 6 5; }
+.dd-sz-body > * { fill: #e8edf5; stroke: #7e8da7; stroke-width: 1.6; stroke-linejoin: round; }
+.dd-sz-body .dd-sz-seam { fill: none; }
+.dd-sz-dots circle { fill: #8797b3; }
+.dd-sz-list { min-width: 0; padding: 10px 74px 0 0; }
+.dd-sz-group { padding: 0 7px 11px 10px; border-bottom: 1px solid #dfe5ee; }
+.dd-sz-group + .dd-sz-group { padding-top: 11px; }
+.dd-sz-group:last-child { border-bottom: 0; padding-bottom: 0; }
+.dd-sz-group h4 { margin: 0 0 8px; height: 20px; line-height: 20px; font-size: .9rem; font-weight: 600; letter-spacing: .01em; color: #5b6880; }
+.dd-sz-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; column-gap: 16px; height: 32px; }
+.dd-sz-row label { margin: 0; font-size: 1.07rem; font-weight: 500; color: var(--dd-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dd-sz-badge, .dd-sz-select { grid-column: 2; grid-row: 1; justify-self: end; }
+.dd-sz-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; height: 26px; padding: 0 9px; border-radius: 8px; background: #2c3442; color: #fff; font-size: 1rem; font-weight: 600; line-height: 1; letter-spacing: .01em; }
+.dd-sz-badge.is-unset { background: #eef2f7; color: var(--dd-muted); font-weight: 500; font-size: .86rem; }
+.dd-sz-select { display: none; height: 28px; width: 104px; padding: 0 26px 0 10px; border: 1px solid #b9c7dc; border-radius: 8px; background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='%2322304d' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' d='m4 6 4 4 4-4'/%3E%3C/svg%3E") no-repeat right 8px center / 12px; color: var(--dd-ink); font-size: .95rem; font-weight: 600; appearance: none; -webkit-appearance: none; cursor: pointer; }
+.dd-sz-select:focus { outline: 0; border-color: var(--dd-blue); box-shadow: 0 0 0 3px rgba(31, 99, 232, .18); }
+.dd-sz-box.is-editing .dd-sz-badge { display: none; }
+.dd-sz-box.is-editing .dd-sz-select { display: block; }
+.dd-sz-box.is-saving { opacity: .7; pointer-events: none; }
+.dd-sz-empty { margin: 12px 10px; }
+@media (max-width: 1100px) {
+    .dd-sz-box { grid-template-columns: 200px minmax(0, 1fr); min-height: 0; }
+    .dd-sz-list { padding-right: 20px; }
+}
+@media (max-width: 700px) {
+    .dd-sz-box { grid-template-columns: 1fr; padding: 0 12px 12px; }
+    .dd-sz-list { padding-right: 0; }
+    .dd-sz-figure { max-width: 220px; margin: 0 auto; }
+    .dd-sz-head .dd-panel-tools { margin-top: 0; }
+}
 
 /* ---- responsive ------------------------------------------------------------- */
 @media (max-width: 1500px) {

@@ -685,6 +685,66 @@
         openModal(trigger.getAttribute('data-des-open'), trigger);
     });
 
+    // Mărimea din fișa șoferului (Detalii șofer → Mărimi vestimentare) se propune la predare.
+    // Se completează doar un câmp gol sau o sugestie anterioară; o valoare scrisă de mână rămâne.
+    const driverSizes = (function () {
+        const node = document.getElementById('desDriverSizes');
+        try {
+            return node ? JSON.parse(node.textContent || '{}') : {};
+        } catch (error) {
+            return {};
+        }
+    })();
+
+    function suggestDriverSize(modal) {
+        if (!modal) {
+            return;
+        }
+        const driver = field(modal, 'driver');
+        const catalog = field(modal, 'catalog');
+        const input = modal.querySelector('input[name="marime"]');
+        const note = modal.querySelector('[data-des-size-suggestion]');
+        if (!driver || !catalog || !input) {
+            return;
+        }
+        const size = ((driverSizes[driver.value] || {})[catalog.value]) || '';
+        const untouched = input.value.trim() === '' || input.value === (input.dataset.suggested || '');
+        if (untouched && input.value !== size) {
+            input.value = size;
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+        input.dataset.suggested = untouched ? size : (input.dataset.suggested || '');
+        if (note) {
+            note.hidden = !(size !== '' && input.value === size);
+        }
+    }
+
+    if (modals.handover) {
+        ['driver', 'catalog'].forEach(function (key) {
+            const select = field(modals.handover, key);
+            if (select) {
+                select.addEventListener('change', function () {
+                    suggestDriverSize(modals.handover);
+                });
+            }
+        });
+        const sizeInput = modals.handover.querySelector('input[name="marime"]');
+        if (sizeInput) {
+            sizeInput.addEventListener('input', function () {
+                const note = modals.handover.querySelector('[data-des-size-suggestion]');
+                if (note) {
+                    note.hidden = sizeInput.value === '' || sizeInput.value !== (sizeInput.dataset.suggested || '');
+                }
+            });
+        }
+        modals.handover.addEventListener('shown.bs.modal', function () {
+            if (sizeInput) {
+                sizeInput.dataset.suggested = '';
+            }
+            suggestDriverSize(modals.handover);
+        });
+    }
+
     // Recalculează mesajul de stoc când se schimbă articolul, mărimea sau cantitatea.
     ['handover', 'replace', 'stock-in', 'stock-out'].forEach(function (name) {
         const modal = modals[name];

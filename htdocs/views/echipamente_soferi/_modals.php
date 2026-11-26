@@ -16,6 +16,10 @@ $modalOwnerPlaceholder = $modalIsStaff ? 'Selectează persoana' : 'Selectează �
 $modalOwnerOptions = is_array($ownerOptions ?? null) ? $ownerOptions : (is_array($driverOptions ?? null) ? $driverOptions : []);
 ?>
 
+<?php if (!$modalIsStaff): ?>
+    <script type="application/json" id="desDriverSizes"><?= json_encode((object) ($driverSizes ?? []), JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP) ?></script>
+<?php endif; ?>
+
 <!-- ------------------------------------------------- Predare echipament -->
 <div class="modal fade des-modal" id="desHandoverModal" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
@@ -80,6 +84,7 @@ $modalOwnerOptions = is_array($ownerOptions ?? null) ? $ownerOptions : (is_array
                         <div class="col-6 col-md-3" data-des-when="marime" hidden>
                             <label class="form-label" for="desHandoverSize">Mărime</label>
                             <input class="form-control" id="desHandoverSize" type="text" name="marime" placeholder="ex. 43 / L">
+                            <small class="form-text text-muted" data-des-size-suggestion hidden>Din fișa șoferului</small>
                         </div>
                         <div class="col-12 col-md-6" data-des-when="identificator" hidden>
                             <label class="form-label" for="desHandoverIdent">Identificare (IMEI / număr / serie)</label>

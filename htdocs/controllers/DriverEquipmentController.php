@@ -104,6 +104,16 @@ class DriverEquipmentController
             'categories' => $this->model->getCategories(),
         ];
 
+        if (!$isStaff) {
+            // Mărimile din fișa șoferului (Detalii șofer → Mărimi vestimentare): doar sugestie la predare.
+            try {
+                $data['driverSizes'] = (new DriverClothingSizeModel($this->db))->getAllDriverSizes();
+            } catch (Throwable $exception) {
+                error_log('[DriverEquipmentController][driver-sizes] ' . $exception->getMessage());
+                $data['driverSizes'] = [];
+            }
+        }
+
         if ($isStaff) {
             $data['departments'] = $this->model->getStaffDepartments();
             $data['functions'] = $this->model->getStaffFunctions();

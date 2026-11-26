@@ -6,7 +6,7 @@
  * - schema vehiculului = exploratorul paginii Auto (vehicle-xray.js), încărcat leneș, o singură instanță,
  *   compactă în antet și mutată într-un dialog pentru detalii;
  * - figura de echipamente (aceleași imagini / puncte ca în Echipamente șoferi), inițializată la prima deschidere.
- * Nu scrie nimic în baza de date.
+ * Singura scriere: mărimile vestimentare (action=driver_sizes_save), restul e doar citire.
  */
 (function () {
     'use strict';
@@ -536,6 +536,107 @@
         });
 
         activateHooks.echipamente = init;
+    })();
+
+    /* ------------------------------------------------- mărimi vestimentare */
+    // Conținutul vine din action=driver_sizes la prima deschidere; salvarea re-randează partiala.
+    (function () {
+        var panel = page.querySelector('[data-dd-sizes]');
+        if (!panel) { return; }
+        var content = panel.querySelector('[data-dd-sz-content]');
+        var msg = panel.querySelector('[data-dd-sz-msg]');
+        var startBtn = panel.querySelector('[data-dd-sz-start]');
+        var cancelBtn = panel.querySelector('[data-dd-sz-cancel]');
+        var saveBtn = panel.querySelector('[data-dd-sz-save]');
+        var loaded = false;
+        var msgTimer = null;
+
+        var form = function () { return content.querySelector('[data-dd-sz-form]'); };
+        var say = function (text, isError) {
+            if (!msg) { return; }
+            window.clearTimeout(msgTimer);
+            msg.textContent = text || '';
+            msg.classList.toggle('is-error', !!isError);
+            if (text && !isError) { msgTimer = window.setTimeout(function () { msg.textContent = ''; }, 4000); }
+        };
+        var setEditing = function (on) {
+            var f = form();
+            if (!f) { return; }
+            f.classList.toggle('is-editing', on);
+            f.querySelectorAll('[data-dd-sz-edit]').forEach(function (select) { select.disabled = !on; });
+            if (startBtn) { startBtn.hidden = on; }
+            if (cancelBtn) { cancelBtn.hidden = !on; }
+            if (saveBtn) { saveBtn.hidden = !on; }
+        };
+        var render = function (html) {
+            content.innerHTML = html;
+            setEditing(false);
+            if (startBtn) { startBtn.disabled = !form() || !form().querySelector('[data-dd-sz-edit]'); }
+            syncHeight();
+        };
+        var request = function (url, options) {
+            options = options || {};
+            options.credentials = 'same-origin';
+            options.headers = { 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json' };
+            return fetch(url, options).then(function (response) {
+                return response.json().catch(function () { return { ok: false, error: 'Răspuns invalid de la server.' }; });
+            });
+        };
+        var load = function () {
+            if (loaded) { return; }
+            loaded = true;
+            request(panel.dataset.url).then(function (data) {
+                if (!data.ok) { throw new Error(data.error || data.message || 'Mărimile nu au putut fi citite.'); }
+                render(data.html);
+            }).catch(function (error) {
+                loaded = false;
+                content.innerHTML = '<div class="dd-empty"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i><span></span></div>';
+                content.querySelector('span').textContent = error.message || 'Mărimile nu au putut fi citite.';
+                syncHeight();
+            });
+        };
+
+        if (startBtn) {
+            startBtn.addEventListener('click', function () {
+                say('');
+                setEditing(true);
+                var first = form() && form().querySelector('[data-dd-sz-edit]');
+                if (first) { first.focus(); }
+            });
+        }
+        if (cancelBtn) {
+            cancelBtn.addEventListener('click', function () {
+                var f = form();
+                if (f) {
+                    f.querySelectorAll('[data-dd-sz-edit]').forEach(function (select) { select.value = select.dataset.initial || ''; });
+                }
+                say('');
+                setEditing(false);
+            });
+        }
+        if (saveBtn) {
+            saveBtn.addEventListener('click', function () {
+                var f = form();
+                if (!f) { return; }
+                var body = new FormData(f);
+                f.classList.add('is-saving');
+                saveBtn.disabled = true;
+                request(panel.dataset.saveUrl, { method: 'POST', body: body }).then(function (data) {
+                    if (!data.ok) { throw new Error(data.error || data.message || 'Mărimile nu au putut fi salvate.'); }
+                    render(data.html);
+                    say(data.message || 'Mărimile au fost salvate.');
+                }).catch(function (error) {
+                    f.classList.remove('is-saving');
+                    say(error.message || 'Mărimile nu au putut fi salvate.', true);
+                }).then(function () { saveBtn.disabled = false; });
+            });
+        }
+        // Escape renunță la editare, Enter într-un select nu trimite nimic.
+        content.addEventListener('keydown', function (event) {
+            if (event.key === 'Escape' && cancelBtn && !cancelBtn.hidden) { cancelBtn.click(); }
+        });
+
+        activateHooks.marimi = load;
     })();
 
     /* ------------------------------------------------------------------ start */

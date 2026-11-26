@@ -262,6 +262,7 @@ $ddTabs = [
     'documente' => ['label' => 'Documente', 'icon' => 'bi-file-earmark-text', 'badge' => $ddDocAttention, 'tone' => 'danger'],
     'vehicule' => ['label' => 'Vehicule alocate', 'icon' => 'bi-truck', 'badge' => 0, 'tone' => ''],
     'echipamente' => ['label' => 'Echipamente', 'icon' => 'bi-person-badge', 'badge' => $ddEquipAttention, 'tone' => 'danger'],
+    'marimi' => ['label' => 'Mărimi vestimentare', 'icon' => '', 'svg' => 'shirt', 'badge' => 0, 'tone' => ''],
     'activitate' => ['label' => 'Istoric și activitate', 'icon' => 'bi-clock-history', 'badge' => 0, 'tone' => ''],
 ];
 $ddInitialTab = (string) ($_GET['tab'] ?? '');
@@ -273,6 +274,8 @@ $ddEditUrl = build_query_url(['page' => $routePage, 'action' => 'edit', 'id' => 
 $ddListUrl = build_query_url(['page' => $routePage]);
 $ddAddDocUrl = build_query_url(['page' => 'documente_soferi', 'action' => 'create', 'driver_id' => $ddId]);
 $ddAsset = static fn (string $path): string => url($path . '?v=' . (string) @filemtime(BASE_PATH . '/' . $path));
+// Bootstrap Icons nu are un tricou: contur SVG propriu (tab + antet „Mărimi vestimentare”).
+$ddShirtIcon = '<svg class="dd-shirt-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M8.6 3.2 4.4 5.4 1.9 9.6l3.2 1.9 1.3-1.2V20.8h11.2V10.3l1.3 1.2 3.2-1.9-2.5-4.2-4.2-2.2c-.5 1.5-1.9 2.6-3.4 2.6s-2.9-1.1-3.4-2.6Z"/></svg>';
 
 $ddDocActions = static function (?array $document, bool $compact = false) use ($ddId, $ddCanDocView, $ddCanDocEdit, $ddCanDocCreate, $ddAddDocUrl): string {
     $documentId = $document !== null ? (int) ($document['id'] ?? 0) : 0;
@@ -427,7 +430,11 @@ $ddDocActions = static function (?array $document, bool $compact = false) use ($
                         id="dd-tab-<?= e($ddKey) ?>" aria-controls="dd-panel-<?= e($ddKey) ?>"
                         aria-selected="<?= $ddActiveTab ? 'true' : 'false' ?>" tabindex="<?= $ddActiveTab ? '0' : '-1' ?>"
                         data-dd-tab="<?= e($ddKey) ?>">
-                    <i class="bi <?= e($ddTab['icon']) ?>" aria-hidden="true"></i>
+                    <?php if (($ddTab['svg'] ?? '') === 'shirt'): ?>
+                        <?= $ddShirtIcon ?>
+                    <?php else: ?>
+                        <i class="bi <?= e($ddTab['icon']) ?>" aria-hidden="true"></i>
+                    <?php endif; ?>
                     <span><?= e($ddTab['label']) ?></span>
                     <?php if ((int) $ddTab['badge'] > 0): ?>
                         <em class="dd-tab-badge is-<?= e($ddTab['tone']) ?>" aria-label="<?= e((string) $ddTab['badge']) ?> de verificat"><?= e((string) $ddTab['badge']) ?></em>
@@ -787,7 +794,28 @@ $ddDocActions = static function (?array $document, bool $compact = false) use ($
                 <?php endif; ?>
             </section>
 
-            <!-- 6. Istoric și activitate -->
+            <!-- 6. Mărimi vestimentare (conținut încărcat la prima deschidere) -->
+            <section class="dd-panel" id="dd-panel-marimi" role="tabpanel" aria-labelledby="dd-tab-marimi" data-dd-panel="marimi"
+                     data-dd-sizes data-url="<?= e(build_query_url(['page' => 'soferi', 'action' => 'driver_sizes', 'id' => $ddId])) ?>"
+                     data-save-url="<?= e(build_query_url(['page' => 'soferi', 'action' => 'driver_sizes_save'])) ?>">
+                <header class="dd-panel-head dd-sz-head">
+                    <span class="dd-sz-icon"><?= $ddShirtIcon ?></span>
+                    <div><h3>Mărimi vestimentare</h3><p>Mărimi individuale pentru echipamentele șoferului.</p></div>
+                    <div class="dd-panel-tools">
+                        <span class="dd-sz-msg" data-dd-sz-msg role="status" aria-live="polite"></span>
+                        <?php if (can('soferi', 'marimi_edit')): ?>
+                            <button type="button" class="dd-btn dd-btn-outline-primary dd-sz-btn" data-dd-sz-start disabled><i class="bi bi-pencil" aria-hidden="true"></i>Editează</button>
+                            <button type="button" class="dd-btn dd-btn-outline dd-sz-btn" data-dd-sz-cancel hidden>Anulează</button>
+                            <button type="button" class="dd-btn dd-btn-primary dd-sz-btn" data-dd-sz-save hidden><i class="bi bi-check-lg" aria-hidden="true"></i>Salvează</button>
+                        <?php endif; ?>
+                    </div>
+                </header>
+                <div data-dd-sz-content>
+                    <div class="dd-empty dd-empty-sm"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span><span>Se încarcă mărimile…</span></div>
+                </div>
+            </section>
+
+            <!-- 7. Istoric și activitate -->
             <section class="dd-panel" id="dd-panel-activitate" role="tabpanel" aria-labelledby="dd-tab-activitate" data-dd-panel="activitate">
                 <header class="dd-panel-head">
                     <i class="bi bi-clock-history dd-panel-icon" aria-hidden="true"></i>

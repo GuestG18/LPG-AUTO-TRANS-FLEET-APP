@@ -26,6 +26,7 @@ return [
         'edit'           => ['label' => 'Editare șofer (+ alocare vehicule)', 'group' => 'operare'],
         'delete'         => ['label' => 'Ștergere șofer', 'group' => 'stergere'],
         'end_employment' => ['label' => 'Încheiere colaborare (demisie / concediere)', 'group' => 'operare', 'default_accountancy' => true, 'sensitive' => true],
+        'marimi_edit'    => ['label' => 'Editare mărimi vestimentare', 'group' => 'operare'],
         'export'         => ['label' => 'Export CSV', 'group' => 'export'],
     ],
     'endpoints'   => [
@@ -36,5 +37,6 @@ return [
         'delete'         => 'delete',
         'export'         => 'export',
         'end_employment' => 'end_employment',
+        'driver_sizes_save' => 'marimi_edit',
     ],
 ];
