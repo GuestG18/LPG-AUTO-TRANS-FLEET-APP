@@ -639,6 +639,7 @@ class CentralizatorFacturareController
             'zona_distributie_id' => $_GET['zona_distributie_id'] ?? [],
             'ruta' => $_GET['ruta'] ?? [],
             'vehicle_id' => $_GET['vehicle_id'] ?? [],
+            'categorie_capacitate_id' => $_GET['categorie_capacitate_id'] ?? [],
             'vehicle_sort' => trim((string) ($_GET['vehicle_sort'] ?? 'capacity_asc')),
             'page_no' => $this->normalizePositiveIntFilter($_GET['p'] ?? ($_GET['page_no'] ?? '1')),
             'per_page' => $this->normalizePositiveIntFilter($_GET['per_page'] ?? '10'),

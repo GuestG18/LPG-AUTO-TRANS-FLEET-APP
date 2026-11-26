@@ -59,7 +59,7 @@ final class VehicleFinancialRegisterService
     // ------------------------------------------------------------------ lista
 
     /**
-     * @param array{q?:string,tab?:string,status?:string,tara?:string,perioada?:string,page?:int,per_page?:int} $f
+     * @param array{q?:string,tab?:string,status?:string,stare?:string,tara?:string,perioada?:string,page?:int,per_page?:int} $f
      */
     public function list(array $f): array
     {
@@ -73,13 +73,21 @@ final class VehicleFinancialRegisterService
 
         $q = mb_strtolower(trim((string) ($f['q'] ?? '')), 'UTF-8');
         $status = (string) ($f['status'] ?? '');
+        $state = (string) ($f['stare'] ?? '');
         $country = strtoupper((string) ($f['tara'] ?? ''));
         [$from, $to] = $this->periodBounds((string) ($f['perioada'] ?? ''));
-        $filtered = array_values(array_filter($rows, function (array $row) use ($q, $status, $country, $from, $to): bool {
+        $filtered = array_values(array_filter($rows, function (array $row) use ($q, $status, $state, $country, $from, $to): bool {
             if ($q !== '' && !str_contains($row['_search'], $q)) {
                 return false;
             }
             if ($status !== '' && $row['status'] !== $status) {
+                return false;
+            }
+            // starea vehiculului din flota (dosarele fara vehicul legat nu sunt nici active, nici inactive)
+            if ($state === 'activ' && $row['vehicul_inactiv'] !== false) {
+                return false;
+            }
+            if ($state === 'inactiv' && $row['vehicul_inactiv'] !== true) {
                 return false;
             }
             if ($country !== '' && $row['tara'] !== $country) {
@@ -184,7 +192,7 @@ final class VehicleFinancialRegisterService
             $searchExtra[(int) $extra['achizitie_id']] = (string) $extra['t'];
         }
         foreach ($this->db->query(
-            "SELECT a.*, v.nr_inmatriculare, v.marca AS v_marca, v.model AS v_model, v.tip_vehicul AS v_tip, v.serie_sasiu,
+            "SELECT a.*, v.nr_inmatriculare, v.marca AS v_marca, v.model AS v_model, v.tip_vehicul AS v_tip, v.serie_sasiu, v.status AS v_status,
                     (SELECT MIN(e.data_eveniment) FROM achizitii_vehicule_evenimente e WHERE e.achizitie_id = a.id AND e.tip = 'achizitie') AS ev_achizitie
                FROM achizitii_vehicule a LEFT JOIN vehicule v ON v.id = a.vehicle_id
               ORDER BY a.id DESC"
@@ -197,6 +205,7 @@ final class VehicleFinancialRegisterService
                 'key' => 'a' . $id,
                 'acquisition_id' => $id,
                 'vehicle_id' => $a['vehicle_id'] !== null ? (int) $a['vehicle_id'] : null,
+                'vehicul_inactiv' => $a['v_status'] !== null ? $a['v_status'] !== 'activ' : null,
                 'cod_dosar' => (string) $a['cod_dosar'],
                 'nr' => $plate ?? $a['cod_dosar'],
                 'provizoriu' => $plate === null,
@@ -215,23 +224,24 @@ final class VehicleFinancialRegisterService
                 'incomplet' => count($summary['incomplet']),
                 'status' => (string) $a['status'],
                 'status_label' => self::STATUS_LABELS[(string) $a['status']] ?? (string) $a['status'],
-                '_search' => mb_strtolower(implode(' ', [$plate, $a['cod_dosar'], $a['vin'], $a['serie_sasiu'], $a['vanzator_nume'], $a['marca'], $a['model'], $a['v_marca'], $a['v_model'], $searchExtra[$id] ?? '']), 'UTF-8'),
+                '_search' => mb_strtolower(implode(' ', [$plate, $a['cod_dosar'], $a['vin'], $a['serie_sasiu'], $a['vanzator_nume'], $a['marca'], $a['model'], $a['v_marca'], $a['v_model'], $a['v_status'] === 'inactiv' ? 'inactiv' : '', $searchExtra[$id] ?? '']), 'UTF-8'),
             ];
         }
         // Dosarele in ordinea achizitiei (cele fara data — inca in analiza — la final), apoi vehiculele fara dosar.
         usort($rows, static fn (array $x, array $y): int => [$x['data_achizitie'] === null, (string) $x['data_achizitie'], $x['acquisition_id']]
             <=> [$y['data_achizitie'] === null, (string) $y['data_achizitie'], $y['acquisition_id']]);
         foreach ($this->db->query(
-            "SELECT v.id, v.nr_inmatriculare, v.marca, v.model, v.tip_vehicul, v.serie_sasiu
+            "SELECT v.id, v.nr_inmatriculare, v.marca, v.model, v.tip_vehicul, v.serie_sasiu, v.status
                FROM vehicule v
-              WHERE v.status = 'activ' AND v.nr_inmatriculare <> 'STOC-ANVELOPE'
+              WHERE v.nr_inmatriculare <> 'STOC-ANVELOPE'
                 AND NOT EXISTS (SELECT 1 FROM achizitii_vehicule a WHERE a.vehicle_id = v.id AND a.status <> 'anulat')
-              ORDER BY FIELD(v.tip_vehicul, 'cap_tractor', 'camion', 'semiremorca', 'semiremorca_primar', 'semiremorca_distributie', 'autoutilitara', 'autovehicul'), v.nr_inmatriculare"
+              ORDER BY v.status = 'inactiv', FIELD(v.tip_vehicul, 'cap_tractor', 'camion', 'semiremorca', 'semiremorca_primar', 'semiremorca_distributie', 'autoutilitara', 'autovehicul'), v.nr_inmatriculare"
         )->fetchAll(PDO::FETCH_ASSOC) as $v) {
             $rows[] = [
                 'key' => 'v' . (int) $v['id'],
                 'acquisition_id' => null,
                 'vehicle_id' => (int) $v['id'],
+                'vehicul_inactiv' => $v['status'] !== 'activ',
                 'cod_dosar' => null,
                 'nr' => (string) $v['nr_inmatriculare'],
                 'provizoriu' => false,
@@ -250,7 +260,7 @@ final class VehicleFinancialRegisterService
                 'incomplet' => 0,
                 'status' => 'fara_dosar',
                 'status_label' => self::STATUS_LABELS['fara_dosar'],
-                '_search' => mb_strtolower(implode(' ', [$v['nr_inmatriculare'], $v['serie_sasiu'], $v['marca'], $v['model']]), 'UTF-8'),
+                '_search' => mb_strtolower(implode(' ', [$v['nr_inmatriculare'], $v['serie_sasiu'], $v['marca'], $v['model'], $v['status'] !== 'activ' ? 'inactiv' : '']), 'UTF-8'),
             ];
         }
         return $rows;

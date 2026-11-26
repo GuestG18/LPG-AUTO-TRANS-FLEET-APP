@@ -28,7 +28,8 @@ class CentralizatorFacturareShortExport
     private const FORMAT_RON = '#,##0.00 "RON";[Red]-#,##0.00 "RON";"–"';
     private const FORMAT_NUMBER = '#,##0.00;[Red]-#,##0.00;"–"';
     private const FORMAT_RATE = '#,##0.00##;[Red]-#,##0.00##;"–"';
-    private const FORMAT_INT = '#,##0;[Red]-#,##0;"–"';
+    private const FORMAT_COST_KM = '#,##0.00## "RON/km";[Red]-#,##0.00## "RON/km";"–"';
+    private const FORMAT_INT ='#,##0;[Red]-#,##0;"–"';
     private const BORDER = 'D5DEE8';
     private const FILL_COMPUTED = 'E8F5F3';
 
@@ -149,22 +150,26 @@ class CentralizatorFacturareShortExport
         $cells[0] = ['v' => 'TVA (%)', 's' => $label];
         $cells[1] = ['v' => self::VAT_RATE, 's' => $input];
         /* Eticheta, apoi valoarea; pe coloanele inguste valoarea ocupa doua, ca sa nu ajunga "####". */
+        /* Cost / km = suma coloanei „Valoare / cursă” / suma coloanei „Km / cursă” (doar randurile vizibile). */
+        $kmSum = $sum('km');
+        $costPerKm = $kmSum > 0 ? round($sum('value_per_trip') / $kmSum, 4) : 0.0;
         foreach ([
-            [2, 1, 'Total curse', 'D', (int) $sum('trips'), self::FORMAT_INT],
-            [4, 2, 'Total activitate fără TVA', 'K', $activity, self::FORMAT_RON],
-            [7, 2, 'Total refacturări fără TVA', 'P', $refundsNet, self::FORMAT_RON],
-            [10, 1, 'Total refacturări cu TVA', 'Q', $refundsVat, self::FORMAT_RON],
-            [12, 2, 'Total general fără TVA', 'R', round($activity + $refundsNet, 2), self::FORMAT_RON],
-            [15, 2, 'Total general cu TVA', 'S', $withVat, self::FORMAT_RON],
-        ] as [$column, $span, $title, $source, $value, $format]) {
+            [2, 1, 'Total curse', (int) $sum('trips'), self::FORMAT_INT, $subtotal('D')],
+            [4, 2, 'Total activitate fără TVA', $activity, self::FORMAT_RON, $subtotal('K')],
+            [7, 1, 'Cost / km', $costPerKm, self::FORMAT_COST_KM, 'IFERROR(' . $subtotal('J') . '/' . $subtotal('F') . ',0)'],
+            [9, 1, 'Total refacturări fără TVA', $refundsNet, self::FORMAT_RON, $subtotal('P')],
+            [11, 1, 'Total refacturări cu TVA', $refundsVat, self::FORMAT_RON, $subtotal('Q')],
+            [13, 2, 'Total general fără TVA', round($activity + $refundsNet, 2), self::FORMAT_RON, $subtotal('R')],
+            [16, 2, 'Total general cu TVA', $withVat, self::FORMAT_RON, $subtotal('S')],
+        ] as [$column, $span, $title, $value, $format, $formula]) {
             $cells[$column] = ['v' => $title, 's' => $label];
-            $cells[$column + 1] = ['v' => $value, 's' => $valueStyle($format), 'f' => $subtotal($source)];
+            $cells[$column + 1] = ['v' => $value, 's' => $valueStyle($format), 'f' => $formula];
             if ($span === 2) {
                 $cells[$column + 2] = ['v' => null, 's' => $valueStyle($format)];
                 $mergeValue(SimpleXlsxWriter::columnLetter($column + 2), SimpleXlsxWriter::columnLetter($column + 3));
             }
         }
-        $x->addRow($s, $cells, ['height' => 34]);
+        $x->addRow($s, $cells, ['height' => 42]);
     }
 
     private function writeSectionHeaders(int $s): void
@@ -273,7 +278,8 @@ class CentralizatorFacturareShortExport
             ['Refacturări din alte luni', 'Refacturarea din luna raportului pe o cursă din altă lună are rând fără activitate.'],
             ['Valori', 'Activitatea fără TVA și refacturările cu TVA vin din Centralizator; km și tonele sunt cele din „Activități pe tipuri de transport”.'],
             ['TVA', 'Cota este în Raport filtrabil!B3. Activitatea cu TVA = valoarea fără TVA × (1 + cotă). Refacturările sunt introduse cu TVA: valoarea fără TVA = valoarea cu TVA / (1 + cotă). Rotunjirea se face pe fiecare rând.'],
-            ['Totaluri', 'Rândul 3 din raport folosește SUBTOTAL(109, ...) și ține cont doar de rândurile vizibile.'],
+            ['Cost / km', 'Raport filtrabil!I3 = suma coloanei „Valoare / cursă” / suma coloanei „Km / cursă”, pe rândurile vizibile după filtrele din antet.'],
+            ['Totaluri','Rândul 3 din raport folosește SUBTOTAL(109, ...) și ține cont doar de rândurile vizibile.'],
         ] as [$name, $description]) {
             $x->addRow($s, [['v' => $name, 's' => $label], ['v' => $description, 's' => $text]], ['height' => 31]);
         }

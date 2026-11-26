@@ -18,6 +18,7 @@
         dim: ['origine', 'destinatie', 'depozit'].indexOf(qs.get('dim')) >= 0 ? qs.get('dim') : 'depozit',
         origine: qs.get('origine') || '', destinatie: qs.get('destinatie') || '', depozit: qs.get('depozit') || '',
         ruta: qs.get('ruta') || '', // rute exacte „loc:zona,loc:zona” (Loc încărcare → Zonă distribuție)
+        capacitate: qs.get('capacitate') || '', // capacitatea reala (t) a camionului / semiremorcii cuplate, nu categoria
         q: qs.get('q') || '', tip: qs.get('tip') || '', beneficiar: qs.get('beneficiar') || '', status: qs.get('status') || '',
         from: qs.get('from') || CFG.from, to: qs.get('to') || CFG.to, page: parseInt(qs.get('p') || '1', 10) || 1,
         per_page: parseInt(qs.get('per_page') || '25', 10) || 25, sort: qs.get('sort') || '',
@@ -41,7 +42,7 @@
         { key: 'beneficiari', label: 'Beneficiari', icon: 'bi-people' }, { key: 'investitii', label: 'Investiții', icon: 'bi-box-seam' },
         { key: 'documente', label: 'Documente', icon: 'bi-file-earmark-text' }, { key: 'soferi', label: 'Șoferi / Simulare', icon: 'bi-person-gear' }
     ];
-    var LOC_KEYS = ['origine', 'destinatie', 'depozit', 'ruta'];
+    var LOC_KEYS = ['origine', 'destinatie', 'depozit', 'ruta', 'capacitate'];
     var DIM_LABELS = { origine: 'Loc încărcare', destinatie: 'Zonă distribuție', depozit: 'Depozit / Bază' };
     var MODE_UNITS = { vehicule: 'vehicule', soferi: 'șoferi', locatii: 'locații' };
     function locParams() { var o = {}; LOC_KEYS.forEach(function (k) { o[k] = state[k]; }); if (state.mode === 'locatii') { o.dim = state.dim; } return o; }
@@ -262,7 +263,7 @@
     // ------------------------------------------------------------------ starea comuna a filtrelor
     // Sursa de adevar: ce a aplicat serverul (d.aplicat). O selectie incompatibila (ex. vehicul fara curse de
     // Distributie) e scoasa de server si anuntata aici; bara de sus, cardurile si tabelul se aliniaza la ea.
-    var FILTER_LABELS = { tip: 'Tip transport', beneficiar: 'Beneficiar', vehicle_id: 'Vehicul', driver_id: 'Șofer', origine: 'Loc încărcare', destinatie: 'Zonă distribuție', depozit: 'Depozit', ruta: 'Rute' };
+    var FILTER_LABELS = { tip: 'Tip transport', beneficiar: 'Beneficiar', vehicle_id: 'Vehicul', driver_id: 'Șofer', origine: 'Loc încărcare', destinatie: 'Zonă distribuție', depozit: 'Depozit', ruta: 'Rute', capacitate: 'Capacitate' };
     function applyServerFilters(d) {
         var a = d.aplicat || {};
         state.tip = a.tip || '';
@@ -318,7 +319,7 @@
     activeBox.addEventListener('click', function (e) {
         var c = e.target.closest('[data-chip]');
         if (c) { var p = {}; p[c.dataset.chip] = ''; setFilters(p); return; }
-        if (e.target.closest('[data-chip-all]')) { setFilters({ tip: '', beneficiar: '', vehicle_id: '', driver_id: '', status: '', q: '', origine: '', destinatie: '', depozit: '', ruta: '' }); }
+        if (e.target.closest('[data-chip-all]')) { setFilters({ tip: '', beneficiar: '', vehicle_id: '', driver_id: '', status: '', q: '', origine: '', destinatie: '', depozit: '', ruta: '', capacitate: '' }); }
     });
 
     function renderTypes(types) {
@@ -373,7 +374,7 @@
     function renderRows(rows) {
         rowsByKey = {};
         if (!rows.length) {
-            tbody.innerHTML = emptyRow('bi-inboxes', state.q || state.tip || state.beneficiar || state.status || state.origine || state.destinatie || state.depozit || state.ruta ? 'Niciun rezultat pentru filtrele alese.' : 'Nicio activitate în perioada aleasă.');
+            tbody.innerHTML = emptyRow('bi-inboxes', state.q || state.tip || state.beneficiar || state.status || state.origine || state.destinatie || state.depozit || state.ruta || state.capacitate ? 'Niciun rezultat pentru filtrele alese.' : 'Nicio activitate în perioada aleasă.');
             return;
         }
         var html = '';
@@ -1104,6 +1105,8 @@
         { key: 'beneficiar', label: 'Beneficiar', plural: 'beneficiari', icon: 'bi-people' },
         { key: 'vehicle_id', label: 'Vehicule', plural: 'vehicule', icon: 'bi-truck' },
         { key: 'driver_id', label: 'Șoferi', plural: 'șoferi', icon: 'bi-person' },
+        // capacitatea reala a unitatii care a dus marfa (camionul / semiremorca cuplata la cursa), nu categoria de capacitate
+        { key: 'capacitate', label: 'Capacitate', plural: 'capacități', icon: 'bi-box-seam' },
         { key: 'origine', label: 'Loc încărcare', plural: 'locuri', icon: 'bi-box-arrow-right' },
         { key: 'destinatie', label: 'Zonă distribuție', plural: 'zone', icon: 'bi-geo-alt' },
         { key: 'depozit', label: 'Depozit', plural: 'depozite', icon: 'bi-building' },

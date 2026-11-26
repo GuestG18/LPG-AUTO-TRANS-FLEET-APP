@@ -14,6 +14,7 @@
         q: params.get('q') || '',
         tab: params.get('tab') || 'toate',
         status: params.get('status') || '',
+        stare: params.get('stare') || '',
         tara: params.get('tara') || '',
         perioada: params.get('perioada') || '',
         page: parseInt(params.get('p') || '1', 10) || 1,
@@ -161,14 +162,16 @@
     var searchInput = document.getElementById('ifvSearch');
     var selStatus = document.getElementById('ifvStatus');
     var selTara = document.getElementById('ifvTara');
+    var selStare = document.getElementById('ifvStare');
     var selPeriod = document.getElementById('ifvPerioada');
     searchInput.value = state.q;
     selStatus.value = state.status;
+    selStare.value = state.stare;
     selPeriod.value = state.perioada;
 
     function syncUrl() {
         var u = new URL(location.href);
-        ['q', 'tab', 'status', 'tara', 'perioada'].forEach(function (k) { if (state[k] && !(k === 'tab' && state[k] === 'toate')) { u.searchParams.set(k, state[k]); } else { u.searchParams.delete(k); } });
+        ['q', 'tab', 'status', 'stare', 'tara', 'perioada'].forEach(function (k) { if (state[k] && !(k === 'tab' && state[k] === 'toate')) { u.searchParams.set(k, state[k]); } else { u.searchParams.delete(k); } });
         if (state.page > 1) { u.searchParams.set('p', state.page); } else { u.searchParams.delete('p'); }
         if (state.per_page !== 10) { u.searchParams.set('per_page', state.per_page); } else { u.searchParams.delete('per_page'); }
         history.replaceState(null, '', u.toString());
@@ -179,7 +182,7 @@
         listAbort = new AbortController();
         tbody.classList.add('is-busy');
         syncUrl();
-        return getJson(url(CFG.urls.list, { q: state.q, tab: state.tab, status: state.status, tara: state.tara, perioada: state.perioada, p: state.page, per_page: state.per_page,
+        return getJson(url(CFG.urls.list, { q: state.q, tab: state.tab, status: state.status, stare: state.stare, tara: state.tara, perioada: state.perioada, p: state.page, per_page: state.per_page,
             fin_node: state.fin_node, fin_tip: state.fin_tip, fin_masura: state.fin_masura, tip_vehicul: state.tip_vehicul }), listAbort.signal)
             .then(function (data) {
                 tbody.classList.remove('is-busy');
@@ -199,7 +202,7 @@
     function renderKpis(data) {
         var k = data.kpis;
         // cardurile KPI isi tin singure valorile (navigare interna); primesc KPI-urile si filtrele paginii
-        var filters = { q: state.q, tab: state.tab, status: state.status, tara: state.tara, perioada: state.perioada };
+        var filters = { q: state.q, tab: state.tab, status: state.status, stare: state.stare, tara: state.tara, perioada: state.perioada };
         Object.keys(kpiCards).forEach(function (key) { kpiCards[key].update(k, filters); });
         ['toate', 'derulare', 'finalizate'].forEach(function (key) { root.querySelector('[data-count="' + key + '"]').textContent = data.counts[key]; });
         root.querySelectorAll('.ifv-seg-btn').forEach(function (b) { b.classList.toggle('is-active', b.dataset.tab === state.tab); });
@@ -289,7 +292,7 @@
         var isOpen = !!open[row.key];
         return '<tr class="ifv-row' + (isOpen ? ' is-open' : '') + '" data-key="' + esc(row.key) + '">'
             + '<td><button type="button" class="ifv-expander" data-expand aria-expanded="' + isOpen + '" aria-label="Deschide dosarul"><i class="bi bi-chevron-right"></i></button></td>'
-            + '<td><div class="ifv-veh"><span class="ifv-veh-dot' + dotClass(row) + '"></span><span class="ifv-veh-text"><span class="ifv-veh-nr' + (row.provizoriu ? ' is-provisional' : '') + '" title="' + esc(row.tip_label) + '">' + esc(row.nr) + '</span><span class="ifv-veh-model">' + esc(row.model || row.tip_label) + '</span></span></div></td>'
+            + '<td><div class="ifv-veh"><span class="ifv-veh-dot' + dotClass(row) + '"></span><span class="ifv-veh-text"><span class="ifv-veh-nrline"><span class="ifv-veh-nr' + (row.provizoriu ? ' is-provisional' : '') + '" title="' + esc(row.tip_label) + '">' + esc(row.nr) + '</span>' + (row.vehicul_inactiv ? '<span class="ifv-veh-inactive" title="Vehicul inactiv în flotă">Inactiv</span>' : '') + '</span><span class="ifv-veh-model">' + esc(row.model || row.tip_label) + '</span></span></div></td>'
             + '<td class="ifv-vin">' + (row.vin ? esc(row.vin) : '<span class="ifv-muted">—</span>') + '</td>'
             + '<td>' + (row.tara ? '<span class="ifv-country">' + flag(row.tara) + esc(countryName(row.tara)) + '</span>' : '<span class="ifv-muted">—</span>') + '</td>'
             + '<td>' + date(row.data_achizitie) + '</td>'
@@ -304,7 +307,7 @@
     function renderRows(rows) {
         rowsByKey = {};
         if (!rows.length) {
-            tbody.innerHTML = emptyRow('bi-inboxes', state.q || state.status || state.tara || state.perioada || state.tab !== 'toate' || state.fin_node || state.tip_vehicul
+            tbody.innerHTML = emptyRow('bi-inboxes', state.q || state.status || state.stare || state.tara || state.perioada || state.tab !== 'toate' || state.fin_node || state.tip_vehicul
                 ? 'Niciun vehicul sau dosar pentru filtrele alese.' : 'Nu există încă vehicule sau dosare de achiziție.');
             return;
         }
@@ -357,6 +360,7 @@
         if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); searchInput.focus(); searchInput.select(); }
     });
     selStatus.addEventListener('change', function () { state.status = selStatus.value; state.page = 1; loadList(); });
+    selStare.addEventListener('change', function () { state.stare = selStare.value; state.page = 1; loadList(); });
     selTara.addEventListener('change', function () { state.tara = selTara.value; state.page = 1; loadList(); });
     selPeriod.addEventListener('change', function () { state.perioada = selPeriod.value; state.page = 1; loadList(); });
     root.querySelectorAll('.ifv-seg-btn').forEach(function (b) {
@@ -369,11 +373,11 @@
         if (a === 'create-dossier') { formDossier(null); }
         if (a === 'refresh') { loadList(); }
         if (a === 'reset') {
-            state = { q: '', tab: 'toate', status: '', tara: '', perioada: '', page: 1, per_page: state.per_page, fin_node: '', fin_tip: '', fin_masura: '', tip_vehicul: '' };
+            state = { q: '', tab: 'toate', status: '', stare: '', tara: '', perioada: '', page: 1, per_page: state.per_page, fin_node: '', fin_tip: '', fin_masura: '', tip_vehicul: '' };
             // resetarea paginii aduce si cardurile KPI la total (fara scop propriu)
             Object.keys(kpiCards).forEach(function (k) { kpiCards[k].reset(); });
             cardScope.owner = null; cardScope.saved = null;
-            searchInput.value = ''; selStatus.value = ''; selPeriod.value = '';
+            searchInput.value = ''; selStatus.value = ''; selStare.value = ''; selPeriod.value = '';
             loadList();
         }
         if (a === 'collapse-all') { Object.keys(open).forEach(collapse); }
@@ -1200,8 +1204,8 @@
                 loadList().then(function () {
                     if (rowsByKey[newKey]) { return; }
                     // Filtrele active ascund dosarul nou: le resetam ca sa-l aratam deschis.
-                    state.q = ''; state.status = ''; state.tara = ''; state.perioada = ''; state.tab = 'toate'; state.page = 1;
-                    searchInput.value = ''; selStatus.value = ''; selPeriod.value = '';
+                    state.q = ''; state.status = ''; state.stare = ''; state.tara = ''; state.perioada = ''; state.tab = 'toate'; state.page = 1;
+                    searchInput.value = ''; selStatus.value = ''; selStare.value = ''; selPeriod.value = '';
                     return loadList();
                 }).then(function () {
                     if (rowsByKey[newKey]) { expand(newKey); var tr = rowEl(newKey); if (tr) { tr.scrollIntoView({ behavior: 'smooth', block: 'center' }); } }
@@ -1330,7 +1334,7 @@
 
     function formLinkVehicle(key, d) {
         openForm({ title: 'Leagă dosarul de vehiculul înmatriculat', hint: 'VIN-ul vehiculului trebuie să corespundă celui din dosar.',
-            fields: [{ name: 'vehicle_id', label: 'Vehicul', type: 'select', required: true, wide: true, options: CFG.vehicles.map(function (v) { return [v.id, v.nr_inmatriculare + (v.serie_sasiu ? ' · ' + v.serie_sasiu : '')]; }) }],
+            fields: [{ name: 'vehicle_id', label: 'Vehicul', type: 'select', required: true, wide: true, options: CFG.vehicles.map(function (v) { return [v.id, v.nr_inmatriculare + (v.serie_sasiu ? ' · ' + v.serie_sasiu : '') + (v.status === 'inactiv' ? ' (inactiv)' : '')]; }) }],
             base: { op: 'link_vehicle', acquisition_id: d.acquisition_id }, key: key, success: 'Vehiculul a fost legat.' });
     }
 

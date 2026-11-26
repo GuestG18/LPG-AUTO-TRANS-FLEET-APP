@@ -189,7 +189,7 @@ final class ProfitabilityRegisterService
             // listele ca "3,5,8" ('' = fara filtru), aceeasi forma ca parametrii din URL
             'aplicat' => ['tip' => $type, 'beneficiar' => implode(',', $benef), 'vehicle_id' => implode(',', $vehicleId), 'driver_id' => implode(',', $driverId),
                 'status' => $status, 'q' => (string) ($f['q'] ?? ''), 'dim' => $ctx['dim']]
-                + array_map(static fn (array $ids): string => implode(',', $ids), $ctx['loc']) + array_fill_keys(array_keys(LocationDimensionService::DIMENSIONS), '') + ['ruta' => ''],
+                + array_map(static fn (array $ids): string => implode(',', $ids), $ctx['loc']) + array_fill_keys(array_keys(LocationDimensionService::DIMENSIONS), '') + ['ruta' => '', 'capacitate' => ''],
             'anulate' => $dropped,
         ];
     }
@@ -313,6 +313,7 @@ final class ProfitabilityRegisterService
     {
         $found = array_fill_keys(array_keys(LocationDimensionService::DIMENSIONS), []);
         $routes = [];
+        $caps = [];
         foreach ($a['vehicles'] as $v) {
             foreach ($v['by_seg'] ?? [] as $key => $act) {
                 $parts = explode('|', (string) $key);
@@ -324,12 +325,21 @@ final class ProfitabilityRegisterService
                     $found[$dim][$pid ?? -1] = true;
                 }
                 $routes[self::routeKey($roles)] = true;
+                $caps[$this->capacityKey((int) ($parts[4] ?? 0))] = true;
             }
         }
         foreach ($loc['ruta'] ?? [] as $r) {
             $routes[$r] = true;
         }
-        $out = ['ruta' => []];
+        foreach ($loc['capacitate'] ?? [] as $c) {
+            $caps[$c] = true;
+        }
+        $out = ['ruta' => [], 'capacitate' => []];
+        foreach (array_keys($caps) as $c) {
+            $out['capacitate'][] = ['id' => (string) $c, 'label' => self::capacityLabel((string) $c)];
+        }
+        // crescator, necunoscuta la final
+        usort($out['capacitate'], static fn (array $x, array $y): int => ($x['id'] === '0') <=> ($y['id'] === '0') ?: (float) $x['id'] <=> (float) $y['id']);
         foreach (array_keys($routes) as $r) {
             $out['ruta'][] = ['id' => (string) $r, 'label' => $this->routeLabel((string) $r)];
         }
@@ -387,7 +397,7 @@ final class ProfitabilityRegisterService
                     if ((float) $act['km'] <= 0 || ($ctx['type'] !== '' && $t !== $ctx['type']) || ($ctx['benef'] !== [] && !in_array((int) $b, $ctx['benef'], true))) {
                         continue;
                     }
-                    if ($ctx['loc'] !== [] && !$this->matchesLocation($t, (int) ($parts[2] ?? 0), (int) ($parts[3] ?? 0), $ctx['loc'])) {
+                    if ($ctx['loc'] !== [] && !$this->matchesLocation($t, (int) ($parts[2] ?? 0), (int) ($parts[3] ?? 0), $ctx['loc'], (int) ($parts[4] ?? 0))) {
                         continue;
                     }
                     if ($isRoute) {
@@ -548,7 +558,7 @@ final class ProfitabilityRegisterService
             if (($type !== '' && $t !== $type) || ($benef !== [] && !in_array((int) $b, $benef, true))) {
                 continue;
             }
-            if ($loc !== [] && !$this->matchesLocation($t, (int) ($parts[2] ?? 0), (int) ($parts[3] ?? 0), $loc)) {
+            if ($loc !== [] && !$this->matchesLocation($t, (int) ($parts[2] ?? 0), (int) ($parts[3] ?? 0), $loc, (int) ($parts[4] ?? 0))) {
                 continue;
             }
             $km += $act['km'];
@@ -610,7 +620,7 @@ final class ProfitabilityRegisterService
                 if (($type !== '' && $t !== $type) || ($benef !== [] && !in_array($b, $benef, true)) || ((float) $act['km'] <= 0 && (float) $act['revenue'] == 0.0 && (int) $act['trips'] === 0)) {
                     continue;
                 }
-                if ($loc !== [] && !$this->matchesLocation($t, $locId, $zonaId, $loc)) {
+                if ($loc !== [] && !$this->matchesLocation($t, $locId, $zonaId, $loc, (int) ($parts[4] ?? 0))) {
                     continue;
                 }
                 $g = $keyOf($vid, $this->locations->roles($t, $locId, $zonaId));
@@ -761,7 +771,42 @@ final class ProfitabilityRegisterService
         if ($routes !== []) {
             $out['ruta'] = array_values($routes);
         }
+        // capacitatea reala a unitatii care a dus marfa (tone, „18.5”; „0” = necunoscuta) — nu categoria de capacitate
+        $caps = [];
+        foreach (is_array($f['capacitate'] ?? null) ? $f['capacitate'] : explode(',', (string) ($f['capacitate'] ?? '')) as $c) {
+            $c = trim((string) $c);
+            if (preg_match('/^\d{1,3}(\.\d{1,2})?$/', $c) === 1) {
+                $caps[self::capKey((float) $c)] = self::capKey((float) $c);
+            }
+        }
+        if ($caps !== []) {
+            $out['capacitate'] = array_values($caps);
+        }
         return $out;
+    }
+
+    /** Cheia unei capacitati: „18.5”, „10”, „0” (necunoscuta). */
+    private static function capKey(float $tons): string
+    {
+        return $tons > 0 ? rtrim(rtrim(number_format($tons, 2, '.', ''), '0'), '.') : '0';
+    }
+
+    private ?array $capacities = null;
+
+    /**
+     * Capacitatea reala (vehicule.capacitate_transport, nu categoria) a unitatii care a dus marfa: camionul, sau
+     * semiremorca cuplata la capul tractor la startul cursei. Citita la afisare: o corectura se vede imediat.
+     */
+    private function capacityKey(int $carrier): string
+    {
+        $this->capacities ??= array_map('floatval', array_column(
+            $this->db->query('SELECT id, COALESCE(capacitate_transport, 0) AS c FROM vehicule')->fetchAll(PDO::FETCH_ASSOC), 'c', 'id'));
+        return self::capKey($carrier > 0 ? (float) ($this->capacities[$carrier] ?? 0) : 0.0);
+    }
+
+    public static function capacityLabel(string $key): string
+    {
+        return $key === '0' ? 'Capacitate necunoscută' : str_replace('.', ',', $key) . ' t';
     }
 
     /** Cheia rutei unui segment: „origine:destinatie” (-1 = fara loc). */
@@ -793,11 +838,16 @@ final class ProfitabilityRegisterService
     }
 
     /** O locatie se potriveste cand, pe fiecare dimensiune filtrata, locul cursei e unul din cele alese. */
-    private function matchesLocation(string $type, int $locId, int $zonaId, array $loc): bool
+    private function matchesLocation(string $type, int $locId, int $zonaId, array $loc, int $carrier = 0): bool
     {
         $roles = $this->locations->roles($type, $locId, $zonaId);
         foreach ($loc as $dim => $ids) {
-            if ($dim === 'ruta' ? !in_array(self::routeKey($roles), $ids, true) : !in_array($roles[$dim] ?? -1, $ids, true)) {
+            $ok = match ($dim) {
+                'ruta' => in_array(self::routeKey($roles), $ids, true),
+                'capacitate' => in_array($this->capacityKey($carrier), $ids, true),
+                default => in_array($roles[$dim] ?? -1, $ids, true),
+            };
+            if (!$ok) {
                 return false;
             }
         }

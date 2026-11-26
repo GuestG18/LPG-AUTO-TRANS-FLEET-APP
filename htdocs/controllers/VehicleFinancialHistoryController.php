@@ -56,7 +56,7 @@ class VehicleFinancialHistoryController
             'permissions' => $this->permissions(),
             'categories' => $categories,
             'drivers' => $this->db->query("SELECT id, nume FROM soferi WHERE status = 'activ' ORDER BY nume")->fetchAll(PDO::FETCH_ASSOC),
-            'vehicles' => $this->db->query("SELECT id, nr_inmatriculare, tip_vehicul, serie_sasiu FROM vehicule WHERE status = 'activ' AND nr_inmatriculare <> 'STOC-ANVELOPE' ORDER BY nr_inmatriculare")->fetchAll(PDO::FETCH_ASSOC),
+            'vehicles' => $this->db->query("SELECT id, nr_inmatriculare, tip_vehicul, serie_sasiu, status FROM vehicule WHERE nr_inmatriculare <> 'STOC-ANVELOPE' ORDER BY status = 'inactiv', nr_inmatriculare")->fetchAll(PDO::FETCH_ASSOC),
         ]);
     }
 
@@ -67,6 +67,7 @@ class VehicleFinancialHistoryController
             'q' => (string) ($_GET['q'] ?? ''),
             'tab' => (string) ($_GET['tab'] ?? 'toate'),
             'status' => (string) ($_GET['status'] ?? ''),
+            'stare' => (string) ($_GET['stare'] ?? ''),
             'tara' => (string) ($_GET['tara'] ?? ''),
             'perioada' => (string) ($_GET['perioada'] ?? ''),
         ];

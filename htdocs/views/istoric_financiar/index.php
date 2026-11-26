@@ -81,6 +81,13 @@ $jsVersion = (string) @filemtime(BASE_PATH . '/assets/js/istoric-financiar.js');
                 <option value="fara_dosar">Fără dosar</option>
             </select>
         </label>
+        <label class="ifv-select"><span>Vehicul:</span>
+            <select id="ifvStare">
+                <option value="">Toate</option>
+                <option value="activ">Active</option>
+                <option value="inactiv">Inactive</option>
+            </select>
+        </label>
         <label class="ifv-select"><span>Țară proveniență:</span>
             <select id="ifvTara"><option value="">Toate</option></select>
         </label>

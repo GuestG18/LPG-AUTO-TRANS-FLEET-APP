@@ -53,7 +53,7 @@
     var SKIP_LABELS = { beneficiar: 'Toți beneficiarii', tip: 'Toate tipurile de transport', locatie: 'Toate locațiile' };
     var LOC_KEYS = ['origine', 'destinatie', 'depozit', 'ruta'];
     var ORDER = ['beneficiar', 'tip', 'locatie', 'unit'];
-    var SCOPE_KEYS = ['beneficiar', 'tip', 'vehicle_id', 'driver_id'].concat(LOC_KEYS);
+    var SCOPE_KEYS = ['beneficiar', 'tip', 'vehicle_id', 'driver_id'].concat(LOC_KEYS, ['capacitate']);
     function dimLabel(dim) { return (LOC_DIMS.filter(function (d) { return d.dim === dim; })[0] || {}).label || dim; }
     function levelKey(entry) { return entry.view === 'locatie' ? entry.dim : LEVELS[entry.view].key; }
     function levelTitle(entry) { return entry.view === 'locatie' ? dimLabel(entry.dim) : LEVELS[entry.view].title; }
@@ -105,13 +105,13 @@
             // selectie multipla (din bara de sus / bifele tabelului): „3 vehicule”
             var many = String(value).split(',').filter(Boolean);
             if (many.length > 1) {
-                return many.length + ' ' + ({ beneficiar: 'beneficiari', vehicle_id: 'vehicule', driver_id: 'șoferi', origine: 'locuri de încărcare', destinatie: 'zone', depozit: 'depozite', ruta: 'rute' }[key] || 'selectate');
+                return many.length + ' ' + ({ beneficiar: 'beneficiari', vehicle_id: 'vehicule', driver_id: 'șoferi', origine: 'locuri de încărcare', destinatie: 'zone', depozit: 'depozite', ruta: 'rute', capacitate: 'capacități' }[key] || 'selectate');
             }
             var o = (data && data.optiuni) || {};
             if (key === 'tip') { return (o.tipuri || {})[value] || value; }
             if (key === 'beneficiar') { return (o.beneficiari || {})[value] || ('#' + value); }
-            if (key === 'ruta') {
-                var r = (((o.locatii_filtru || {}).ruta) || []).filter(function (x) { return String(x.id) === String(value); })[0];
+            if (key === 'ruta' || key === 'capacitate') {
+                var r = (((o.locatii_filtru || {})[key]) || []).filter(function (x) { return String(x.id) === String(value); })[0];
                 return r ? r.label : value;
             }
             if (LOC_KEYS.indexOf(key) >= 0) { return (o.locatii || {})[value] || ('#' + value); }
@@ -121,7 +121,7 @@
         }
         function scopePath() {
             var a = (data && data.aplicat) || {};
-            return ['beneficiar', 'tip'].concat(LOC_KEYS, ['vehicle_id', 'driver_id']).filter(function (k) { return isSet(a[k]); })
+            return ['beneficiar', 'tip'].concat(LOC_KEYS, ['capacitate', 'vehicle_id', 'driver_id']).filter(function (k) { return isSet(a[k]); })
                 .map(function (k) { return scopeLabel(k, a[k]); });
         }
         // Urmatorul nivel de explorat dupa `after` (null = de la inceput), cu filtrele aplicate + cele din `patch`.
@@ -325,7 +325,7 @@
         function clearScope(card) {
             CARDS.forEach(function (c) { cards[c.key].stack = [{ view: 'overview' }]; });
             activeCard = null;
-            setScope({ beneficiar: '', tip: '', vehicle_id: '', driver_id: '', origine: '', destinatie: '', depozit: '', ruta: '' }, '');
+            setScope({ beneficiar: '', tip: '', vehicle_id: '', driver_id: '', origine: '', destinatie: '', depozit: '', ruta: '', capacitate: '' }, '');
             show(card, -1);
         }
 

@@ -275,6 +275,7 @@ class CentralizatorFacturareService
             'zona_distributie_ids' => $this->normalizeIdList($input['zona_distributie_id'] ?? []),
             'rute' => array_values($routes),
             'vehicle_ids' => $this->normalizeIdList($input['vehicle_id'] ?? []),
+            'capacity_category_ids' => $this->normalizeIdList($input['categorie_capacitate_id'] ?? []),
             'vehicle_sort' => $vehicleSort,
             'page_no' => max(1, $this->normalizePositiveInt($input['page_no'] ?? ($input['p'] ?? 1))),
             'per_page' => $perPage,
@@ -1628,6 +1629,17 @@ class CentralizatorFacturareService
         $inList('c.loc_incarcare_id', (array) ($filters['loc_incarcare_ids'] ?? []), 'loc_filter');
         $inList('c.zona_distributie_id', (array) ($filters['zona_distributie_ids'] ?? []), 'zone_filter');
         $inList('c.vehicle_id', (array) ($filters['vehicle_ids'] ?? []), 'vehicle');
+        /* Capacitate transport = categoria de capacitate a vehiculului (capul tractor o preia de la semiremorca cuplata). */
+        $categoryIds = (array) ($filters['capacity_category_ids'] ?? []);
+        if ($categoryIds !== []) {
+            $placeholders = [];
+            foreach (array_values($categoryIds) as $index => $categoryId) {
+                $placeholder = ':' . $prefix . '_capacity_category_' . $index;
+                $placeholders[] = $placeholder;
+                $params[$placeholder] = (int) $categoryId;
+            }
+            $where[] = 'c.vehicle_id IN (SELECT v.id FROM vehicule v ' . self::ACTIVE_TRAILER_JOIN_SQL . ' WHERE ' . self::VEHICLE_CAPACITY_CATEGORY_ID_SQL . ' IN (' . implode(', ', $placeholders) . '))';
+        }
 
         /* Tipul de marfa e o lista in text pe cursa: cursa intra daca are oricare marfa aleasa. */
         $cargoConditions = [];
@@ -1696,6 +1708,7 @@ class CentralizatorFacturareService
         }
         foreach ([
             ['Tip marfă', 'tip_marfa_list', 'cargo', 'value', 'label'],
+            ['Capacitate transport', 'capacity_category_ids', 'capacity_categories', 'id', 'label'],
             ['Vehicul', 'vehicle_ids', 'vehicles', 'id', 'nr_inmatriculare'],
             ['Loc încărcare', 'loc_incarcare_ids', 'loading_locations', 'id', 'label'],
             ['Zonă descărcare', 'zona_distributie_ids', 'unloading_zones', 'id', 'label'],
@@ -1727,6 +1740,7 @@ class CentralizatorFacturareService
             'unloading_zones' => $this->unloadingZoneOptions($filters),
             'routes' => $this->routeOptions($filters),
             'vehicles' => $this->vehicleOptions($filters),
+            'capacity_categories' => $this->capacityCategoryOptions($filters),
             'vehicle_sort_options' => $this->vehicleSortOptions(),
             'per_page_options' => self::PER_PAGE_OPTIONS,
         ];
@@ -1901,6 +1915,35 @@ class CentralizatorFacturareService
         $stmt->execute();
 
         return $stmt->fetchAll() ?: [];
+    }
+
+    /* Categoriile de capacitate ale vehiculelor cu curse in filtrele curente (fara filtrul propriu). */
+    private function capacityCategoryOptions(array $filters): array
+    {
+        $lookupFilters = array_merge($filters, ['capacity_category_ids' => []]);
+        $where = $this->buildTripWhere($lookupFilters, $this->queryTransportTypes($filters), 'capacity_lookup');
+        $sql = "
+            SELECT
+                vcc.id,
+                vcc.nume AS label,
+                MIN(vcc.ordine_afisare) AS ordine
+            " . $where['from'] . "
+            INNER JOIN vehicule v ON v.id = c.vehicle_id
+            " . self::ACTIVE_TRAILER_JOIN_SQL . "
+            " . self::VEHICLE_CAPACITY_CATEGORY_JOIN_SQL . "
+            " . $where['where'] . "
+            AND vcc.id IS NOT NULL
+            GROUP BY vcc.id, vcc.nume
+            ORDER BY ordine ASC, label ASC
+        ";
+        $stmt = $this->db->prepare($sql);
+        $this->bindParams($stmt, $where['params']);
+        $stmt->execute();
+
+        return array_map(static fn (array $row): array => [
+            'id' => (int) ($row['id'] ?? 0),
+            'label' => (string) ($row['label'] ?? ''),
+        ], $stmt->fetchAll() ?: []);
     }
 
     private function vehicleSortOptions(): array

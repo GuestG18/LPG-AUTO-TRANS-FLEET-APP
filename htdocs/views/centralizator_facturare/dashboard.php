@@ -44,6 +44,7 @@ $listFilters = [
     'zona_distributie_id' => array_map('strval', (array) ($filters['zona_distributie_ids'] ?? [])),
     'ruta' => array_map('strval', (array) ($filters['rute'] ?? [])),
     'vehicle_id' => array_map('strval', (array) ($filters['vehicle_ids'] ?? [])),
+    'categorie_capacitate_id' => array_map('strval', (array) ($filters['capacity_category_ids'] ?? [])),
 ];
 
 $queryFor = static function (array $overrides = []) use ($filters, $listFilters): string {
@@ -902,6 +903,7 @@ $resetUrl = build_query_url(['page' => 'centralizator_facturare']);
             <?= $renderMultiSelect('cf_loading', 'Loc încărcare', 'loc_incarcare_id', $optionsOf((array) ($lookups['loading_locations'] ?? []), 'id', 'label', 'Necunoscut'), $listFilters['loc_incarcare_id'], 'Toate', false, true) ?>
             <?= $renderMultiSelect('cf_unloading', 'Zonă descărcare', 'zona_distributie_id', $optionsOf((array) ($lookups['unloading_zones'] ?? []), 'id', 'label', 'Necunoscut'), $listFilters['zona_distributie_id'], 'Toate', false, true) ?>
             <?= $renderMultiSelect('cf_route', 'Rută', 'ruta', $optionsOf((array) ($lookups['routes'] ?? []), 'value', 'label'), $listFilters['ruta'], 'Toate') ?>
+            <?= $renderMultiSelect('cf_capacity', 'Capacitate transport', 'categorie_capacitate_id', $optionsOf((array) ($lookups['capacity_categories'] ?? []), 'id', 'label'), $listFilters['categorie_capacitate_id'], 'Toate capacitățile') ?>
         </form>
 
         <?php /* Bara de context: ramane lipita sub topbar cat timp derulezi raportul. */ ?>

@@ -139,6 +139,36 @@ if (count($routes) >= 2) {
     check('cardul KPI pe ruta arata doar rutele alese', count($br['rows']) === count($ids) && array_diff(array_column($br['rows'], 'value'), $ids) === []);
 }
 
+echo "Capacitate (reala a camionului / semiremorcii cuplate, nu categoria)\n";
+$caps = array_column($all['optiuni']['locatii_filtru']['capacitate'], 'id');
+check('exista optiuni de capacitate', $caps !== []);
+$sumCap = 0.0;
+foreach ($caps as $c) {
+    $sumCap += $svc->list($base + ['mode' => 'vehicule', 'capacitate' => $c])['kpi']['km'];
+}
+check('capacitatile acopera toata flota (fiecare cursa intr-o singura capacitate)', near($sumCap, $all['kpi']['km']), sprintf('%.1f vs %.1f', $sumCap, $all['kpi']['km']));
+if (count($caps) >= 2) {
+    $two = array_slice($caps, 0, 2);
+    $multi = $svc->list($base + ['mode' => 'vehicule', 'capacitate' => implode(',', $two)]);
+    $same('2 capacitati', $multi['kpi'], array_map(static fn (string $c): array => $svc->list($base + ['mode' => 'vehicule', 'capacitate' => $c])['kpi'], $two));
+    check('aplicat capacitate = lista', $multi['aplicat']['capacitate'] === implode(',', $two));
+    check('capacitate in modul Soferi: aceiasi km', near($svc->list($base + ['mode' => 'soferi', 'capacitate' => implode(',', $two)])['kpi']['km'], $multi['kpi']['km']));
+    check('capacitate in modul Locatii: aceiasi km', near($svc->list($base + ['mode' => 'locatii', 'dim' => 'depozit', 'capacitate' => implode(',', $two)])['kpi']['km'], $multi['kpi']['km']));
+    check('capacitatea „18.50” = „18.5” (format normalizat)', $svc->list($base + ['mode' => 'vehicule', 'capacitate' => '18.50'])['aplicat']['capacitate'] === '18.5');
+    check('valorile invalide se ignora', $svc->list($base + ['mode' => 'vehicule', 'capacitate' => 'abc,-3,' . $two[0]])['aplicat']['capacitate'] === $two[0]);
+}
+// camioanele: capacitatea filtrata = capacitatea din fisa vehiculului
+$trucks = get_pdo()->query("SELECT id, capacitate_transport FROM vehicule WHERE tip_vehicul = 'camion' AND capacitate_transport > 0")->fetchAll(PDO::FETCH_KEY_PAIR);
+$bad = [];
+foreach ($caps as $c) {
+    foreach ($svc->list($base + ['mode' => 'vehicule', 'capacitate' => $c])['rows'] as $r) {
+        if (isset($trucks[$r['id']]) && abs((float) $trucks[$r['id']] - (float) $c) > 0.001) {
+            $bad[] = $r['label'] . ' ' . $trucks[$r['id']] . '≠' . $c;
+        }
+    }
+}
+check('camioanele apar doar la capacitatea lor reala', $bad === [], implode('; ', array_slice($bad, 0, 3)));
+
 echo "Export\n";
 if (count($veh) >= 2) {
     $csv = $svc->exportCsv($base + ['mode' => 'vehicule', 'vehicle_id' => implode(',', $veh)]);

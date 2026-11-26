@@ -192,7 +192,7 @@ class ProfitabilityController
     private static function locationParams(): array
     {
         return ['dim' => (string) ($_GET['dim'] ?? ''), 'origine' => self::listParam('origine'),
-            'destinatie' => self::listParam('destinatie'), 'depozit' => self::listParam('depozit'), 'ruta' => self::listParam('ruta')];
+            'destinatie' => self::listParam('destinatie'), 'depozit' => self::listParam('depozit'), 'ruta' => self::listParam('ruta'), 'capacitate' => self::listParam('capacitate')];
     }
 
     private static function canEditLocations(): bool

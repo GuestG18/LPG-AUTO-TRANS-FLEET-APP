@@ -52,7 +52,7 @@ final class OperationalProfitabilityService
     private const SEMI_TYPES = ['semiremorca', 'semiremorca_primar', 'semiremorca_distributie'];
     /** Elemente pe evenimente: „lipsa” inseamna doar ca nu au existat evenimente in luna, nu date lipsa. */
     private const EVENT_ELEMENTS = ['reparatii', 'revizii', 'carburant', 'adblue', 'diurna', 'taxe_drum_realizate', 'taxe_drum_autorizatii', 'piese_ocr'];
-    private const CACHE_VERSION = 'v5'; // v4: by_seg (beneficiar|tip|loc|zona); v5: + tone / clienti / capacitate pe segment
+    private const CACHE_VERSION = 'v6'; // v4: by_seg (beneficiar|tip|loc|zona); v5: + tone / clienti / capacitate; v6: + unitatea care a dus marfa
     /** Valorile unui segment by_seg (beneficiar|tip|loc|zona): activitate + incarcare (tone, capacitate, clienti). */
     public const SEG_ZERO = ['km' => 0.0, 'trips' => 0, 'revenue' => 0.0, 'tone_inc' => 0.0, 'tone_liv' => 0.0, 'cap' => 0.0,
         'tone_lipsa' => 0.0, 'tone_peste' => 0.0, 'clienti' => 0.0, 'cap_neconf' => 0];
@@ -331,7 +331,10 @@ final class OperationalProfitabilityService
             $v['by_bt'][$btKey]['trips'] += (int) $l['cursa'];
             $v['by_bt'][$btKey]['revenue'] += (float) $l['venit'];
             // locurile brute ale cursei (rezolvate in locuri fizice la citire: LocationDimensionService)
-            $segKey = $btKey . '|' . (int) ($l['loc_incarcare_id'] ?? 0) . '|' . (int) ($l['zona_distributie_id'] ?? 0);
+            // + unitatea care a dus marfa (capacitatea ei reala se citeste la afisare): camionul insusi, la capul tractor
+            // semiremorca cuplata la startul cursei (0 = necunoscuta)
+            $carrier = (string) ($info[$vid]['tip_vehicul'] ?? '') === 'cap_tractor' ? (int) ($this->semiAt($vid, (string) $l['moment']) ?? 0) : $vid;
+            $segKey = $btKey . '|' . (int) ($l['loc_incarcare_id'] ?? 0) . '|' . (int) ($l['zona_distributie_id'] ?? 0) . '|' . $carrier;
             $v['by_seg'][$segKey] ??= self::SEG_ZERO;
             $v['by_seg'][$segKey]['km'] += (float) $l['km_real'];
             $v['by_seg'][$segKey]['trips'] += (int) $l['cursa'];
