@@ -201,6 +201,122 @@ class CentralizatorFacturareService
         ];
     }
 
+    /*
+     * Raportul centralizat pe vehicule: aceleasi curse ca pagina si raportul scurt (buildCore,
+     * aceleasi filtre), adunate pe beneficiar -> luna -> loc de incarcare -> vehicul + ruta, ca
+     * un vehicul sa apara o singura data pe ruta in sectiunea lunii. Fiecare luna din interval
+     * (month_from .. month, implicit doar luna din pagina) are calculul ei, ca in pagina. Doar
+     * activitatea (fara refacturari): curse, km, tone si valoare sunt sume, nu medii.
+     */
+    public function getVehicleSummaryExportData(array $input): array
+    {
+        $filters = $this->normalizeFilters(array_merge($input, ['page_no' => 1, 'per_page' => 100000]));
+        $months = $this->vehicleSummaryMonths((string) ($input['month_from'] ?? ''), (string) $filters['month']);
+
+        $beneficiaries = [];
+        $control = ['trips' => 0, 'activity' => 0.0, 'rows_trips' => 0, 'rows_value' => 0.0, 'rows_km' => 0.0, 'rows_tone' => 0.0];
+        foreach ($months as $month) {
+            $monthFilters = $month === $filters['month'] ? $filters : $this->normalizeFilters(array_merge($input, ['month' => $month, 'page_no' => 1, 'per_page' => 100000]));
+            $core = $this->buildCore($monthFilters);
+            $control['trips'] += (int) $core['trip_count'];
+            $control['activity'] += (float) $core['total_value'];
+            foreach ((array) ($core['activity']['by_type'] ?? []) as $typeRow) {
+                foreach ((array) ($typeRow['routes'] ?? []) as $route) {
+                    foreach ((array) ($route['trip_rows'] ?? []) as $trip) {
+                        $beneficiary = (string) ($trip['beneficiary_label'] ?? '') ?: 'Beneficiar nespecificat';
+                        $loading = (string) ($trip['loading_label'] ?? '') ?: 'Loc de încărcare nespecificat';
+                        /* Partea de km a unei curse P+D sta pe acelasi rand cu partea de tone. */
+                        $routeLabel = str_replace(self::PD_ROUTE_SUFFIX, '', (string) $trip['report_route']);
+                        $vehicle = (string) $trip['vehicle_label'];
+                        $counts = (bool) ($trip['counts_trip'] ?? true) ? 1 : 0;
+                        $km = (float) $trip['report_km'];
+                        $tone = (float) $trip['report_tone'];
+                        $value = (float) $trip['value'];
+
+                        $row = &$beneficiaries[$beneficiary][$month][$loading][$routeLabel . "|" . $vehicle];
+                        $row ??= ['vehicle' => $vehicle, 'route' => $routeLabel, 'trips' => 0, 'km' => 0.0, 'tone' => 0.0, 'value' => 0.0];
+                        $row['trips'] += $counts;
+                        $row['km'] += $km;
+                        $row['tone'] += $tone;
+                        $row['value'] += $value;
+                        unset($row);
+
+                        $control['rows_trips'] += $counts;
+                        $control['rows_km'] += $km;
+                        $control['rows_tone'] += $tone;
+                        $control['rows_value'] += $value;
+                    }
+                }
+            }
+        }
+
+        $sheets = [];
+        uksort($beneficiaries, 'strnatcasecmp');
+        foreach ($beneficiaries as $beneficiary => $byMonth) {
+            ksort($byMonth);
+            $sections = [];
+            foreach ($byMonth as $month => $locations) {
+                uksort($locations, 'strnatcasecmp');
+                foreach ($locations as $loading => $rows) {
+                    $rows = array_values(array_map(static fn (array $row): array => [
+                        'vehicle' => $row['vehicle'],
+                        'route' => $row['route'],
+                        'trips' => $row['trips'],
+                        'km' => round($row['km'], 2),
+                        'tone' => round($row['tone'], 4),
+                        'value' => round($row['value'], 2),
+                    ], $rows));
+                    usort($rows, static fn (array $a, array $b): int => strnatcasecmp($a['route'], $b['route']) ?: strnatcasecmp($a['vehicle'], $b['vehicle']));
+                    $routes = array_values(array_unique(array_column($rows, 'route')));
+                    $sections[] = [
+                        /* O singura ruta: titlul o numeste (ca in model); altfel locul de incarcare. */
+                        'label' => count($routes) === 1 ? $routes[0] : (string) $loading,
+                        'month' => (string) $month,
+                        'month_label' => $this->formatMonthLabel((string) $month),
+                        'rows' => $rows,
+                    ];
+                }
+            }
+            $sheets[] = ['beneficiary' => (string) $beneficiary, 'sections' => $sections];
+        }
+
+        $control['activity'] = round($control['activity'], 2);
+        $control['rows_value'] = round($control['rows_value'], 2);
+        $control['rows_km'] = round($control['rows_km'], 2);
+        $control['rows_tone'] = round($control['rows_tone'], 4);
+
+        return [
+            'filters' => $filters + ['month_from' => $months[0]],
+            'months' => $months,
+            'scope' => $this->buildScope($filters, $this->buildLookups($filters)),
+            'sheets' => $sheets,
+            'control' => $control,
+            'generated_at' => date('Y-m-d H:i:s'),
+        ];
+    }
+
+    /* Lunile raportului pe vehicule: de la month_from (valid, nu dupa luna aleasa) pana la luna aleasa, cel mult 12. */
+    private function vehicleSummaryMonths(string $from, string $to): array
+    {
+        $from = $this->normalizeMonth($from);
+        if ($from === '' || $from > $to) {
+            $from = $to;
+        }
+        $months = [];
+        for ($cursor = new DateTimeImmutable($from . '-01'); $cursor->format('Y-m') <= $to && count($months) < 12; $cursor = $cursor->modify('+1 month')) {
+            $months[] = $cursor->format('Y-m');
+        }
+        /* Peste 12 luni: ultimele 12, pana la luna aleasa. */
+        if ($months !== [] && end($months) !== $to) {
+            $months = [];
+            for ($cursor = (new DateTimeImmutable($to . '-01'))->modify('-11 months'); count($months) < 12; $cursor = $cursor->modify('+1 month')) {
+                $months[] = $cursor->format('Y-m');
+            }
+        }
+
+        return $months;
+    }
+
     public function normalizeFilters(array $input): array
     {
         $month = $this->normalizeMonth((string) ($input['month'] ?? ''));
@@ -590,6 +706,9 @@ class CentralizatorFacturareService
                 'vehicle_label' => trim((string) ($row['nr_inmatriculare'] ?? '')) !== '' ? (string) $row['nr_inmatriculare'] : 'Vehicul nealocat',
                 'route_label' => $this->routeGarages($row) !== ['', ''] ? $this->billingRouteLabel($row) : $this->routeLabel($row),
                 'route_short' => $routeShort,
+                /* Doar pentru gruparea raportului centralizat pe vehicule; nu intra in calcule. */
+                'beneficiary_label' => trim((string) ($row['beneficiar_nume'] ?? '')),
+                'loading_label' => trim((string) ($row['loc_incarcare_nume'] ?? '')),
                 'components' => $breakdown['components'] ?? [],
                 'recomputed_total' => $breakdown !== null ? (float) $breakdown['total'] : null,
                 'differs' => (bool) ($breakdown['differs'] ?? false),

@@ -1178,6 +1178,26 @@ a.cf-calc-warn.is-link:focus-visible {
 .cf-export-list i { color: #079b63; font-size: 16px; margin-top: 1px; }
 .cf-export-list strong { display: block; font-size: 13px; font-weight: 800; }
 .cf-export-list small { display: block; color: #51617f; font-size: 12px; font-weight: 600; }
+.cf-export-range {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin: 0 4px 4px 36px;
+    color: #51617f;
+    font-size: 12px;
+    font-weight: 700;
+}
+.cf-export-range select {
+    height: 30px;
+    padding: 0 8px;
+    border: 1px solid #cdd9ea;
+    border-radius: 6px;
+    background: #fff;
+    color: #071a44;
+    font-size: 12px;
+    font-weight: 800;
+}
 /* ---- Grupare pe capacitate: randul de grup si randurile de vehicul ---- */
 .cf-cap-body[hidden] { display: none; }
 .cf-cap-group {

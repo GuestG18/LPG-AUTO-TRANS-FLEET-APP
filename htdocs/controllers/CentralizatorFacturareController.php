@@ -163,6 +163,16 @@ class CentralizatorFacturareController
             return;
         }
 
+        /* Raportul centralizat pe vehicule: un rand pe vehicul si ruta, pe sectiuni lunare. */
+        if (($_GET['view'] ?? '') === 'vehicule' && class_exists(ZipArchive::class)) {
+            require_once __DIR__ . '/../services/CentralizatorFacturareVehicleExport.php';
+            $vehicleReport = $this->centralizerService->getVehicleSummaryExportData($this->collectReportFilters() + ['month_from' => trim((string) ($_GET['month_from'] ?? ''))]);
+            $vehicleMonths = (array) ($vehicleReport['months'] ?? []);
+            $vehicleMonth = preg_replace('/[^0-9\-_]/', '', count($vehicleMonths) > 1 ? reset($vehicleMonths) . '_' . end($vehicleMonths) : (string) ($vehicleReport['filters']['month'] ?? date('Y-m')));
+            $this->streamXlsx(new CentralizatorFacturareVehicleExport($vehicleReport), 'centralizator_facturare_vehicule_' . $vehicleMonth . '_' . date('Ymd_His') . '.xlsx');
+            return;
+        }
+
         $report = $this->centralizerService->getExportData($this->collectReportFilters());
         $filters = $report['filters'] ?? [];
         $fileMonth = preg_replace('/[^0-9\-]/', '', (string) ($filters['month'] ?? date('Y-m')));

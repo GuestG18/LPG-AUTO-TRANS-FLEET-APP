@@ -73,7 +73,7 @@ class SimpleXlsxWriter
 
     /*
      * Un stil complet, pentru rapoarte cu aspect propriu. Chei: color, fill, border (RGB fara #),
-     * bold, size, format (cod de format numeric), align, wrap. Numele intors se foloseste ca 's'.
+     * bold, size, font (implicit Calibri), format (cod de format numeric), align, wrap. Numele intors se foloseste ca 's'.
      */
     public function defineStyle(array $definition): string
     {
@@ -137,6 +137,12 @@ class SimpleXlsxWriter
     public function setColumnWidths(int $sheet, array $widths): void
     {
         $this->sheets[$sheet]['widths'] = $widths;
+    }
+
+    /* Implicit foile ascund liniile de grila; un raport care le vrea vizibile le reactiveaza. */
+    public function showGridLines(int $sheet): void
+    {
+        $this->sheets[$sheet]['gridlines'] = true;
     }
 
     public function freezeRows(int $sheet, int $rows): void
@@ -303,7 +309,7 @@ class SimpleXlsxWriter
             /* Butonul +/- pe randul-parinte (deasupra detaliilor), ca in pagina. */
             . '<sheetPr><outlinePr summaryBelow="0" summaryRight="0"/></sheetPr>';
 
-        $xml .= '<sheetViews><sheetView workbookViewId="0" showGridLines="0">';
+        $xml .= '<sheetViews><sheetView workbookViewId="0"' . (empty($sheet['gridlines']) ? ' showGridLines="0"' : '') . '>';
         if ($sheet['freeze'] !== null) {
             $rowsFrozen = (int) substr($sheet['freeze'], 1) - 1;
             $xml .= '<pane ySplit="' . $rowsFrozen . '" topLeftCell="' . $sheet['freeze'] . '" activePane="bottomLeft" state="frozen"/>';
@@ -553,7 +559,7 @@ class SimpleXlsxWriter
         /* Stilurile complete (defineStyle): fonturile, fundalurile si chenarele lor se adauga la liste. */
         foreach ($this->definedStyles as $definition) {
             $fonts[] = '<font>' . (!empty($definition['bold']) ? '<b/>' : '') . '<sz val="' . (float) ($definition['size'] ?? 11) . '"/>'
-                . '<color rgb="FF' . self::xml((string) ($definition['color'] ?? '1F2937')) . '"/><name val="Calibri"/><family val="2"/></font>';
+                . '<color rgb="FF' . self::xml((string) ($definition['color'] ?? '1F2937')) . '"/><name val="' . self::xml((string) ($definition['font'] ?? 'Calibri')) . '"/><family val="2"/></font>';
             $fontId = count($fonts) - 1;
             $fillId = 0;
             if (!empty($definition['fill'])) {

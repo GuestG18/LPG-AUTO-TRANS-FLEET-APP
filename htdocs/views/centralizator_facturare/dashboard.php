@@ -852,6 +852,7 @@ $gridMode = $mode !== '' ? 'mode-' . str_replace('_', '-', $mode) : 'mode-all';
 /* Pagina arata mereu raportul detaliat; scurt / detaliat se alege doar la export. */
 $exportUrl = $queryFor(['action' => 'export', 'p' => null, 'view' => null]);
 $exportShortUrl = $queryFor(['action' => 'export', 'p' => null, 'view' => 'scurt']);
+$exportVehicleUrl = $queryFor(['action' => 'export', 'p' => null, 'view' => 'vehicule']);
 $resetUrl = build_query_url(['page' => 'centralizator_facturare']);
 ?>
 
@@ -873,6 +874,19 @@ $resetUrl = build_query_url(['page' => 'centralizator_facturare']);
                     <div class="cf-export-list">
                         <a href="<?= e($exportShortUrl) ?>"><i class="bi bi-list-ul" aria-hidden="true"></i><span><strong>Raport scurt</strong><small>Tabel filtrabil pe vehicule și rute, cu refacturări și TVA</small></span></a>
                         <a href="<?= e($exportUrl) ?>"><i class="bi bi-list-nested" aria-hidden="true"></i><span><strong>Raport detaliat</strong><small>Rute, vehicule, curse și refacturări</small></span></a>
+                        <a href="<?= e($exportVehicleUrl) ?>" data-export-vehicle><i class="bi bi-truck" aria-hidden="true"></i><span><strong>Raport centralizat pe vehicule</strong><small>Un rând pe vehicul și rută, cu total pe lună</small></span></a>
+                        <?php /* Raportul pe vehicule poate cuprinde mai multe luni: cate o sectiune pe luna, pana la luna aleasa. */ ?>
+                        <label class="cf-export-range">
+                            <span>Secțiuni lunare de la</span>
+                            <select data-export-vehicle-from>
+                                <?php foreach ((array) ($lookups['months'] ?? []) as $month): ?>
+                                    <?php $monthValue = (string) ($month['value'] ?? ''); ?>
+                                    <?php if ($monthValue !== '' && $monthValue <= $filterValue('month')): ?>
+                                        <option value="<?= e($monthValue) ?>" <?= $monthValue === $filterValue('month') ? 'selected' : '' ?>><?= e((string) ($month['label'] ?? $monthValue)) ?></option>
+                                    <?php endif; ?>
+                                <?php endforeach; ?>
+                            </select>
+                        </label>
                     </div>
                 </details>
             </div>
@@ -1870,6 +1884,16 @@ $resetUrl = build_query_url(['page' => 'centralizator_facturare']);
     /* Meniul Export Excel (scurt / detaliat) se inchide la click in afara lui sau cu Escape. */
     var exportMenu = document.querySelector('[data-export-menu]');
     if (exportMenu) {
+        /* Luna de inceput a raportului pe vehicule intra in link ca month_from. */
+        var vehicleLink = exportMenu.querySelector('[data-export-vehicle]');
+        var vehicleFrom = exportMenu.querySelector('[data-export-vehicle-from]');
+        if (vehicleLink && vehicleFrom) {
+            vehicleFrom.addEventListener('change', function () {
+                var url = new URL(vehicleLink.href, window.location.href);
+                url.searchParams.set('month_from', vehicleFrom.value);
+                vehicleLink.href = url.toString();
+            });
+        }
         document.addEventListener('click', function (event) {
             if (exportMenu.open && (!exportMenu.contains(event.target) || event.target.closest('.cf-export-list a'))) {
                 exportMenu.open = false;
