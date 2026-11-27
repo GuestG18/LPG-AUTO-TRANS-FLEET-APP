@@ -53,8 +53,12 @@ $queryFor = static function (array $overrides = []) use ($filters, $listFilters)
         'month' => (string) ($filters['month'] ?? ''),
     ] + $listFilters + [
         'vehicle_sort' => (string) ($filters['vehicle_sort'] ?? 'capacity_asc'),
+        'stare_cursa' => (string) ($filters['stare_cursa'] ?? ''),
         'per_page' => (string) ($filters['per_page'] ?? '10'),
     ];
+    if ($base['stare_cursa'] === '') {
+        unset($base['stare_cursa']);
+    }
     foreach ($overrides as $key => $value) {
         if ($value === null) {
             unset($base[$key]);
@@ -904,6 +908,13 @@ $resetUrl = build_query_url(['page' => 'centralizator_facturare']);
                     <?php endforeach; ?>
                 </select>
             </div>
+            <div class="cf-field">
+                <label for="cf_trip_state">Stare curse</label>
+                <select id="cf_trip_state" name="stare_cursa">
+                    <option value="" <?= $filterValue('stare_cursa') === '' ? 'selected' : '' ?>>Toate cursele</option>
+                    <option value="inchise" <?= $filterValue('stare_cursa') === 'inchise' ? 'selected' : '' ?>>Doar închise</option>
+                </select>
+            </div>
             <?= $renderMultiSelect('cf_beneficiar', 'Beneficiar / Client', 'beneficiar_id', $optionsOf((array) ($lookups['beneficiaries'] ?? []), 'id', 'nume'), $listFilters['beneficiar_id'], 'Toți beneficiarii', true) ?>
             <?php
             $activityOptions = (array) ($lookups['activity_types'] ?? []);
@@ -1530,6 +1541,9 @@ $resetUrl = build_query_url(['page' => 'centralizator_facturare']);
                         <?php endforeach; ?>
                     <?php endforeach; ?>
                     <input type="hidden" name="vehicle_sort" value="<?= e($filterValue('vehicle_sort')) ?>">
+                    <?php if ($filterValue('stare_cursa') !== ''): ?>
+                        <input type="hidden" name="stare_cursa" value="<?= e($filterValue('stare_cursa')) ?>">
+                    <?php endif; ?>
                     <select class="cf-page-size" name="per_page" onchange="this.form.submit()" aria-label="Rezultate pe pagină">
                         <?php foreach ((array) ($lookups['per_page_options'] ?? [10, 25, 50]) as $option): ?>
                             <option value="<?= e((string) $option) ?>" <?= (int) ($refPagination['per_page'] ?? 10) === (int) $option ? 'selected' : '' ?>><?= e((string) $option) ?></option>

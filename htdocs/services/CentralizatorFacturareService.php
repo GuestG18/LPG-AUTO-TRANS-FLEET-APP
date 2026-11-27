@@ -393,6 +393,8 @@ class CentralizatorFacturareService
             'vehicle_ids' => $this->normalizeIdList($input['vehicle_id'] ?? []),
             'capacity_category_ids' => $this->normalizeIdList($input['categorie_capacitate_id'] ?? []),
             'vehicle_sort' => $vehicleSort,
+            /* Stare curse: 'inchise' = doar cursele cu ora de sfarsit completata; altfel toate cursele lunii. */
+            'stare_cursa' => trim(strtolower((string) ($input['stare_cursa'] ?? ''))) === 'inchise' ? 'inchise' : '',
             'page_no' => max(1, $this->normalizePositiveInt($input['page_no'] ?? ($input['p'] ?? 1))),
             'per_page' => $perPage,
         ];
@@ -1744,6 +1746,11 @@ class CentralizatorFacturareService
             $where[] = $column . ' IN (' . implode(', ', $placeholders) . ')';
         };
 
+        /* Doar cursele inchise (ora de sfarsit completata), ca in Dispecer curse. */
+        if (($filters['stare_cursa'] ?? '') === 'inchise') {
+            $where[] = 'c.ora_sfarsit IS NOT NULL';
+        }
+
         $inList('c.beneficiar_id', (array) ($filters['beneficiar_ids'] ?? []), 'beneficiar');
         $inList('c.loc_incarcare_id', (array) ($filters['loc_incarcare_ids'] ?? []), 'loc_filter');
         $inList('c.zona_distributie_id', (array) ($filters['zona_distributie_ids'] ?? []), 'zone_filter');
@@ -1824,6 +1831,9 @@ class CentralizatorFacturareService
         )));
         if ($activityLabels !== []) {
             $active[] = ['label' => 'Tip activitate', 'value' => implode(', ', $activityLabels)];
+        }
+        if (($filters['stare_cursa'] ?? '') === 'inchise') {
+            $active[] = ['label' => 'Stare curse', 'value' => 'Doar închise'];
         }
         foreach ([
             ['Tip marfă', 'tip_marfa_list', 'cargo', 'value', 'label'],
