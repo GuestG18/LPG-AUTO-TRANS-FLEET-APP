@@ -203,7 +203,9 @@ $vdRenderFieldList = static function (array $fields) use ($vdDetailFields, $vdFi
 };
 
 // ---- KPI ---------------------------------------------------------------------
-$vdKmBord = $record['km_bord'] ?? null;
+// Kilometrajul din Centru Kilometraj (VehicleMileageService, doar citire). vehicule.km_bord ramane
+// contorul intern (Dispecer): nu se mai afiseaza in KPI, dar ramane in categoria „Mentenanță”.
+$vdMileage = isset($vehicleMileage) && is_array($vehicleMileage) ? $vehicleMileage : null;
 $vdFormula = trim((string) ($record['formula_axelor'] ?? ''));
 $vdCapTransport = $record['capacitate_transport'] ?? null;
 $vdCapRezervor = $record['capacitate_rezervor'] ?? null;
@@ -279,10 +281,42 @@ $vdTechUrl = build_query_url(['page' => 'stare_tehnica', 'vehicle_id' => $vdId])
             <?php endif; ?>
 
             <div class="vd-kpis">
+                <?php if (is_array($vdMileage)): ?>
+                <?php
+                    $vdKmFirst = $vdMileage['sources']['sas'] ?? null;
+                    $vdKmFirstValue = is_array($vdKmFirst) && $vdKmFirst['value'] !== null ? number_format((float) $vdKmFirst['value'], 0, ',', '.') : '—';
+                    $vdKmUrl = url('index.php?page=vehicule&action=mileage&id=' . (int) ($record['id'] ?? 0));
+                ?>
+                <div class="vd-kpi vd-km" data-vd-km data-url="<?= e($vdKmUrl) ?>" tabindex="0" role="group"
+                     aria-roledescription="carusel" aria-label="Kilometraj vehicul: săgețile stânga / dreapta schimbă sursa">
+                    <button type="button" class="vd-km-arrow is-prev" data-vd-km-step="-1" aria-label="Sursa anterioară"><i class="bi bi-chevron-left" aria-hidden="true"></i></button>
+                    <i class="bi bi-speedometer2 vd-kpi-icon" aria-hidden="true"></i>
+                    <div class="vd-km-body">
+                        <div class="vd-km-stage" data-vd-km-stage aria-live="polite">
+                            <div class="vd-km-slide"><strong><?= e($vdKmFirstValue) ?></strong><span class="vd-km-label"><?= e((string) ($vdKmFirst['label'] ?? 'Km desfășurare')) ?></span></div>
+                        </div>
+                        <button type="button" class="vd-km-meta" data-vd-km-info aria-haspopup="dialog" aria-expanded="false" title="Detalii despre calcul">
+                            <i class="vd-km-dot" data-vd-km-dot aria-hidden="true"></i><span data-vd-km-meta><?= e((string) ($vdKmFirst['provider_label'] ?? 'SAS GPS')) ?></span>
+                        </button>
+                    </div>
+                    <button type="button" class="vd-km-arrow is-next" data-vd-km-step="1" aria-label="Sursa următoare"><i class="bi bi-chevron-right" aria-hidden="true"></i></button>
+                    <button type="button" class="vd-km-period" data-vd-km-period aria-haspopup="dialog" aria-expanded="false" aria-label="Perioadă: Până în prezent" title="Perioadă: Până în prezent">
+                        <i class="bi bi-calendar3" aria-hidden="true"></i>
+                    </button>
+                    <div class="vd-km-dots" role="tablist" aria-label="Sursa kilometrajului">
+                        <?php foreach (['sas' => 'SAS GPS', 'can' => 'SAS CAN', 'cardoil' => 'CardOil'] as $vdKmKey => $vdKmName): ?>
+                            <button type="button" role="tab" class="vd-km-dot-btn" data-vd-km-go="<?= e($vdKmKey) ?>" aria-label="<?= e($vdKmName) ?>" aria-selected="<?= $vdKmKey === 'sas' ? 'true' : 'false' ?>"></button>
+                        <?php endforeach; ?>
+                    </div>
+                    <div class="vd-km-pop" data-vd-km-pop role="dialog" aria-modal="false" hidden></div>
+                    <script type="application/json" data-vd-km-data><?= json_encode($vdMileage, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP) ?></script>
+                </div>
+                <?php else: ?>
                 <div class="vd-kpi">
                     <i class="bi bi-speedometer2 vd-kpi-icon" aria-hidden="true"></i>
-                    <div><strong><?= ($vdKmBord !== null && $vdKmBord !== '') ? e(number_format((float) $vdKmBord, 0, ',', '.')) : '-' ?></strong><span>km bord</span></div>
+                    <div><strong>—</strong><span>Kilometraj indisponibil</span></div>
                 </div>
+                <?php endif; ?>
                 <div class="vd-kpi">
                     <svg class="vd-kpi-icon vd-axle-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="6" width="3.2" height="12" rx="1.2"/><rect x="18.8" y="6" width="3.2" height="12" rx="1.2"/><path d="M5.2 12h13.6M12 12V7.5"/><circle cx="12" cy="6" r="1.6"/></svg>
                     <div><strong><?= e($vdFormula !== '' ? $vdFormula : '-') ?></strong><span>Formula axelor</span></div>
@@ -601,3 +635,7 @@ $vdTechUrl = build_query_url(['page' => 'stare_tehnica', 'vehicle_id' => $vdId])
 </div>
 
 <script src="<?= e(url('assets/js/vehicle-detail.js?v=' . $vdJsVersion)) ?>" defer></script>
+<?php if ($vdMileage !== null): ?>
+<script src="<?= e(url('assets/js/datetime-picker-field.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/datetime-picker-field.js'))) ?>" defer></script>
+<script src="<?= e(url('assets/js/vehicle-mileage.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/vehicle-mileage.js'))) ?>" defer></script>
+<?php endif; ?>

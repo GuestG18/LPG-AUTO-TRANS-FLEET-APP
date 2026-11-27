@@ -1152,6 +1152,56 @@ mark.des-mark {
     overflow-y: auto;
 }
 
+/* ------------------------------------------------- Categorii echipamente -- */
+
+.dcc-form {
+    background: var(--des-surface);
+    border: 1px solid var(--des-border-soft);
+    border-radius: 12px;
+    margin-bottom: 1rem;
+    padding: .9rem 1rem;
+}
+
+.dcc-form-actions {
+    display: flex;
+    gap: .5rem;
+    justify-content: flex-end;
+    margin-top: .75rem;
+}
+
+.dcc-list {
+    border: 1px solid var(--des-border-soft);
+    border-radius: 12px;
+}
+
+.dcc-row-actions {
+    display: flex;
+    gap: .35rem;
+    justify-content: flex-end;
+}
+
+.dcc-hint {
+    margin-top: 1rem;
+}
+
+/* Scurtătura de sub câmpul Categorie din formularul articolului. */
+.dcc-inline-link {
+    align-items: center;
+    background: none;
+    border: 0;
+    color: var(--des-blue);
+    display: inline-flex;
+    font-size: .75rem;
+    font-weight: 600;
+    gap: .3rem;
+    margin-top: .25rem;
+    padding: 0;
+}
+
+.dcc-inline-link:hover {
+    text-decoration: underline;
+}
+
 /* --------------------------------------------------------------- Modale -- */
 
 .des-modal .modal-content {

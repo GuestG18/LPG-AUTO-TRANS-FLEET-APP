@@ -16,6 +16,9 @@ declare(strict_types=1);
  */
 class DriverEquipmentModel extends BaseModel
 {
+    /** Zonele fixate pe categorii, încărcate o singură dată per cerere. */
+    private ?array $categoryZones = null;
+
     /** Statusuri considerate alocare activă (articolul este la șofer). */
     public const ACTIVE_STATUSES = ['in_uz', 'activ', 'de_inlocuit', 'necesita_inlocuire'];
 
@@ -1088,17 +1091,179 @@ class DriverEquipmentModel extends BaseModel
      *
      * @return array<int, string>
      */
-    public function getCategories(): array
+    public function getCategories(bool $onlyActive = false): array
     {
+        $defined = $this->db->query("
+            SELECT nume FROM echipamente_categorii
+            " . ($onlyActive ? 'WHERE activ = 1' : '') . "
+        ")->fetchAll(PDO::FETCH_COLUMN);
+
+        // Categoriile rămase doar pe articole (sau dezactivate, dar încă
+        // folosite) trebuie să apară în filtre, altfel articolele devin
+        // invizibile pentru utilizator.
         $used = $this->db->query("
             SELECT DISTINCT categorie FROM echipamente_catalog
             WHERE TRIM(COALESCE(categorie, '')) <> ''
         ")->fetchAll(PDO::FETCH_COLUMN);
 
-        $categories = array_unique(array_merge(self::DEFAULT_CATEGORIES, array_map('strval', $used)));
+        $categories = $onlyActive
+            ? array_map('strval', $defined)
+            : array_unique(array_merge(array_map('strval', $defined), array_map('strval', $used)));
+
         usort($categories, static fn(string $a, string $b): int => strcoll($a, $b));
 
         return array_values($categories);
+    }
+
+    // ------------------------------------------------------------------
+    // Categorii administrabile
+    // ------------------------------------------------------------------
+
+    /**
+     * Categoriile cu tot ce trebuie ecranului de administrare: zona de pe
+     * siluetă (sau cea dedusă) și câte articole le folosesc.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function getCategoryRecords(): array
+    {
+        $rows = $this->db->query("
+            SELECT c.*, (
+                SELECT COUNT(*) FROM echipamente_catalog ec WHERE ec.categorie = c.nume
+            ) AS articole
+            FROM echipamente_categorii c
+            ORDER BY c.nume ASC
+        ")->fetchAll();
+
+        $records = [];
+        foreach ($rows as $row) {
+            $visual = $this->categoryVisual((string) $row['nume']);
+            $records[] = $row + [
+                'articole' => (int) $row['articole'],
+                'zona_efectiva' => $visual['anchor'],
+                'zona_automata' => $row['zona'] === null,
+                'icon' => $visual['icon'],
+            ];
+        }
+
+        // Categoriile folosite pe articole, dar neînregistrate încă (import
+        // vechi): apar ca rânduri „nesalvate”, ca să poată fi adoptate.
+        $known = array_map(static fn(array $r): string => mb_strtolower((string) $r['nume']), $records);
+        foreach ($this->db->query("
+            SELECT categorie AS nume, COUNT(*) AS articole
+            FROM echipamente_catalog
+            WHERE TRIM(COALESCE(categorie, '')) <> ''
+            GROUP BY categorie
+        ")->fetchAll() as $row) {
+            if (in_array(mb_strtolower((string) $row['nume']), $known, true)) {
+                continue;
+            }
+            $visual = $this->categoryVisual((string) $row['nume']);
+            $records[] = [
+                'id' => 0,
+                'nume' => (string) $row['nume'],
+                'zona' => null,
+                'descriere' => null,
+                'activ' => 1,
+                'articole' => (int) $row['articole'],
+                'zona_efectiva' => $visual['anchor'],
+                'zona_automata' => true,
+                'icon' => $visual['icon'],
+            ];
+        }
+
+        usort($records, static fn(array $a, array $b): int => strcoll((string) $a['nume'], (string) $b['nume']));
+
+        return $records;
+    }
+
+    /**
+     * Salvează o categorie. Redenumirea mută și articolele care o folosesc,
+     * pentru că `echipamente_catalog.categorie` păstrează numele, nu un id.
+     *
+     * @return array{id: int, nume: string, redenumite: int}
+     */
+    public function saveCategory(array $data): array
+    {
+        $id = (int) ($data['id'] ?? 0);
+        $name = trim((string) ($data['nume'] ?? ''));
+        if ($name === '') {
+            throw new InvalidArgumentException('Denumirea categoriei este obligatorie.');
+        }
+        $name = mb_substr($name, 0, 60);
+
+        $zone = (string) ($data['zona'] ?? '');
+        $zone = array_key_exists($zone, self::ANCHOR_LABELS) ? $zone : null;
+        $fields = [
+            'nume' => $name,
+            'zona' => $zone,
+            'descriere' => trim((string) ($data['descriere'] ?? '')) !== ''
+                ? mb_substr(trim((string) $data['descriere']), 0, 255)
+                : null,
+            'activ' => !empty($data['activ']) ? 1 : 0,
+        ];
+
+        $duplicate = $this->db->prepare('SELECT id FROM echipamente_categorii WHERE nume = :nume AND id <> :id');
+        $duplicate->execute(['nume' => $name, 'id' => $id]);
+        if ((int) $duplicate->fetchColumn() > 0) {
+            throw new InvalidArgumentException('Există deja o categorie cu numele „' . $name . '”.');
+        }
+
+        $renamed = 0;
+        if ($id > 0) {
+            $previous = $this->db->prepare('SELECT nume FROM echipamente_categorii WHERE id = :id');
+            $previous->execute(['id' => $id]);
+            $oldName = (string) $previous->fetchColumn();
+
+            $statement = $this->db->prepare("
+                UPDATE echipamente_categorii
+                SET nume = :nume, zona = :zona, descriere = :descriere, activ = :activ, updated_at = NOW()
+                WHERE id = :id
+            ");
+            $statement->execute($fields + ['id' => $id]);
+
+            if ($oldName !== '' && $oldName !== $name) {
+                $move = $this->db->prepare('UPDATE echipamente_catalog SET categorie = :nou, updated_at = NOW() WHERE categorie = :vechi');
+                $move->execute(['nou' => $name, 'vechi' => $oldName]);
+                $renamed = $move->rowCount();
+            }
+        } else {
+            $statement = $this->db->prepare("
+                INSERT INTO echipamente_categorii (nume, zona, descriere, activ, created_at, updated_at)
+                VALUES (:nume, :zona, :descriere, :activ, NOW(), NOW())
+            ");
+            $statement->execute($fields);
+            $id = (int) $this->db->lastInsertId();
+        }
+
+        $this->categoryZones = null;
+
+        return ['id' => $id, 'nume' => $name, 'redenumite' => $renamed];
+    }
+
+    /** Categoria folosită de articole nu se șterge: ar lăsa articolele orfane. */
+    public function deleteCategory(int $id): string
+    {
+        $statement = $this->db->prepare('SELECT nume FROM echipamente_categorii WHERE id = :id');
+        $statement->execute(['id' => $id]);
+        $name = (string) $statement->fetchColumn();
+        if ($name === '') {
+            throw new RuntimeException('Categoria nu mai există.');
+        }
+
+        $used = $this->db->prepare('SELECT COUNT(*) FROM echipamente_catalog WHERE categorie = :nume');
+        $used->execute(['nume' => $name]);
+        $count = (int) $used->fetchColumn();
+        if ($count > 0) {
+            throw new InvalidArgumentException(
+                'Categoria „' . $name . '” este folosită de ' . $count . ' articole. Mută-le întâi în altă categorie.'
+            );
+        }
+
+        $this->db->prepare('DELETE FROM echipamente_categorii WHERE id = :id')->execute(['id' => $id]);
+        $this->categoryZones = null;
+
+        return $name;
     }
 
     /**
@@ -1965,11 +2130,8 @@ class DriverEquipmentModel extends BaseModel
 
         $fields = [
             'denumire' => trim((string) ($data['denumire'] ?? '')),
-            // Categoria este text liber: o valoare nouă devine automat opțiune
-            // în filtre și în sugestiile formularului.
-            'categorie' => trim((string) ($data['categorie'] ?? '')) !== ''
-                ? mb_substr(trim((string) $data['categorie']), 0, 60)
-                : 'PPE',
+            // Categoria se alege din lista administrată în „Categorii”.
+            'categorie' => mb_substr(trim((string) ($data['categorie'] ?? '')), 0, 60),
             'grupa' => array_key_exists((string) ($data['grupa'] ?? ''), self::GROUPS)
                 ? (string) $data['grupa']
                 : 'fizic',
@@ -1999,6 +2161,10 @@ class DriverEquipmentModel extends BaseModel
 
         if ($fields['denumire'] === '') {
             throw new InvalidArgumentException('Denumirea articolului este obligatorie.');
+        }
+
+        if ($fields['categorie'] === '') {
+            throw new InvalidArgumentException('Alege o categorie pentru articol (lista se întreține din „Categorii”).');
         }
 
         // Observațiile se rescriu doar dacă formularul le trimite: un formular fără
@@ -2644,6 +2810,30 @@ class DriverEquipmentModel extends BaseModel
         ],
     ];
 
+    /** Zonele de pe siluetă, pentru alegerea manuală la o categorie nouă. */
+    public const ANCHOR_LABELS = [
+        'cap' => 'Cap (cască, ochelari)',
+        'trunchi' => 'Piept (îmbrăcăminte)',
+        'maini' => 'Mâini (mănuși, scule)',
+        'picioare' => 'Picioare (pantaloni)',
+        'talpi' => 'Tălpi (încălțăminte)',
+        'dispozitiv' => 'Dispozitiv (telefon, stație, laptop)',
+        'legitimatie' => 'Ecuson (carduri, acces)',
+        'alte' => 'Mijloc (alte active)',
+    ];
+
+    /** Iconița implicită a unei zone, când categoria își alege zona manual. */
+    private const ANCHOR_ICONS = [
+        'cap' => 'bi-shield-check',
+        'trunchi' => 'bi-person-vcard',
+        'maini' => 'bi-tools',
+        'picioare' => 'bi-person-standing',
+        'talpi' => 'bi-person-walking',
+        'dispozitiv' => 'bi-phone',
+        'legitimatie' => 'bi-person-badge',
+        'alte' => 'bi-box-seam',
+    ];
+
     /**
      * Zona + iconița unei categorii. Categoriile sunt text liber, deci potrivirea
      * se face pe cuvinte-cheie; ce nu se recunoaște merge la „alte”.
@@ -2811,14 +3001,43 @@ class DriverEquipmentModel extends BaseModel
         $plain = mb_strtolower($name);
         $plain = strtr($plain, ['ă' => 'a', 'â' => 'a', 'î' => 'i', 'ș' => 's', 'ş' => 's', 'ț' => 't', 'ţ' => 't']);
         $slug = trim((string) preg_replace('/[^a-z0-9]+/', '-', $plain), '-');
+        $slug = $slug !== '' ? $slug : 'categorie';
+
+        // Zona aleasă manual pe categorie are prioritate; fără ea rămâne
+        // potrivirea pe cuvinte-cheie, ca până acum.
+        $fixed = $this->categoryZones()[mb_strtolower(trim($name))] ?? null;
+        if ($fixed !== null) {
+            return ['slug' => $slug, 'anchor' => $fixed, 'icon' => self::ANCHOR_ICONS[$fixed] ?? 'bi-box-seam'];
+        }
 
         foreach (self::CATEGORY_VISUALS as [$pattern, $anchor, $icon]) {
             if (preg_match($pattern, $plain)) {
-                return ['slug' => $slug !== '' ? $slug : 'categorie', 'anchor' => $anchor, 'icon' => $icon];
+                return ['slug' => $slug, 'anchor' => $anchor, 'icon' => $icon];
             }
         }
 
-        return ['slug' => $slug !== '' ? $slug : 'categorie', 'anchor' => 'alte', 'icon' => 'bi-box-seam'];
+        return ['slug' => $slug, 'anchor' => 'alte', 'icon' => 'bi-box-seam'];
+    }
+
+    /**
+     * Zonele fixate manual, indexate pe numele categoriei (lowercase).
+     *
+     * @return array<string, string>
+     */
+    private function categoryZones(): array
+    {
+        if ($this->categoryZones !== null) {
+            return $this->categoryZones;
+        }
+
+        $this->categoryZones = [];
+        foreach ($this->db->query("
+            SELECT nume, zona FROM echipamente_categorii WHERE zona IS NOT NULL
+        ")->fetchAll() as $row) {
+            $this->categoryZones[mb_strtolower(trim((string) $row['nume']))] = (string) $row['zona'];
+        }
+
+        return $this->categoryZones;
     }
 
     // ------------------------------------------------------------------

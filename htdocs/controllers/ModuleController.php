@@ -150,6 +150,9 @@ class ModuleController
             case 'component_km_at':
                 $this->componentKmAtAction($moduleKey);
                 return;
+            case 'mileage':
+                $this->vehicleMileageAction($moduleKey, $module);
+                return;
             case 'component_mount':
             case 'component_unmount':
             case 'component_inspect':
@@ -3983,6 +3986,37 @@ class ModuleController
         $this->tireMountJson($result);
     }
 
+    /**
+     * JSON: kilometrajul vehiculului pe o perioada (cele trei surse odata) pentru caruselul
+     * din Detalii vehicul. Doar citire. Accesul: acelasi ca fisa (ruta vehicule + view, iar
+     * vehiculul trebuie sa treaca de conditiile listei, ca in showAction).
+     */
+    private function vehicleMileageAction(string $moduleKey, array $module): void
+    {
+        if ($moduleKey !== 'vehicule') {
+            $this->tireMountJson(['ok' => false, 'message' => 'Modul invalid.'], 404);
+        }
+        $id = (int) ($_GET['id'] ?? 0);
+        if ($id <= 0 || $this->moduleModel->findById($module, $id) === null) {
+            $this->tireMountJson(['ok' => false, 'message' => 'Vehiculul nu a fost găsit.'], 404);
+        }
+        session_write_close();
+        try {
+            $result = (new VehicleMileageService($this->db))->forVehicle(
+                $id,
+                (string) ($_GET['period'] ?? 'all'),
+                isset($_GET['from']) ? (string) $_GET['from'] : null,
+                isset($_GET['to']) ? (string) $_GET['to'] : null
+            );
+        } catch (InvalidArgumentException $exception) {
+            $this->tireMountJson(['ok' => false, 'message' => $exception->getMessage()], 422);
+        } catch (Throwable $exception) {
+            error_log('[vehicle_mileage] ' . $exception->getMessage());
+            $this->tireMountJson(['ok' => false, 'message' => 'Kilometrajul nu a putut fi calculat.'], 500);
+        }
+        $this->tireMountJson($result);
+    }
+
     /** JSON: anvelopele din stoc compatibile cu o pozitie libera (pentru montajul din schema). */
     private function tirePositionCandidatesAction(string $moduleKey): void
     {
@@ -5437,6 +5471,14 @@ class ModuleController
 
             $assemblyStatus = $this->vehicleCouplingModel->getActiveAssemblyStatusForVehicle($id);
             $viewData['record']['ansamblu_status'] = $assemblyStatus['status'] ?? null;
+
+            // Caruselul de kilometraj (doar citire, fara API / DDL): toate cele trei surse dintr-o data.
+            try {
+                $viewData['vehicleMileage'] = (new VehicleMileageService($this->db))->forVehicle($id);
+            } catch (Throwable $exception) {
+                error_log('[vehicle_mileage] ' . $exception->getMessage());
+                $viewData['vehicleMileage'] = null;
+            }
         }
 
         if ($moduleKey === 'soferi') {

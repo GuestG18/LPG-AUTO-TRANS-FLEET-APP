@@ -28,6 +28,8 @@ class DriverEquipmentController
             'tesa' => $this->indexAction(DriverEquipmentModel::OWNER_STAFF),
             'catalog' => $this->catalogAction(),
             'save_catalog' => $this->saveCatalogAction(),
+            'save_categorie' => $this->saveCategoryAction(),
+            'delete_categorie' => $this->deleteCategoryAction(),
             'delete_catalog' => $this->deleteCatalogAction(),
             'stoc' => $this->stockAction(),
             'predare' => $this->assignAction(),
@@ -163,6 +165,8 @@ class DriverEquipmentController
             'catalogBreakdown' => $catalogBreakdown,
             'catalogOverview' => $this->model->buildCatalogOverview($catalogItems, $catalogBreakdown),
             'categories' => $this->model->getCategories(),
+            'categoryOptions' => $this->model->getCategories(true),
+            'categoryRecords' => $this->model->getCategoryRecords(),
             'locations' => $this->model->getLocations(),
         ]);
     }
@@ -377,6 +381,30 @@ class DriverEquipmentController
             }
 
             return 'Articolul din catalog a fost salvat.';
+        }, ['action' => 'catalog']);
+    }
+
+    private function saveCategoryAction(): void
+    {
+        $this->guardPost('manage_catalog');
+
+        $this->run(function (): string {
+            $result = $this->model->saveCategory($_POST);
+
+            return $result['redenumite'] > 0
+                ? 'Categoria „' . $result['nume'] . '” a fost salvată; ' . $result['redenumite'] . ' articole au fost mutate pe noul nume.'
+                : 'Categoria „' . $result['nume'] . '” a fost salvată.';
+        }, ['action' => 'catalog']);
+    }
+
+    private function deleteCategoryAction(): void
+    {
+        $this->guardPost('manage_catalog');
+
+        $this->run(function (): string {
+            $name = $this->model->deleteCategory((int) ($_POST['id'] ?? 0));
+
+            return 'Categoria „' . $name . '” a fost ștearsă.';
         }, ['action' => 'catalog']);
     }
 

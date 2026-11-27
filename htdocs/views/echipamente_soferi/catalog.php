@@ -8,6 +8,8 @@
 $catalogItems = is_array($catalogItems ?? null) ? $catalogItems : [];
 $catalogBreakdown = is_array($catalogBreakdown ?? null) ? $catalogBreakdown : [];
 $categories = is_array($categories ?? null) ? $categories : DriverEquipmentModel::DEFAULT_CATEGORIES;
+$categoryOptions = is_array($categoryOptions ?? null) ? $categoryOptions : $categories;
+$categoryRecords = is_array($categoryRecords ?? null) ? $categoryRecords : [];
 $locations = is_array($locations ?? null) ? $locations : [DriverEquipmentModel::DEFAULT_LOCATION];
 $filters = is_array($filters ?? null) ? $filters : [];
 $search = trim((string) ($filters['q'] ?? ''));
@@ -77,6 +79,9 @@ $yes = static fn(mixed $value): string => (int) $value === 1
                 </details>
             </form>
             <?php if ($canCatalog): ?>
+                <button class="des-btn" type="button" data-dcc-open>
+                    <i class="bi bi-tags" aria-hidden="true"></i>Categorii
+                </button>
                 <button class="des-btn des-btn-primary" type="button" data-des-catalog-new>
                     <i class="bi bi-plus-lg" aria-hidden="true"></i>Articol nou
                 </button>
@@ -96,6 +101,8 @@ $yes = static fn(mixed $value): string => (int) $value === 1
     <?php include __DIR__ . '/_gallery_data.php'; ?>
 
     <?php if ($canCatalog): ?>
+    <?php include __DIR__ . '/_category_manager.php'; ?>
+
     <!-- Formular articol -->
     <div class="modal fade des-modal" id="desCatalogModal" tabindex="-1" aria-hidden="true">
         <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
@@ -118,16 +125,20 @@ $yes = static fn(mixed $value): string => (int) $value === 1
                             </div>
                             <div class="col-6 col-md-3">
                                 <label class="form-label" for="desCatalogCategory">Categorie</label>
-                                <?php // Text liber cu sugestii: se poate scrie o categorie nouă. ?>
-                                <input class="form-control" id="desCatalogCategory" type="text" name="categorie"
-                                       list="desCategoryOptions" maxlength="60" required
-                                       placeholder="alege sau scrie una nouă" data-des-field="categorie">
-                                <datalist id="desCategoryOptions">
-                                    <?php foreach ($categories as $category): ?>
-                                        <option value="<?= e((string) $category) ?>"></option>
+                                <?php // Lista vine din „Categorii”; aici doar se alege. ?>
+                                <select class="form-select" id="desCatalogCategory" name="categorie" required data-des-field="categorie">
+                                    <option value="">Alege categoria</option>
+                                    <?php foreach ($categoryOptions as $category): ?>
+                                        <option value="<?= e((string) $category) ?>"><?= e((string) $category) ?></option>
                                     <?php endforeach; ?>
-                                </datalist>
-                                <span class="des-note">Scrie o valoare nouă ca să adaugi o categorie.</span>
+                                    <?php // Articolele pe o categorie dezactivată își păstrează valoarea. ?>
+                                    <?php foreach (array_diff($categories, $categoryOptions) as $category): ?>
+                                        <option value="<?= e((string) $category) ?>" data-dcc-legacy="1"><?= e((string) $category) ?> (inactivă)</option>
+                                    <?php endforeach; ?>
+                                </select>
+                                <button class="dcc-inline-link" type="button" data-dcc-open>
+                                    <i class="bi bi-plus-circle" aria-hidden="true"></i>Gestionează categoriile
+                                </button>
                             </div>
                             <div class="col-6 col-md-3">
                                 <label class="form-label" for="desCatalogGroup">Grupă</label>

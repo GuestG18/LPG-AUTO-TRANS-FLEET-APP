@@ -278,6 +278,186 @@
 }
 .vd-kpi span { font-size: .88rem; font-weight: 500; color: var(--vd-ink-2); }
 
+/* ---- KPI kilometraj: carusel pe 3 surse (vehicle-mileage.js) ---------- */
+.vd-km {
+    position: relative;
+    gap: 6px;
+    padding: 3px 28px 3px 4px;
+    outline: none;
+}
+.vd-km:focus-visible { box-shadow: 0 0 0 3px rgba(23, 105, 240, .25), 0 3px 8px rgba(30, 64, 120, .07); }
+.vd-km-arrow {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 30px;
+    padding: 0;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--vd-blue);
+    font-size: 1rem;
+    cursor: pointer;
+    transition: background-color .15s ease, color .15s ease;
+}
+.vd-km-arrow:hover { background: var(--vd-blue-soft); color: var(--vd-blue-dark); }
+.vd-km-arrow:focus-visible { outline: 2px solid var(--vd-blue); outline-offset: 1px; }
+.vd-km-arrow.is-next { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); }
+.vd-km-body { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+.vd-km-stage { position: relative; overflow: hidden; }
+.vd-km-slide {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    transition: transform .28s var(--vd-ease), opacity .28s var(--vd-ease);
+}
+.vd-km-slide.is-leaving { position: absolute; inset: 0; }
+.vd-km-slide strong, .vd-km-label { line-height: 1.2; }
+.vd-km-slide.from-right, .vd-km-slide.to-right { transform: translateX(38%); opacity: 0; }
+.vd-km-slide.from-left, .vd-km-slide.to-left { transform: translateX(-38%); opacity: 0; }
+.vd-km-slide strong {
+    font-size: 1.12rem;
+    font-weight: 800;
+    color: var(--vd-ink);
+    line-height: 1.2;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-variant-numeric: tabular-nums;
+}
+.vd-km-slide strong.is-empty { color: var(--vd-muted); }
+.vd-km-label {
+    font-size: .88rem;
+    font-weight: 500;
+    color: var(--vd-ink-2);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.vd-km-meta {
+    display: inline-flex;
+    align-items: center;
+    align-self: flex-start;
+    gap: 5px;
+    max-width: calc(100% - 30px);
+    margin-top: 1px;
+    padding: 0 3px;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--vd-muted);
+    font-size: .72rem;
+    font-weight: 600;
+    line-height: 1.3;
+    text-align: left;
+    cursor: pointer;
+}
+.vd-km-meta > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vd-km-prov { font-weight: inherit; }
+.vd-km-meta:hover, .vd-km-meta[aria-expanded="true"] { background: var(--vd-blue-soft); color: var(--vd-ink-2); }
+.vd-km-meta:focus-visible { outline: 2px solid var(--vd-blue); outline-offset: 1px; }
+.vd-km-dot { flex-shrink: 0; width: 7px; height: 7px; border-radius: 50%; background: #94a3b8; }
+.vd-km-dot.is-ok { background: #16a34a; }
+.vd-km-dot.is-warn { background: #f59e0b; }
+.vd-km-period {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 20px;
+    padding: 0;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--vd-muted);
+    font-size: .76rem;
+    cursor: pointer;
+}
+.vd-km-period:hover, .vd-km-period[aria-expanded="true"] { color: var(--vd-blue); background: var(--vd-blue-soft); }
+.vd-km-period.is-set { color: #fff; background: var(--vd-blue); }
+.vd-km-period:focus-visible { outline: 2px solid var(--vd-blue); outline-offset: 1px; }
+.vd-km.is-loading .vd-km-period i { display: inline-block; animation: vd-km-spin .8s linear infinite; }
+.vd-km.is-loading .vd-km-stage { opacity: .45; }
+@keyframes vd-km-spin { to { transform: rotate(360deg); } }
+.vd-km > .vd-km-dots { position: absolute; right: 9px; bottom: 6px; display: flex; flex-direction: row; gap: 4px; }
+.vd-km-dot-btn {
+    width: 7px;
+    height: 7px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: #cdd8e8;
+    cursor: pointer;
+    transition: background-color .2s ease, transform .2s ease;
+}
+.vd-km-dot-btn[aria-selected="true"] { background: var(--vd-blue); transform: scale(1.15); }
+.vd-km-dot-btn:hover { background: #8fb4f2; }
+.vd-km-dot-btn:focus-visible { outline: 2px solid var(--vd-blue); outline-offset: 2px; }
+
+.vd-km-pop {
+    position: absolute;
+    z-index: 40;
+    top: calc(100% + 6px);
+    left: 0;
+    width: min(460px, calc(100vw - 32px));
+    max-height: min(470px, 70vh);
+    overflow: auto;
+    padding: 12px 14px;
+    background: #fff;
+    border: 1px solid var(--vd-line);
+    border-radius: 12px;
+    box-shadow: 0 14px 38px rgba(15, 35, 80, .18);
+    color: var(--vd-ink-2);
+    font-size: .84rem;
+    cursor: auto;
+}
+.vd-km-pop[hidden] { display: none; }
+.vd-km-pop h4 { margin: 0 0 8px; font-size: .92rem; font-weight: 800; color: var(--vd-ink); }
+.vd-km-pop dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 12px; margin: 0; }
+.vd-km-pop dt { font-weight: 600; color: var(--vd-muted); }
+.vd-km-pop dd { margin: 0; overflow-wrap: anywhere; }
+.vd-km-pop ul { margin: 6px 0 0; padding-left: 18px; }
+.vd-km-note { margin-top: 8px; padding: 6px 8px; border-radius: 8px; background: var(--vd-amber-bg); color: var(--vd-amber); font-weight: 600; }
+.vd-km-note.is-info { background: var(--vd-blue-soft); color: #1e3a8a; }
+.vd-km-periods { display: flex; flex-direction: column; gap: 2px; }
+.vd-km-periods button {
+    padding: 6px 8px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--vd-ink-2);
+    font-weight: 600;
+    text-align: left;
+    cursor: pointer;
+}
+.vd-km-periods button:hover { background: var(--vd-blue-soft); }
+.vd-km-periods button[aria-checked="true"] { color: var(--vd-blue); background: var(--vd-blue-soft); }
+/* Interval personalizat: selectorul dată + oră din „Adaugă cursă”; popover-ul lui nu trebuie tăiat. */
+.vd-km-pop.has-custom { overflow: visible; max-height: none; }
+.vd-km-custom { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--vd-line-soft); }
+.vd-km-dt { display: flex; flex-direction: column; gap: 3px; }
+.vd-km-dt-label { font-size: .74rem; font-weight: 700; color: var(--vd-muted); }
+.vd-km-dt .dispatcher-datetime-field { position: relative; }
+.vd-km-custom > button[data-vd-km-apply] { align-self: flex-end; padding: 5px 14px; border: 0; border-radius: 6px; background: var(--vd-blue); color: #fff; font-weight: 700; cursor: pointer; }
+.vd-km-custom > button[data-vd-km-apply]:hover { background: var(--vd-blue-dark); }
+.vd-km-error { margin-top: 6px; color: var(--vd-red); font-weight: 600; }
+.vd-km-table { width: 100%; margin-top: 8px; border-collapse: collapse; font-size: .76rem; }
+.vd-km-table th, .vd-km-table td { padding: 4px 5px; border-bottom: 1px solid var(--vd-line-soft); text-align: left; vertical-align: top; }
+.vd-km-table th { color: var(--vd-muted); font-weight: 700; }
+.vd-km-table td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.vd-km-badge { display: inline-block; padding: 0 6px; border-radius: 999px; font-size: .7rem; font-weight: 700; background: #e2e8f0; color: #334155; white-space: nowrap; }
+.vd-km-badge.is-ok { background: var(--vd-green-bg); color: var(--vd-green); }
+.vd-km-badge.is-warn { background: var(--vd-amber-bg); color: var(--vd-amber); }
+@media (prefers-reduced-motion: reduce) {
+    .vd-km-slide, .vd-km-dot-btn { transition: none; }
+    .vd-km.is-loading .vd-km-period i { animation: none; }
+}
+
 /* ---- sections (collapsible) ------------------------------------------ */
 .vd-section { overflow: hidden; }
 .vd-section-head {
@@ -760,6 +940,16 @@ button.vd-chip:hover { transform: translateY(-1px); box-shadow: 0 3px 8px rgba(3
     .vd-carousel-nav { padding: 0 20px; }
     .vd-kpi { padding: 8px 12px; gap: 10px; }
     .vd-kpi-icon { font-size: 1.6rem; width: 1.6rem; height: 1.6rem; }
+    .vd-kpi.vd-km { padding: 3px 24px 3px 0; gap: 3px; }
+    .vd-km .vd-kpi-icon { font-size: 1.3rem; width: 1.3rem; height: 1.3rem; }
+    .vd-km-arrow { width: 18px; }
+    .vd-km-arrow.is-next { right: 2px; }
+    .vd-km-meta { font-size: .68rem; gap: 4px; max-width: calc(100% - 24px); }
+}
+@media (min-width: 1200px) and (max-width: 1399.98px), (max-width: 575.98px) {
+    /* Cardul e îngust aici: sursa rămâne în eticheta stării, în titlu și în detalii. */
+    .vd-km-meta .vd-km-prov { display: none; }
+    .vd-km-meta .vd-km-prov + span { display: none; }
 }
 @media (max-width: 1199.98px) {
     .vd-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }

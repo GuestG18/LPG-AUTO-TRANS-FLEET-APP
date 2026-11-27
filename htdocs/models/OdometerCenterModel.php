@@ -488,6 +488,47 @@ class OdometerCenterModel extends BaseModel
         return $result;
     }
 
+    /**
+     * Ca getCardOilFillups, dar filtrat in SQL pe numerele cerute (fara sa citeasca toate
+     * alimentarile flotei). Prefiltrul elimina spatii / cratime / puncte; cheia exacta
+     * (doar litere si cifre) se verifica apoi in PHP, la fel ca in getCardOilFillups.
+     * Doar citire, fara ensureSchema (folosit de VehicleMileageService la randarea fisei).
+     *
+     * @param list<string> $plateKeys
+     * @return array<string, list<array<string, mixed>>>
+     */
+    public function getCardOilFillupsForPlates(array $plateKeys): array
+    {
+        $plateKeys = array_values(array_unique(array_filter(array_map('strval', $plateKeys))));
+        if ($plateKeys === []) {
+            return [];
+        }
+        $placeholders = [];
+        $params = [];
+        foreach ($plateKeys as $i => $key) {
+            $placeholders[] = ':k' . $i;
+            $params[':k' . $i] = $key;
+        }
+        $stmt = $this->db->prepare(
+            "SELECT f.id, f.vehicle_registration, f.fillup_datetime, f.odometer_km, f.odometer_km_manual
+             FROM fuel_fillups f
+             WHERE f.odometer_km IS NOT NULL AND f.odometer_km > 0 AND f.source_type IN ('api', 'manual')
+               AND REPLACE(REPLACE(REPLACE(UPPER(f.vehicle_registration), ' ', ''), '-', ''), '.', '') IN (" . implode(',', $placeholders) . ")
+             ORDER BY f.fillup_datetime ASC, f.id ASC"
+        );
+        $stmt->execute($params);
+        $wanted = array_flip($plateKeys);
+        $result = [];
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $key = strtoupper(preg_replace('/[^A-Za-z0-9]/', '', (string) $row['vehicle_registration']) ?? '');
+            if (isset($wanted[$key])) {
+                $result[$key][] = $row;
+            }
+        }
+
+        return $result;
+    }
+
     /** Ultima sincronizare CardOil reusita (fuel_sync_logs, aceeasi ca in Carburanti). */
     public function getLastCardOilSync(): ?array
     {

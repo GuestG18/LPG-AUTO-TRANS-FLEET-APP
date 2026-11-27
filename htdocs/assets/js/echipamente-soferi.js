@@ -805,7 +805,7 @@
         }
 
         const defaults = {
-            id: '', denumire: '', categorie: 'PPE', grupa: 'fizic', destinatie: 'ambele', tip_logic: 'stare',
+            id: '', denumire: '', categorie: '', grupa: 'fizic', destinatie: 'ambele', tip_logic: 'stare',
             returnabil: 0, urmareste_stare: 1, inlocuire_periodica: 0, durata_standard_luni: 0,
             urmareste_expirare: 0, necesita_marime: 0, necesita_identificator: 0, serializat: 0,
             cost_implicit: 0, cost_lunar: '', prag_minim_stoc: 0,
@@ -923,6 +923,81 @@
                 }
                 setText(deleteModal, 'denumire', remove.getAttribute('data-des-denumire') || '');
                 bootstrap.Modal.getOrCreateInstance(deleteModal).show();
+            }
+        });
+    })();
+
+    // ----------------------------------------------------------------------
+    // 4b. Categorii: lista din care se alege categoria unui articol
+    // ----------------------------------------------------------------------
+
+    (function () {
+        const manager = document.getElementById('desCategoryModal');
+        if (!manager) {
+            return;
+        }
+
+        const form = manager.querySelector('[data-dcc-form]');
+        const resetBtn = manager.querySelector('[data-dcc-reset]');
+        const submitLabel = manager.querySelector('[data-dcc-submit-label]');
+
+        function field(name) {
+            return form ? form.querySelector('[data-dcc-field="' + name + '"]') : null;
+        }
+
+        /** Gol = adaugă o categorie nouă; cu valori = editează rândul ales. */
+        function fill(values) {
+            if (!form) {
+                return;
+            }
+            const data = Object.assign({ id: '', nume: '', zona: '', descriere: '', activ: 1 }, values || {});
+            ['id', 'nume', 'zona', 'descriere'].forEach(function (key) {
+                const control = field(key);
+                if (control) {
+                    control.value = data[key];
+                }
+            });
+            const active = field('activ');
+            if (active) {
+                active.checked = Number(data.activ) === 1;
+            }
+            const editing = String(data.id) !== '' && String(data.id) !== '0';
+            if (submitLabel) {
+                submitLabel.textContent = editing ? 'Salvează modificările' : 'Adaugă categoria';
+            }
+            if (resetBtn) {
+                resetBtn.hidden = !editing && String(data.nume) === '';
+            }
+        }
+
+        document.addEventListener('click', function (event) {
+            if (event.target.closest('[data-dcc-open]')) {
+                event.preventDefault();
+                fill(null);
+                if (typeof bootstrap !== 'undefined') {
+                    bootstrap.Modal.getOrCreateInstance(manager).show();
+                }
+                return;
+            }
+
+            const edit = event.target.closest('[data-dcc-edit]');
+            if (edit) {
+                event.preventDefault();
+                try {
+                    fill(JSON.parse(edit.getAttribute('data-dcc-edit')));
+                } catch (error) {
+                    return;
+                }
+                const name = field('nume');
+                if (name) {
+                    name.focus();
+                }
+                return;
+            }
+
+            if (event.target.closest('[data-dcc-reset]')) {
+                event.preventDefault();
+                fill(null);
             }
         });
     })();
