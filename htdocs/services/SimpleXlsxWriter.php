@@ -73,7 +73,7 @@ class SimpleXlsxWriter
 
     /*
      * Un stil complet, pentru rapoarte cu aspect propriu. Chei: color, fill, border (RGB fara #),
-     * bold, size, font (implicit Calibri), format (cod de format numeric), align, wrap. Numele intors se foloseste ca 's'.
+     * bold, italic, size, font (implicit Calibri), format (cod de format numeric), align, indent, wrap. Numele intors se foloseste ca 's'.
      */
     public function defineStyle(array $definition): string
     {
@@ -558,7 +558,7 @@ class SimpleXlsxWriter
 
         /* Stilurile complete (defineStyle): fonturile, fundalurile si chenarele lor se adauga la liste. */
         foreach ($this->definedStyles as $definition) {
-            $fonts[] = '<font>' . (!empty($definition['bold']) ? '<b/>' : '') . '<sz val="' . (float) ($definition['size'] ?? 11) . '"/>'
+            $fonts[] = '<font>' . (!empty($definition['bold']) ? '<b/>' : '') . (!empty($definition['italic']) ? '<i/>' : '') . '<sz val="' . (float) ($definition['size'] ?? 11) . '"/>'
                 . '<color rgb="FF' . self::xml((string) ($definition['color'] ?? '1F2937')) . '"/><name val="' . self::xml((string) ($definition['font'] ?? 'Calibri')) . '"/><family val="2"/></font>';
             $fontId = count($fonts) - 1;
             $fillId = 0;
@@ -581,7 +581,7 @@ class SimpleXlsxWriter
                 }
                 $fmtId = $customFmtIds[$code];
             }
-            $cellXfs[] = $xf($fontId, $fillId, $borderId, $fmtId, (string) ($definition['align'] ?? 'left'), 0, !empty($definition['wrap']));
+            $cellXfs[] = $xf($fontId, $fillId, $borderId, $fmtId, (string) ($definition['align'] ?? 'left'), (int) ($definition['indent'] ?? 0), !empty($definition['wrap']));
         }
 
         $xml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'

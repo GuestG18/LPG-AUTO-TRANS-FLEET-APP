@@ -6,7 +6,8 @@ require_once __DIR__ . '/SimpleXlsxWriter.php';
 /*
  * "Raport centralizat pe vehicule" din Centralizator facturare, dupa modelul
  * Situatie_ButanGas_Simplificata.xlsx (foile "Rezumat ..."): o foaie pe beneficiar,
- * o sectiune pe luna si loc de incarcare, un rand pe vehicul si ruta, apoi TOTAL.
+ * o sectiune pe luna si loc de incarcare, un rand pe vehicul si ruta (cu cursele lui
+ * grupate dedesubt, restranse implicit), apoi TOTAL.
  * Primeste randurile deja adunate de CentralizatorFacturareService::getVehicleSummaryExportData().
  * Pretul pe tona si pe km sunt valoarea totala impartita la cantitatea totala (formule), nu medii.
  */
@@ -59,6 +60,7 @@ class CentralizatorFacturareVehicleExport
         $base = ['font' => self::FONT, 'size' => 11, 'color' => '000000', 'align' => 'general'];
         $stripe = 'F2F6FA';
         $band = 'DCE6F1';
+        $tripBase = ['font' => self::FONT, 'size' => 10, 'italic' => true, 'color' => '4B5563', 'align' => 'general'];
         $this->styles = [
             'title' => $x->defineStyle(['font' => self::FONT, 'size' => 12, 'bold' => true, 'color' => 'FFFFFF', 'fill' => '17365D', 'align' => 'general']),
             'head' => $x->defineStyle($base + ['bold' => true, 'fill' => $band]),
@@ -71,6 +73,10 @@ class CentralizatorFacturareVehicleExport
             'even_text' => $x->defineStyle($base),
             'even_int' => $x->defineStyle($base + ['format' => self::FORMAT_INT]),
             'even_dec' => $x->defineStyle($base + ['format' => self::FORMAT_DECIMAL]),
+            /* Cursele de sub un rand (restranse implicit): gri, cursiv, prima coloana indentata. */
+            'trip_text' => $x->defineStyle(['align' => 'left', 'indent' => 1] + $tripBase),
+            'trip_int' => $x->defineStyle($tripBase + ['format' => self::FORMAT_INT]),
+            'trip_dec' => $x->defineStyle($tripBase + ['format' => self::FORMAT_DECIMAL]),
         ];
     }
 
@@ -115,28 +121,55 @@ class CentralizatorFacturareVehicleExport
         $first = $x->nextRowNumber($s);
         foreach ($rows as $index => $row) {
             $band = $index % 2 === 0 ? 'odd' : 'even';
+            $details = (array) ($row['details'] ?? []);
             $trips = (int) $row['trips'];
             $km = (float) $row['km'];
             $tone = (float) $row['tone'];
             $value = (float) $row['value'];
+            /*
+             * Randul vehiculului aduna cursele de sub el cu SUBTOTAL; TOTAL-ul sectiunii
+             * foloseste tot SUBTOTAL, care sare peste celulele SUBTOTAL - nimic nu se aduna de doua ori.
+             */
+            $summaryRow = $x->nextRowNumber($s);
+            $detailFirst = $summaryRow + 1;
+            $detailLast = $summaryRow + count($details);
+            $sub = static fn (string $column): ?string => $details !== [] ? 'SUBTOTAL(9,' . $column . $detailFirst . ':' . $column . $detailLast . ')' : null;
             $x->addRow($s, [
                 ['v' => (string) $row['vehicle'], 's' => $this->styles[$band . '_text']],
                 ['v' => (string) $row['route'], 's' => $this->styles[$band . '_text']],
-                ['v' => $trips, 's' => $this->styles[$band . '_int']],
-                ['v' => $km, 's' => $this->styles[$band . '_int']],
-                ['v' => $tone, 's' => $this->styles[$band . '_dec']],
+                ['v' => $trips, 's' => $this->styles[$band . '_int'], 'f' => $sub('C')],
+                ['v' => $km, 's' => $this->styles[$band . '_int'], 'f' => $sub('D')],
+                ['v' => $tone, 's' => $this->styles[$band . '_dec'], 'f' => $sub('E')],
                 ['v' => $tone > 0 ? $value / $tone : 0, 's' => $this->styles[$band . '_dec'], 'f' => 'IFERROR(G{r}/E{r},0)'],
-                ['v' => $value, 's' => $this->styles[$band . '_dec']],
+                ['v' => $value, 's' => $this->styles[$band . '_dec'], 'f' => $sub('G')],
                 ['v' => $km > 0 ? $value / $km : 0, 's' => $this->styles[$band . '_dec'], 'f' => 'IFERROR(G{r}/D{r},0)'],
-            ]);
+            ], $details !== [] ? ['collapsed' => true] : []);
+
+            /* Cursele randului: grupate (butonul + din stanga), ascunse pana le deschizi. */
+            foreach ($details as $detail) {
+                $dKm = (float) $detail['km'];
+                $dTone = (float) $detail['tone'];
+                $dValue = (float) $detail['value'];
+                /* Pe randul cursei: Nr. auto + Ruta unite, doar data cursei. */
+                $x->addRow($s, [
+                    ['v' => (string) $detail['date_label'], 's' => $this->styles['trip_text']],
+                    ['v' => null, 's' => $this->styles['trip_text']],
+                    ['v' => (int) $detail['trips'], 's' => $this->styles['trip_int']],
+                    ['v' => $dKm, 's' => $this->styles['trip_int']],
+                    ['v' => $dTone, 's' => $this->styles['trip_dec']],
+                    ['v' => $dTone > 0 ? $dValue / $dTone : 0, 's' => $this->styles['trip_dec'], 'f' => 'IFERROR(G{r}/E{r},0)'],
+                    ['v' => $dValue, 's' => $this->styles['trip_dec']],
+                    ['v' => $dKm > 0 ? $dValue / $dKm : 0, 's' => $this->styles['trip_dec'], 'f' => 'IFERROR(G{r}/D{r},0)'],
+                ], ['level' => 1, 'hidden' => true, 'merge' => 2]);
+            }
         }
-        $last = $first + max(1, count($rows)) - 1;
+        $last = max($first, $x->nextRowNumber($s) - 1);
 
         $sum = static fn (string $key): float => array_sum(array_map(static fn (array $row): float => (float) $row[$key], $rows));
         $km = $sum('km');
         $tone = $sum('tone');
         $value = $sum('value');
-        $range = static fn (string $column): string => 'SUM(' . $column . $first . ':' . $column . $last . ')';
+        $range = static fn (string $column): string => 'SUBTOTAL(9,' . $column . $first . ':' . $column . $last . ')';
         $x->addRow($s, [
             ['v' => 'TOTAL', 's' => $this->styles['total_text']],
             ['v' => null, 's' => $this->styles['total_text']],

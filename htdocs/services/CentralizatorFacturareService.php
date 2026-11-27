@@ -234,12 +234,25 @@ class CentralizatorFacturareService
                         $value = (float) $trip['value'];
 
                         $row = &$beneficiaries[$beneficiary][$month][$loading][$routeLabel . "|" . $vehicle];
-                        $row ??= ['vehicle' => $vehicle, 'route' => $routeLabel, 'trips' => 0, 'km' => 0.0, 'tone' => 0.0, 'value' => 0.0];
+                        $row ??= ['vehicle' => $vehicle, 'route' => $routeLabel, 'trips' => 0, 'km' => 0.0, 'tone' => 0.0, 'value' => 0.0, 'details' => []];
                         $row['trips'] += $counts;
                         $row['km'] += $km;
                         $row['tone'] += $tone;
                         $row['value'] += $value;
-                        unset($row);
+                        /* Cursele randului (randuri restranse sub el in Excel); partile unei curse P+D se aduna pe aceeasi cursa. */
+                        $tripId = (int) ($trip['trip_id'] ?? 0);
+                        $detail = &$row['details'][$tripId];
+                        $detail ??= [
+                            'race_no' => $this->formatRaceNumber($tripId, (string) ($trip['sort_date'] ?? '')),
+                            'date_label' => (string) ($trip['date_label'] ?? ''),
+                            'sort_date' => (string) ($trip['sort_date'] ?? ''),
+                            'trips' => 0, 'km' => 0.0, 'tone' => 0.0, 'value' => 0.0,
+                        ];
+                        $detail['trips'] = max($detail['trips'], $counts);
+                        $detail['km'] += $km;
+                        $detail['tone'] += $tone;
+                        $detail['value'] += $value;
+                        unset($detail, $row);
 
                         $control['rows_trips'] += $counts;
                         $control['rows_km'] += $km;
@@ -258,13 +271,14 @@ class CentralizatorFacturareService
             foreach ($byMonth as $month => $locations) {
                 uksort($locations, 'strnatcasecmp');
                 foreach ($locations as $loading => $rows) {
-                    $rows = array_values(array_map(static fn (array $row): array => [
+                    $rows = array_values(array_map(fn (array $row): array => [
                         'vehicle' => $row['vehicle'],
                         'route' => $row['route'],
                         'trips' => $row['trips'],
                         'km' => round($row['km'], 2),
                         'tone' => round($row['tone'], 4),
                         'value' => round($row['value'], 2),
+                        'details' => $this->vehicleSummaryDetails((array) $row['details']),
                     ], $rows));
                     usort($rows, static fn (array $a, array $b): int => strnatcasecmp($a['route'], $b['route']) ?: strnatcasecmp($a['vehicle'], $b['vehicle']));
                     $routes = array_values(array_unique(array_column($rows, 'route')));
@@ -296,6 +310,27 @@ class CentralizatorFacturareService
     }
 
     /* Lunile raportului pe vehicule: de la month_from (valid, nu dupa luna aleasa) pana la luna aleasa, cel mult 12. */
+    /**
+     * Cursele unui rand din raportul pe vehicule, in ordine cronologica, rotunjite ca randul.
+     *
+     * @param array<int, array<string, mixed>> $details
+     * @return array<int, array<string, mixed>>
+     */
+    private function vehicleSummaryDetails(array $details): array
+    {
+        $details = array_values($details);
+        usort($details, static fn (array $a, array $b): int => strcmp((string) $a['sort_date'], (string) $b['sort_date']) ?: strnatcasecmp((string) $a['race_no'], (string) $b['race_no']));
+
+        return array_map(static fn (array $detail): array => [
+            'race_no' => (string) $detail['race_no'],
+            'date_label' => (string) $detail['date_label'],
+            'trips' => (int) $detail['trips'],
+            'km' => round((float) $detail['km'], 2),
+            'tone' => round((float) $detail['tone'], 4),
+            'value' => round((float) $detail['value'], 2),
+        ], $details);
+    }
+
     private function vehicleSummaryMonths(string $from, string $to): array
     {
         $from = $this->normalizeMonth($from);
